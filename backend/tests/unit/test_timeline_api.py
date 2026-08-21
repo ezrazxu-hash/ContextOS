@@ -1,0 +1,71 @@
+from pathlib import Path
+import sys
+import unittest
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(BACKEND_ROOT / "src"))
+
+
+class TimelineApiTests(unittest.TestCase):
+    def create_services(self):
+        from contextos.runtime.session.repository import InMemorySessionRepository
+        from contextos.runtime.session.service import SessionService
+        from contextos.runtime.timeline.repository import InMemoryTimelineRepository
+        from contextos.runtime.timeline.service import TimelineService
+
+        session_repository = InMemorySessionRepository()
+        session_service = SessionService(session_repository)
+        timeline_service = TimelineService(InMemoryTimelineRepository(), session_repository)
+        return session_service, timeline_service
+
+    def test_fork_records_parent_checkpoint_and_message(self) -> None:
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        parent = timeline_service.create_initial_timeline(session.id)
+
+        child = timeline_service.fork_timeline(
+            parent_timeline_id=parent.id,
+            fork_checkpoint_id="checkpoint-1",
+            fork_message_id="message-1",
+        )
+
+        self.assertEqual(child.session_id, session.id)
+        self.assertEqual(child.parent_timeline_id, parent.id)
+        self.assertEqual(child.fork_checkpoint_id, "checkpoint-1")
+        self.assertEqual(child.fork_message_id, "message-1")
+
+    def test_activate_timeline_updates_session_pointer(self) -> None:
+        from contextos.api.routes.timelines import activate_timeline
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        parent = timeline_service.create_initial_timeline(session.id)
+        child = timeline_service.fork_timeline(parent.id, "checkpoint-1", "message-1")
+
+        response = activate_timeline(child.id, timeline_service)
+        loaded_session = session_service.get_session(session.id)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(loaded_session.current_timeline_id, child.id)
+
+    def test_original_timeline_remains_readable_after_fork_and_activation(self) -> None:
+        from contextos.api.routes.timelines import get_timeline, list_session_timelines
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        parent = timeline_service.create_initial_timeline(session.id)
+        child = timeline_service.fork_timeline(parent.id, "checkpoint-1", "message-1")
+        timeline_service.activate_timeline(child.id)
+
+        parent_response = get_timeline(parent.id, timeline_service)
+        listed = list_session_timelines(session.id, timeline_service)
+
+        self.assertEqual(parent_response["status"], 200)
+        self.assertEqual(parent_response["body"]["id"], parent.id)
+        self.assertEqual(parent_response["body"]["parent_timeline_id"], None)
+        self.assertEqual([timeline["id"] for timeline in listed["body"]], [parent.id, child.id])
+
+
+if __name__ == "__main__":
+    unittest.main()

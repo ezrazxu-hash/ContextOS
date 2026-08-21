@@ -1,0 +1,9 @@
+[project]
+name = "contextos-backend"
+version = "0.1.0"
+description = "ContextOS backend runtime and API package."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
