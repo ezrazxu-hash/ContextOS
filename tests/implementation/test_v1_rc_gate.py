@@ -20,6 +20,19 @@ class V1ReleaseCandidateGateTests(unittest.TestCase):
         self.assertIn("tests/implementation", source)
         self.assertIn("V1_OUT_OF_SCOPE_NON_BLOCKING", source)
 
+    def test_verify_v1_script_resolves_python_command_before_running_tests(self) -> None:
+        self.assertTrue(VERIFY_SCRIPT.exists(), f"missing RC script: {VERIFY_SCRIPT}")
+        source = VERIFY_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("PYTHON_BIN", source)
+        self.assertIn("PYTHON_BIN=(", source)
+        self.assertIn('"${PYTHON_BIN[@]}" -m unittest', source)
+        self.assertIn("command -v py.exe", source)
+        self.assertIn("command -v python.exe", source)
+        self.assertLess(source.index("command -v py.exe"), source.index("command -v python3"))
+        self.assertLess(source.index("command -v python.exe"), source.index("command -v python3"))
+        self.assertNotIn("PYTHONPATH=\"backend/src\" python -m unittest", source)
+
     def test_acceptance_matrix_maps_each_success_criterion_to_test_ids_and_evidence(self) -> None:
         self.assertTrue(MATRIX.exists(), f"missing acceptance matrix: {MATRIX}")
         matrix = MATRIX.read_text(encoding="utf-8")
