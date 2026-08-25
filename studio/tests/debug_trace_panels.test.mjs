@@ -111,3 +111,63 @@ test("prompt inputs panel shows compiler validation failures", async () => {
     },
   ]);
 });
+
+test("UI07-T04-TC01: filtering trace table does not mutate backend trace data", async () => {
+  const { createExecutionTrace } = await import(moduleUrl("src/features/trace/ExecutionTrace.js"));
+  const debugIndex = {
+    traces: {
+      items: [
+        { id: "model-1", trace_id: "trace-model", step_type: "model_call", component: "llm", duration: 0.3, status: "success" },
+        { id: "tool-1", trace_id: "trace-tool", step_type: "tool_call", component: "search", duration: 0.1, status: "success" },
+        { id: "context-1", trace_id: "trace-context", step_type: "context_restore", component: "restore", duration: 0.2, status: "success" },
+      ],
+    },
+  };
+  const original = JSON.stringify(debugIndex.traces.items);
+  const trace = createExecutionTrace(debugIndex);
+
+  const filtered = trace.filter({ types: ["Tool"], component: "search", status: "success" }).sortBy("duration", "desc");
+
+  assert.deepEqual(filtered.items.map((item) => item.id), ["tool-1"]);
+  assert.equal(JSON.stringify(debugIndex.traces.items), original);
+});
+
+test("UI07-T04-TC02: raw payload is not requested before row detail opens", async () => {
+  const { createExecutionTrace } = await import(moduleUrl("src/features/trace/ExecutionTrace.js"));
+  const calls = [];
+  const trace = createExecutionTrace({
+    traces: {
+      items: [{ id: "trace-event-tool", trace_id: "trace-1", step_type: "tool_call", component: "web_search", status: "success" }],
+    },
+  });
+
+  assert.equal(trace.items[0].rawLoaded, false);
+  assert.deepEqual(calls, []);
+
+  const detail = await trace.openDetail("trace-event-tool", async (eventId) => {
+    calls.push(eventId);
+    return { input: { query: "ContextOS" }, output: { ok: true } };
+  });
+
+  assert.deepEqual(calls, ["trace-event-tool"]);
+  assert.equal(detail.rawLoaded, true);
+  assert.deepEqual(detail.raw, { input: { query: "ContextOS" }, output: { ok: true } });
+});
+
+test("UI07-T04-TC03: failed trace exposes one click copy trace id action", async () => {
+  const { createExecutionTrace } = await import(moduleUrl("src/features/trace/ExecutionTrace.js"));
+  const trace = createExecutionTrace({
+    traces: {
+      items: [
+        { id: "trace-event-ok", trace_id: "trace-ok", step_type: "model_call", status: "success" },
+        { id: "trace-event-failed", trace_id: "trace-failed", step_type: "tool_call", status: "failed" },
+      ],
+    },
+  });
+
+  const copied = trace.copyFailedTraceId("trace-event-failed");
+
+  assert.equal(copied, "trace-failed");
+  assert.equal(trace.items.find((item) => item.id === "trace-event-failed").actions.copyTraceId, true);
+  assert.equal(trace.items.find((item) => item.id === "trace-event-ok").actions.copyTraceId, false);
+});

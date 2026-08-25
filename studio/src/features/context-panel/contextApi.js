@@ -21,5 +21,11 @@ export function createContextApiClient(transport) {
     fetchRaw(itemId) {
       return transport.getContextItemRaw(itemId);
     },
+    fetchRevisions(itemId) {
+      return transport.getContextItemRevisions(itemId);
+    },
+    restoreSystemVersion(itemId) {
+      return transport.postContextItemRestoreSystem(itemId);
+    },
   };
 }

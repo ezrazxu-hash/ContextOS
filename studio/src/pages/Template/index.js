@@ -4,6 +4,15 @@ export const TemplatePage = {
 };
 
 export async function createTemplatePage(apiClient, manifest) {
-  const { createTemplateEditor } = await import("../../features/template-editor/TemplateEditor.js");
-  return createTemplateEditor(apiClient, manifest);
+  const { createTemplateWorkbench } = await import("./TemplateWorkbench.js");
+  const template = manifest?.template;
+  const workbench = createTemplateWorkbench({
+    apiClient,
+    templates: template ? [template] : [],
+    initialTemplateId: template?.id ?? null,
+  });
+  if (template) {
+    await workbench.loadSelectedTemplate();
+  }
+  return workbench;
 }

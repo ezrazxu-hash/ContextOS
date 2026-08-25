@@ -282,38 +282,38 @@ UI07 Debug ───────────────┘
 
 # UI00 · 视觉规范、设计系统与页面契约
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 把四张附件图转成可实现、可测试、可复用的 Web UI 规则；通用能力先完成 Open-Source Spike，再决定采用、封装或自研，而不是依赖截图临摹。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI00-T00 · Open-Source Spike 与第三方依赖登记
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 在正式编写通用 UI 基础设施前，用最小 Spike 验证候选开源库是否能满足 ContextOS 的视觉、交互、API 隔离与 Desktop Ready 约束。  
 **依赖：** 原计划 M00-T03；本文“开源复用策略”；附件图 A-D
 
 **交付物 / 验收标准**
 
-- [ ] 创建 `docs/oss/third-party-register.md`，至少记录 shadcn/ui、assistant-ui、@xyflow/react、react-resizable-panels、TanStack Query、MSW、Monaco Editor
-- [ ] 每项记录：采用状态（Adopt / Optional / Reject）、锁定版本、License、用途、ContextOS Wrapper、替代方案、包体/运行时风险
-- [ ] 对 `assistant-ui` 做 Chat primitive Spike：证明可自定义 Message/Composer，同时不接管 ContextOS Session/Timeline/Replay 状态
-- [ ] 对 `@xyflow/react` 做 Workflow Spike：证明自定义节点、边、选择、MiniMap、SubGraph 视觉表达可满足图 C 的主体结构
-- [ ] 对 `react-resizable-panels` 做三栏 Spike：证明 Chat/Debug 的左右栏可调整并能恢复 UI-only layout
-- [ ] Spike 代码只能进入 `spikes/` 或专门 demo，不得未经评审直接成为领域实现
+- [x] 创建 `docs/oss/third-party-register.md`，至少记录 shadcn/ui、assistant-ui、@xyflow/react、react-resizable-panels、TanStack Query、MSW、Monaco Editor
+- [x] 每项记录：采用状态（Adopt / Optional / Reject）、锁定版本、License、用途、ContextOS Wrapper、替代方案、包体/运行时风险
+- [x] 对 `assistant-ui` 做 Chat primitive Spike：证明可自定义 Message/Composer，同时不接管 ContextOS Session/Timeline/Replay 状态
+- [x] 对 `@xyflow/react` 做 Workflow Spike：证明自定义节点、边、选择、MiniMap、SubGraph 视觉表达可满足图 C 的主体结构
+- [x] 对 `react-resizable-panels` 做三栏 Spike：证明 Chat/Debug 的左右栏可调整并能恢复 UI-only layout
+- [x] Spike 代码只能进入 `spikes/` 或专门 demo，不得未经评审直接成为领域实现
 
 **测试用例**
 
-- [ ] `UI00-T00-TC01`：禁用任一第三方库后，ContextOS Domain Contract/Runtime API 类型不发生变化
-- [ ] `UI00-T00-TC02`：Chat Spike 可渲染普通消息、ToolCall 占位和自定义 action slot
-- [ ] `UI00-T00-TC03`：Workflow Spike 可创建至少 Agent/Tool/Condition 三类自定义节点并连接
-- [ ] `UI00-T00-TC04`：三栏布局的宽度持久化只进入 PlatformAdapter/UI storage，不进入 Runtime API
-- [ ] `UI00-T00-TC05`：第三方登记表不存在 `latest` 版本或未知 License
+- [x] `UI00-T00-TC01`：禁用任一第三方库后，ContextOS Domain Contract/Runtime API 类型不发生变化
+- [x] `UI00-T00-TC02`：Chat Spike 可渲染普通消息、ToolCall 占位和自定义 action slot
+- [x] `UI00-T00-TC03`：Workflow Spike 可创建至少 Agent/Tool/Condition 三类自定义节点并连接
+- [x] `UI00-T00-TC04`：三栏布局的宽度持久化只进入 PlatformAdapter/UI storage，不进入 Runtime API
+- [x] `UI00-T00-TC05`：第三方登记表不存在 `latest` 版本或未知 License
 
 **任务专属 Prompt**
 
@@ -327,21 +327,21 @@ UI07 Debug ───────────────┘
 
 ### UI00-T01 · 视觉规格与交互清单
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 形成 Chat/Workflow/Debug/App Shell 的结构化视觉规格、交互状态和页面验收清单。  
 **依赖：** 原计划 M00-T03；附件图 A-D
 
 **交付物 / 验收标准**
 
-- [ ] 建立 `docs/ui/contextos-studio-visual-spec.md`，逐页记录区域、尺寸关系、主操作、危险操作、空/错/加载态
-- [ ] 将截图中的展示性元素区分为 P0 功能、纯视觉元素、P1/不实现元素
-- [ ] 每个区域标注对应原计划依赖 Task ID
+- [x] 建立 `docs/ui/contextos-studio-visual-spec.md`，逐页记录区域、尺寸关系、主操作、危险操作、空/错/加载态
+- [x] 将截图中的展示性元素区分为 P0 功能、纯视觉元素、P1/不实现元素
+- [x] 每个区域标注对应原计划依赖 Task ID
 
 **测试用例**
 
-- [ ] `UI00-T01-TC01`：规格中四张参考图均有页面映射
-- [ ] `UI00-T01-TC02`：任何一个 P0 页面区域都能追溯到组件或后续任务
-- [ ] `UI00-T01-TC03`：未把 Desktop、Marketplace、Branch Merge 误列为 V1 实现项
+- [x] `UI00-T01-TC01`：规格中四张参考图均有页面映射
+- [x] `UI00-T01-TC02`：任何一个 P0 页面区域都能追溯到组件或后续任务
+- [x] `UI00-T01-TC03`：未把 Desktop、Marketplace、Branch Merge 误列为 V1 实现项
 
 **任务专属 Prompt**
 
@@ -357,21 +357,21 @@ UI07 Debug ───────────────┘
 
 ### UI00-T02 · Design Tokens 与基础组件规范
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 建立统一的 spacing、typography、radius、border、elevation、status、focus 规则和基础组件契约。  
 **依赖：** UI00-T01
 
 **交付物 / 验收标准**
 
-- [ ] 定义 token：spacing/size/font/radius/border/status/focus/z-index
-- [ ] 提供 Button/Input/Select/Tabs/Badge/Tooltip/Popover/Dialog/Drawer/Skeleton/EmptyState/ErrorState 基础组件
-- [ ] 危险操作组件提供明确 danger 语义，不允许仅靠颜色表达
+- [x] 定义 token：spacing/size/font/radius/border/status/focus/z-index
+- [x] 提供 Button/Input/Select/Tabs/Badge/Tooltip/Popover/Dialog/Drawer/Skeleton/EmptyState/ErrorState 基础组件
+- [x] 危险操作组件提供明确 danger 语义，不允许仅靠颜色表达
 
 **测试用例**
 
-- [ ] `UI00-T02-TC01`：基础组件在 light theme 下视觉层级一致
-- [ ] `UI00-T02-TC02`：Tab/Keyboard 可到达所有交互组件
-- [ ] `UI00-T02-TC03`：Dialog 有焦点锁定、Esc 关闭规则和 aria 标识
+- [x] `UI00-T02-TC01`：基础组件在 light theme 下视觉层级一致
+- [x] `UI00-T02-TC02`：Tab/Keyboard 可到达所有交互组件
+- [x] `UI00-T02-TC03`：Dialog 有焦点锁定、Esc 关闭规则和 aria 标识
 
 **任务专属 Prompt**
 
@@ -387,21 +387,21 @@ UI07 Debug ───────────────┘
 
 ### UI00-T03 · 三栏/多栏工作台布局原语
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 抽象附件中 Chat、Workflow、Debug 共用的可伸缩工作台布局。  
 **依赖：** UI00-T02
 
 **交付物 / 验收标准**
 
-- [ ] 实现 `SplitPane`/`WorkbenchLayout`，支持 left/main/right 与 bottom panel
-- [ ] 支持最小宽度、折叠、恢复默认、拖拽调整
-- [ ] 面板宽度只作为 UI 偏好保存，不保存 Runtime 事实状态
+- [x] 实现 `SplitPane`/`WorkbenchLayout`，支持 left/main/right 与 bottom panel
+- [x] 支持最小宽度、折叠、恢复默认、拖拽调整
+- [x] 面板宽度只作为 UI 偏好保存，不保存 Runtime 事实状态
 
 **测试用例**
 
-- [ ] `UI00-T03-TC01`：拖拽改变宽度后主内容不溢出
-- [ ] `UI00-T03-TC02`：刷新后可恢复布局偏好
-- [ ] `UI00-T03-TC03`：窄视口时右栏可降级为 Drawer，不遮挡核心主操作
+- [x] `UI00-T03-TC01`：拖拽改变宽度后主内容不溢出
+- [x] `UI00-T03-TC02`：刷新后可恢复布局偏好
+- [x] `UI00-T03-TC03`：窄视口时右栏可降级为 Drawer，不遮挡核心主操作
 
 **任务专属 Prompt**
 
@@ -417,21 +417,21 @@ UI07 Debug ───────────────┘
 
 ### UI00-T04 · 统一页面状态规范
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 统一 Loading/Empty/Error/Permission/Offline/Stale/MutationPending 状态，避免各页面自行定义。  
 **依赖：** UI00-T02
 
 **交付物 / 验收标准**
 
-- [ ] 定义 PageState 与 AsyncBoundary 使用规范
-- [ ] 定义 mutation pending/failed/succeeded 的反馈策略
-- [ ] 定义 offline/reconnect/stale data 的非阻塞提示
+- [x] 定义 PageState 与 AsyncBoundary 使用规范
+- [x] 定义 mutation pending/failed/succeeded 的反馈策略
+- [x] 定义 offline/reconnect/stale data 的非阻塞提示
 
 **测试用例**
 
-- [ ] `UI00-T04-TC01`：API 500 时页面保留可恢复导航，不白屏
-- [ ] `UI00-T04-TC02`：mutation 失败时不会残留伪成功状态
-- [ ] `UI00-T04-TC03`：SSE 断开时出现可理解的重连状态
+- [x] `UI00-T04-TC01`：API 500 时页面保留可恢复导航，不白屏
+- [x] `UI00-T04-TC02`：mutation 失败时不会残留伪成功状态
+- [x] `UI00-T04-TC03`：SSE 断开时出现可理解的重连状态
 
 **任务专属 Prompt**
 
@@ -449,33 +449,33 @@ UI07 Debug ───────────────┘
 
 # UI01 · Application Shell、导航与深链接
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 把原计划的四个路由骨架补成可日常使用的 ContextOS Studio 外壳。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI01-T01 · ContextOS AppShell 顶部栏
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 实现附件 Chat/Workflow 的统一顶部栏，并保持页面切换时上下文稳定。  
 **依赖：** M00-T03, UI00-T03
 
 **交付物 / 验收标准**
 
-- [ ] 产品 Logo/名称、当前 Agent Template、Session/页面标题、Developer Mode、全局帮助/用户占位区域
-- [ ] Template/Session 选择触发 URL 和服务端数据刷新，而不是重载整页
-- [ ] Developer Mode 作为全局 UI 偏好，内部数据仍来自后端
+- [x] 产品 Logo/名称、当前 Agent Template、Session/页面标题、Developer Mode、全局帮助/用户占位区域
+- [x] Template/Session 选择触发 URL 和服务端数据刷新，而不是重载整页
+- [x] Developer Mode 作为全局 UI 偏好，内部数据仍来自后端
 
 **测试用例**
 
-- [ ] `UI01-T01-TC01`：切换 Template 后 URL 与 Query 同步
-- [ ] `UI01-T01-TC02`：切换 Session 不串用上一个 session 的 context/trace
-- [ ] `UI01-T01-TC03`：Developer Mode 开关跨页面一致
+- [x] `UI01-T01-TC01`：切换 Template 后 URL 与 Query 同步
+- [x] `UI01-T01-TC02`：切换 Session 不串用上一个 session 的 context/trace
+- [x] `UI01-T01-TC03`：Developer Mode 开关跨页面一致
 
 **任务专属 Prompt**
 
@@ -491,21 +491,21 @@ UI07 Debug ───────────────┘
 
 ### UI01-T02 · 统一左侧导航与最近资源
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 实现 Chat 页面中的会话/Agent Template/最近 Timeline 导航，并为其他页面复用资源选择模式。  
 **依赖：** UI01-T01
 
 **交付物 / 验收标准**
 
-- [ ] Session 搜索/选择/新建入口
-- [ ] Agent Template 列表与当前版本展示
-- [ ] Recent Timeline 列表只展示后端返回的事实状态，不自行构造 branch
+- [x] Session 搜索/选择/新建入口
+- [x] Agent Template 列表与当前版本展示
+- [x] Recent Timeline 列表只展示后端返回的事实状态，不自行构造 branch
 
 **测试用例**
 
-- [ ] `UI01-T02-TC01`：搜索 Session 不改变后端列表
-- [ ] `UI01-T02-TC02`：选择 Timeline 可打开对应 session/timeline
-- [ ] `UI01-T02-TC03`：空列表显示 EmptyState 而不是空白
+- [x] `UI01-T02-TC01`：搜索 Session 不改变后端列表
+- [x] `UI01-T02-TC02`：选择 Timeline 可打开对应 session/timeline
+- [x] `UI01-T02-TC03`：空列表显示 EmptyState 而不是空白
 
 **任务专属 Prompt**
 
@@ -521,21 +521,21 @@ UI07 Debug ───────────────┘
 
 ### UI01-T03 · URL Selection Contract
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 让 session/timeline/message/trace/template/node 等关键选择可以刷新恢复和深链接定位。  
 **依赖：** UI01-T01
 
 **交付物 / 验收标准**
 
-- [ ] 定义 route params 与 query params 规范
-- [ ] 实现 URL → selection state → data query 的单向恢复
-- [ ] 从 Chat 跳 Debug 可携带 trace/message 定位信息
+- [x] 定义 route params 与 query params 规范
+- [x] 实现 URL → selection state → data query 的单向恢复
+- [x] 从 Chat 跳 Debug 可携带 trace/message 定位信息
 
 **测试用例**
 
-- [ ] `UI01-T03-TC01`：复制 Debug 深链接到新标签页可定位同一 trace
-- [ ] `UI01-T03-TC02`：无效 messageId 自动降级到 timeline 首个有效状态并提示
-- [ ] `UI01-T03-TC03`：浏览器前进/后退能恢复选择
+- [x] `UI01-T03-TC01`：复制 Debug 深链接到新标签页可定位同一 trace
+- [x] `UI01-T03-TC02`：无效 messageId 自动降级到 timeline 首个有效状态并提示
+- [x] `UI01-T03-TC03`：浏览器前进/后退能恢复选择
 
 **任务专属 Prompt**
 
@@ -551,21 +551,21 @@ UI07 Debug ───────────────┘
 
 ### UI01-T04 · 全局 Error Boundary / Toast / Confirm 基础设施
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 统一跨页面异常、非危险反馈和危险确认入口。  
 **依赖：** UI00-T04
 
 **交付物 / 验收标准**
 
-- [ ] App-level ErrorBoundary
-- [ ] Toast 仅用于非阻塞反馈，危险 Replay 不得使用 Toast 代替 Dialog
-- [ ] ConfirmService 只用于 UI 级确认，Replay 安全仍以服务端 policy 为准
+- [x] App-level ErrorBoundary
+- [x] Toast 仅用于非阻塞反馈，危险 Replay 不得使用 Toast 代替 Dialog
+- [x] ConfirmService 只用于 UI 级确认，Replay 安全仍以服务端 policy 为准
 
 **测试用例**
 
-- [ ] `UI01-T04-TC01`：单个 Feature 崩溃不导致整个 App 无导航
-- [ ] `UI01-T04-TC02`：danger confirm 无法被 Enter 键误触为默认动作
-- [ ] `UI01-T04-TC03`：网络恢复后用户可手动 retry
+- [x] `UI01-T04-TC01`：单个 Feature 崩溃不导致整个 App 无导航
+- [x] `UI01-T04-TC02`：danger confirm 无法被 Enter 键误触为默认动作
+- [x] `UI01-T04-TC03`：网络恢复后用户可手动 retry
 
 **任务专属 Prompt**
 
@@ -583,33 +583,33 @@ UI07 Debug ───────────────┘
 
 # UI02 · Client Data Layer 与事件流
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 补齐完整可运行 Web 应用必须具备的 API/SSE/缓存/Mock 层；不改变后端业务。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI02-T01 · Typed API Client 与错误模型
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 集中封装 Runtime REST API，统一 request id、error code、trace id 和取消。  
 **依赖：** M00-T04
 
 **交付物 / 验收标准**
 
-- [ ] `client/http` 中集中配置 baseURL、headers、request_id/idempotency_key
-- [ ] 服务端 error 映射为统一 ClientError
-- [ ] 页面/组件禁止直接拼接 API URL
+- [x] `client/http` 中集中配置 baseURL、headers、request_id/idempotency_key
+- [x] 服务端 error 映射为统一 ClientError
+- [x] 页面/组件禁止直接拼接 API URL
 
 **测试用例**
 
-- [ ] `UI02-T01-TC01`：401/409/422/500 可区分
-- [ ] `UI02-T01-TC02`：AbortController 能取消被切换页面淘汰的请求
-- [ ] `UI02-T01-TC03`：error 中保留服务端 trace_id 供 Debug 跳转
+- [x] `UI02-T01-TC01`：401/409/422/500 可区分
+- [x] `UI02-T01-TC02`：AbortController 能取消被切换页面淘汰的请求
+- [x] `UI02-T01-TC03`：error 中保留服务端 trace_id 供 Debug 跳转
 
 **任务专属 Prompt**
 
@@ -625,21 +625,21 @@ UI07 Debug ───────────────┘
 
 ### UI02-T02 · Query Key 与服务端投影缓存规范
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 建立 Session/Timeline/Message/Context/Trace 的缓存边界，避免跨 session 污染。  
 **依赖：** UI02-T01, M01-T06
 
 **交付物 / 验收标准**
 
-- [ ] 定义 query key factory
-- [ ] 切换 session/timeline 时清理或隔离相邻投影
-- [ ] refresh/rehydrate 先从后端 snapshot 建立事实状态
+- [x] 定义 query key factory
+- [x] 切换 session/timeline 时清理或隔离相邻投影
+- [x] refresh/rehydrate 先从后端 snapshot 建立事实状态
 
 **测试用例**
 
-- [ ] `UI02-T02-TC01`：两个 session 的 message/context 缓存完全隔离
-- [ ] `UI02-T02-TC02`：刷新后从 snapshot 恢复而非 localStorage 伪造
-- [ ] `UI02-T02-TC03`：mutation 后只失效受影响 query
+- [x] `UI02-T02-TC01`：两个 session 的 message/context 缓存完全隔离
+- [x] `UI02-T02-TC02`：刷新后从 snapshot 恢复而非 localStorage 伪造
+- [x] `UI02-T02-TC03`：mutation 后只失效受影响 query
 
 **任务专属 Prompt**
 
@@ -655,21 +655,21 @@ UI07 Debug ───────────────┘
 
 ### UI02-T03 · SSE Client 与事件归一化
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 把 Chat SSE 转成稳定前端事件流，处理重连、重复事件和最终态。  
 **依赖：** M04-T02
 
 **交付物 / 验收标准**
 
-- [ ] 定义 `ChatStreamEvent` union
-- [ ] 支持 token delta/message completed/tool started/tool completed/error/heartbeat
-- [ ] 基于 event id 去重，断线重连后不重复追加 token
+- [x] 定义 `ChatStreamEvent` union
+- [x] 支持 token delta/message completed/tool started/tool completed/error/heartbeat
+- [x] 基于 event id 去重，断线重连后不重复追加 token
 
 **测试用例**
 
-- [ ] `UI02-T03-TC01`：重复 event id 不重复渲染
-- [ ] `UI02-T03-TC02`：断线后重连可继续同一 message
-- [ ] `UI02-T03-TC03`：completed 后不会继续接受 delta
+- [x] `UI02-T03-TC01`：重复 event id 不重复渲染
+- [x] `UI02-T03-TC02`：断线后重连可继续同一 message
+- [x] `UI02-T03-TC03`：completed 后不会继续接受 delta
 
 **任务专属 Prompt**
 
@@ -685,21 +685,21 @@ UI07 Debug ───────────────┘
 
 ### UI02-T04 · Mutation 协调与并发保护
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 规范 Context Edit/Evict/Restore、Message Edit、Replay 等写操作的 pending、冲突和重新拉取。  
 **依赖：** UI02-T02
 
 **交付物 / 验收标准**
 
-- [ ] 同一 ContextGroup 的互斥 mutation
-- [ ] 409/版本冲突触发 revalidate 而不是覆盖
-- [ ] 危险 mutation 不做不可逆 optimistic update
+- [x] 同一 ContextGroup 的互斥 mutation
+- [x] 409/版本冲突触发 revalidate 而不是覆盖
+- [x] 危险 mutation 不做不可逆 optimistic update
 
 **测试用例**
 
-- [ ] `UI02-T04-TC01`：连续双击 Evict 只产生一次有效请求
-- [ ] `UI02-T04-TC02`：编辑版本冲突显示重新加载提示
-- [ ] `UI02-T04-TC03`：Replay 失败后 UI 状态以服务端为准
+- [x] `UI02-T04-TC01`：连续双击 Evict 只产生一次有效请求
+- [x] `UI02-T04-TC02`：编辑版本冲突显示重新加载提示
+- [x] `UI02-T04-TC03`：Replay 失败后 UI 状态以服务端为准
 
 **任务专属 Prompt**
 
@@ -715,21 +715,21 @@ UI07 Debug ───────────────┘
 
 ### UI02-T05 · MSW Mock Runtime 与可演示 Fixtures
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 让 Web 页面在没有真实 LLM/API Key 时也能完整启动和演示核心交互。  
 **依赖：** UI02-T01, UI02-T03
 
 **交付物 / 验收标准**
 
-- [ ] 提供 demo session/template/context/timeline/trace fixtures
-- [ ] Mock SSE 支持流式文本 + ToolCall/ToolResult
-- [ ] Mock Context/Replay API 具备成功、失败、冲突、side-effect 样例
+- [x] 提供 demo session/template/context/timeline/trace fixtures
+- [x] Mock SSE 支持流式文本 + ToolCall/ToolResult
+- [x] Mock Context/Replay API 具备成功、失败、冲突、side-effect 样例
 
 **测试用例**
 
-- [ ] `UI02-T05-TC01`：`mock` 模式下四个页面都可打开
-- [ ] `UI02-T05-TC02`：Chat 可流式完成一轮含 Tool 的会话
-- [ ] `UI02-T05-TC03`：Replay send_email 场景可触发高风险确认 UI
+- [x] `UI02-T05-TC01`：`mock` 模式下四个页面都可打开
+- [x] `UI02-T05-TC02`：Chat 可流式完成一轮含 Tool 的会话
+- [x] `UI02-T05-TC03`：Replay send_email 场景可触发高风险确认 UI
 
 **任务专属 Prompt**
 
@@ -751,33 +751,33 @@ UI07 Debug ───────────────┘
 >
 > ![Chat 工作台实现基线](./images/02-contextos-chat-workbench.png)
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 在原计划 Chat 基础组件上补全附件图 B 的整页体验，不重新实现 Message/Tool/Context 领域逻辑。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI03-T01 · Chat 三栏工作台组装
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 把左资源栏、中 Conversation、右 Context/Timeline/Impact 组装成可伸缩 Chat Workbench。  
 **依赖：** M04-T03~T06, UI00-T03, UI01-T02
 
 **交付物 / 验收标准**
 
-- [ ] 三栏布局与附件图 B 信息层级一致
-- [ ] 右栏 Context/Timeline/Impact 分区可独立折叠
-- [ ] 选中 Message 时 Impact 区自动定位但不抢夺输入焦点
+- [x] 三栏布局与附件图 B 信息层级一致
+- [x] 右栏 Context/Timeline/Impact 分区可独立折叠
+- [x] 选中 Message 时 Impact 区自动定位但不抢夺输入焦点
 
 **测试用例**
 
-- [ ] `UI03-T01-TC01`：切换右栏折叠不影响中栏滚动位置
-- [ ] `UI03-T01-TC02`：选中 message 后右栏展示对应 impact
-- [ ] `UI03-T01-TC03`：Chat 窄宽度时右栏可 Drawer 化
+- [x] `UI03-T01-TC01`：切换右栏折叠不影响中栏滚动位置
+- [x] `UI03-T01-TC02`：选中 message 后右栏展示对应 impact
+- [x] `UI03-T01-TC03`：Chat 窄宽度时右栏可 Drawer 化
 
 **任务专属 Prompt**
 
@@ -793,21 +793,21 @@ UI07 Debug ───────────────┘
 
 ### UI03-T02 · Conversation 虚拟滚动与锚点
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 支持长会话分页、向上加载历史、流式消息锚定和稳定滚动。  
 **依赖：** UI03-T01, M04-T01
 
 **交付物 / 验收标准**
 
-- [ ] 长历史使用虚拟列表或等价方案
-- [ ] 向上加载保持当前视觉锚点
-- [ ] 用户滚离底部时新 token 不强制抢滚动；提供“回到底部”
+- [x] 长历史使用虚拟列表或等价方案
+- [x] 向上加载保持当前视觉锚点
+- [x] 用户滚离底部时新 token 不强制抢滚动；提供“回到底部”
 
 **测试用例**
 
-- [ ] `UI03-T02-TC01`：加载前一页后当前消息视觉位置基本不跳
-- [ ] `UI03-T02-TC02`：500+ 条消息滚动仍可操作
-- [ ] `UI03-T02-TC03`：流式输出时用户向上阅读不会被强制拉回底部
+- [x] `UI03-T02-TC01`：加载前一页后当前消息视觉位置基本不跳
+- [x] `UI03-T02-TC02`：500+ 条消息滚动仍可操作
+- [x] `UI03-T02-TC03`：流式输出时用户向上阅读不会被强制拉回底部
 
 **任务专属 Prompt**
 
@@ -823,21 +823,21 @@ UI07 Debug ───────────────┘
 
 ### UI03-T03 · Message 展示层级与 Tool 详情体验
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 补充附件中的选中、可编辑、Tool Result 长内容展开和错误状态呈现。  
 **依赖：** M04-T03,M04-T04
 
 **交付物 / 验收标准**
 
-- [ ] Selected / Editing / Streaming / Failed / User Modified 状态视觉区分
-- [ ] Tool 详情支持 summary → drawer/raw，长 JSON 不直接撑开消息
-- [ ] ToolGroup incomplete/failed 提供可理解错误标签
+- [x] Selected / Editing / Streaming / Failed / User Modified 状态视觉区分
+- [x] Tool 详情支持 summary → drawer/raw，长 JSON 不直接撑开消息
+- [x] ToolGroup incomplete/failed 提供可理解错误标签
 
 **测试用例**
 
-- [ ] `UI03-T03-TC01`：长 ToolResult 不导致页面横向溢出
-- [ ] `UI03-T03-TC02`：User Modified 与普通 Assistant 状态可辨识
-- [ ] `UI03-T03-TC03`：tool error 不隐藏 call id/trace link（Developer Mode）
+- [x] `UI03-T03-TC01`：长 ToolResult 不导致页面横向溢出
+- [x] `UI03-T03-TC02`：User Modified 与普通 Assistant 状态可辨识
+- [x] `UI03-T03-TC03`：tool error 不隐藏 call id/trace link（Developer Mode）
 
 **任务专属 Prompt**
 
@@ -853,21 +853,21 @@ UI07 Debug ───────────────┘
 
 ### UI03-T04 · Composer 完整交互
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 实现稳定文本输入、发送、流式期间状态、快捷键与输入草稿；不额外扩展文件上传等 PRD 外能力。  
 **依赖：** M04-T02, UI02-T03
 
 **交付物 / 验收标准**
 
-- [ ] Enter 发送 / Shift+Enter 换行，可配置 IME 安全处理
-- [ ] 发送后本地输入清空，但消息以服务端事件为准
-- [ ] 模型选择器仅展示后端/模板允许的 model；附件图中未进入 P0 的图标可隐藏或 disabled
+- [x] Enter 发送 / Shift+Enter 换行，可配置 IME 安全处理
+- [x] 发送后本地输入清空，但消息以服务端事件为准
+- [x] 模型选择器仅展示后端/模板允许的 model；附件图中未进入 P0 的图标可隐藏或 disabled
 
 **测试用例**
 
-- [ ] `UI03-T04-TC01`：中文输入法 composing 时 Enter 不误发送
-- [ ] `UI03-T04-TC02`：重复点击发送不产生双消息
-- [ ] `UI03-T04-TC03`：SSE 失败后输入内容可恢复或明确保留草稿
+- [x] `UI03-T04-TC01`：中文输入法 composing 时 Enter 不误发送
+- [x] `UI03-T04-TC02`：重复点击发送不产生双消息
+- [x] `UI03-T04-TC03`：SSE 失败后输入内容可恢复或明确保留草稿
 
 **任务专属 Prompt**
 
@@ -883,21 +883,21 @@ UI07 Debug ───────────────┘
 
 ### UI03-T05 · Chat Header 与 Session/Template 切换保护
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 在存在未发送草稿、进行中 stream、未保存编辑时安全切换 Session/Template。  
 **依赖：** UI01-T01, UI03-T04
 
 **交付物 / 验收标准**
 
-- [ ] 切换前检测未保存 UI 状态
-- [ ] 进行中 stream 可提示离开后后台继续/取消（按 Runtime capability）
-- [ ] 模板切换不偷偷改变当前历史 Session 的 template 事实字段
+- [x] 切换前检测未保存 UI 状态
+- [x] 进行中 stream 可提示离开后后台继续/取消（按 Runtime capability）
+- [x] 模板切换不偷偷改变当前历史 Session 的 template 事实字段
 
 **测试用例**
 
-- [ ] `UI03-T05-TC01`：有未保存 Message edit 时切 session 会提示
-- [ ] `UI03-T05-TC02`：切换 template 不串 session 历史
-- [ ] `UI03-T05-TC03`：取消切换保留原草稿
+- [x] `UI03-T05-TC01`：有未保存 Message edit 时切 session 会提示
+- [x] `UI03-T05-TC02`：切换 template 不串 session 历史
+- [x] `UI03-T05-TC03`：取消切换保留原草稿
 
 **任务专属 Prompt**
 
@@ -913,21 +913,21 @@ UI07 Debug ───────────────┘
 
 ### UI03-T06 · Recent Timeline / 当前 Timeline 轻量视图
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 在 Chat 页面呈现轻量 Timeline，不把普通用户暴露到 Git branch 术语。  
 **依赖：** M01-T02,M05-T03~T04, UI01-T02
 
 **交付物 / 验收标准**
 
-- [ ] 显示当前 Timeline、fork 来源、时间和状态
-- [ ] 用户文案使用“对话版本/从这里继续”
-- [ ] 切 Timeline 后中栏/右栏所有数据一起重新绑定
+- [x] 显示当前 Timeline、fork 来源、时间和状态
+- [x] 用户文案使用“对话版本/从这里继续”
+- [x] 切 Timeline 后中栏/右栏所有数据一起重新绑定
 
 **测试用例**
 
-- [ ] `UI03-T06-TC01`：Timeline 切换后 message/context/impact 不串数据
-- [ ] `UI03-T06-TC02`：fork 来源可导航回原点
-- [ ] `UI03-T06-TC03`：普通模式不显示 Branch ID 术语
+- [x] `UI03-T06-TC01`：Timeline 切换后 message/context/impact 不串数据
+- [x] `UI03-T06-TC02`：fork 来源可导航回原点
+- [x] `UI03-T06-TC03`：普通模式不显示 Branch ID 术语
 
 **任务专属 Prompt**
 
@@ -945,33 +945,33 @@ UI07 Debug ───────────────┘
 
 # UI04 · Context、编辑与 Replay 体验补全
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 补足附件图 B/D 中围绕 Context、历史编辑、风险和重放的页面级交互。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI04-T01 · Context Panel 产品级分组与 Token Meter
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 在已有 Context API 操作基础上补充 PINNED/RAW/ABSTRACT/EVICTED 分组、token meter 和状态摘要。  
 **依赖：** M04-T05, UI03-T01
 
 **交付物 / 验收标准**
 
-- [ ] 显示 current/max token、分组总量与 item/group token
-- [ ] 分组支持懒加载和展开，不一次拉全量 raw
-- [ ] PINNED 等状态用文字+图标，不只用颜色
+- [x] 显示 current/max token、分组总量与 item/group token
+- [x] 分组支持懒加载和展开，不一次拉全量 raw
+- [x] PINNED 等状态用文字+图标，不只用颜色
 
 **测试用例**
 
-- [ ] `UI04-T01-TC01`：Context 状态变化后 token meter 重新拉取并更新
-- [ ] `UI04-T01-TC02`：1000+ context items 不一次渲染全部详情
-- [ ] `UI04-T01-TC03`：屏幕阅读器能读出 context state
+- [x] `UI04-T01-TC01`：Context 状态变化后 token meter 重新拉取并更新
+- [x] `UI04-T01-TC02`：1000+ context items 不一次渲染全部详情
+- [x] `UI04-T01-TC03`：屏幕阅读器能读出 context state
 
 **任务专属 Prompt**
 
@@ -987,21 +987,21 @@ UI07 Debug ───────────────┘
 
 ### UI04-T02 · Context Detail Drawer / Raw / Revision
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 集中展示 ContextGroup/Item 的 effective/raw/generated/user_override/revision/source，而不是在主面板塞满。  
 **依赖：** M02-T08,M02-T02, UI04-T01
 
 **交付物 / 验收标准**
 
-- [ ] Detail Drawer 支持 Effective/Raw/Revisions/Sources tabs
-- [ ] User Modified 明确展示，并可恢复系统版本入口
-- [ ] raw 内容按需加载并支持复制
+- [x] Detail Drawer 支持 Effective/Raw/Revisions/Sources tabs
+- [x] User Modified 明确展示，并可恢复系统版本入口
+- [x] raw 内容按需加载并支持复制
 
 **测试用例**
 
-- [ ] `UI04-T02-TC01`：打开详情不会提前下载全部 raw
-- [ ] `UI04-T02-TC02`：恢复系统版本后 revision 列表更新
-- [ ] `UI04-T02-TC03`：effective_content 与后端投影一致
+- [x] `UI04-T02-TC01`：打开详情不会提前下载全部 raw
+- [x] `UI04-T02-TC02`：恢复系统版本后 revision 列表更新
+- [x] `UI04-T02-TC03`：effective_content 与后端投影一致
 
 **任务专属 Prompt**
 
@@ -1017,21 +1017,21 @@ UI07 Debug ───────────────┘
 
 ### UI04-T03 · Context 操作交互安全
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 为 Pin/Unpin/Abstract/Evict/Restore 提供一致 pending、确认、冲突和失败反馈。  
 **依赖：** M02-T07,M07-T04~T06, UI02-T04
 
 **交付物 / 验收标准**
 
-- [ ] 同 Group 操作 pending 时禁用相冲突按钮
-- [ ] Evict/Restore 后保留选中项并重新定位
-- [ ] 超预算 Restore 展示 Reallocation 结果摘要（如果 API 返回）
+- [x] 同 Group 操作 pending 时禁用相冲突按钮
+- [x] Evict/Restore 后保留选中项并重新定位
+- [x] 超预算 Restore 展示 Reallocation 结果摘要（如果 API 返回）
 
 **测试用例**
 
-- [ ] `UI04-T03-TC01`：Evict 失败不会把 item 留在 EVICTED UI
-- [ ] `UI04-T03-TC02`：Restore reallocation 后被淘汰的其他 group 状态同步更新
-- [ ] `UI04-T03-TC03`：快速多次操作不会产生非法状态闪烁
+- [x] `UI04-T03-TC01`：Evict 失败不会把 item 留在 EVICTED UI
+- [x] `UI04-T03-TC02`：Restore reallocation 后被淘汰的其他 group 状态同步更新
+- [x] `UI04-T03-TC03`：快速多次操作不会产生非法状态闪烁
 
 **任务专属 Prompt**
 
@@ -1047,21 +1047,21 @@ UI07 Debug ───────────────┘
 
 ### UI04-T04 · 历史 Message 内联编辑状态机
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 在已有 MessageEditor 功能上补完整内联编辑 UX、退出保护和原文对比。  
 **依赖：** M05-T05, UI03-T03
 
 **交付物 / 验收标准**
 
-- [ ] View → Editing → Saving → ImpactReady 状态明确
-- [ ] 支持 Esc 取消、保存前后 diff/原始版本入口
-- [ ] 保存后保持该 message 选中并展示三动作条
+- [x] View → Editing → Saving → ImpactReady 状态明确
+- [x] 支持 Esc 取消、保存前后 diff/原始版本入口
+- [x] 保存后保持该 message 选中并展示三动作条
 
 **测试用例**
 
-- [ ] `UI04-T04-TC01`：Esc 取消不产生 revision
-- [ ] `UI04-T04-TC02`：保存失败仍保留用户编辑草稿
-- [ ] `UI04-T04-TC03`：保存成功后 User Modified 标识和 Impact 摘要同时出现
+- [x] `UI04-T04-TC01`：Esc 取消不产生 revision
+- [x] `UI04-T04-TC02`：保存失败仍保留用户编辑草稿
+- [x] `UI04-T04-TC03`：保存成功后 User Modified 标识和 Impact 摘要同时出现
 
 **任务专属 Prompt**
 
@@ -1077,21 +1077,21 @@ UI07 Debug ───────────────┘
 
 ### UI04-T05 · 三种编辑行为 Action Bar
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 让“仅修改上下文 / 从这里继续 / 重放后续流程”在视觉和行为上互不混淆。  
 **依赖：** M05-T03~T05, UI04-T04
 
 **交付物 / 验收标准**
 
-- [ ] 三动作紧邻编辑消息并包含简短说明
-- [ ] 从这里继续后自动切换到新 Timeline
-- [ ] 重放后续流程必须先进入 Replay Plan，不直接执行
+- [x] 三动作紧邻编辑消息并包含简短说明
+- [x] 从这里继续后自动切换到新 Timeline
+- [x] 重放后续流程必须先进入 Replay Plan，不直接执行
 
 **测试用例**
 
-- [ ] `UI04-T05-TC01`：三个按钮调用不同 endpoint/command
-- [ ] `UI04-T05-TC02`：continue 成功后 URL 指向新 timeline
-- [ ] `UI04-T05-TC03`：replay 点击第一步绝不直接 reinvoke tool
+- [x] `UI04-T05-TC01`：三个按钮调用不同 endpoint/command
+- [x] `UI04-T05-TC02`：continue 成功后 URL 指向新 timeline
+- [x] `UI04-T05-TC03`：replay 点击第一步绝不直接 reinvoke tool
 
 **任务专属 Prompt**
 
@@ -1107,21 +1107,21 @@ UI07 Debug ───────────────┘
 
 ### UI04-T06 · Impact Panel + Replay Decision Modal 集成
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 按附件图 D 补足风险解释、四种 Tool 处理策略、二次确认和键盘安全。  
 **依赖：** M06-T06, UI04-T05
 
 **交付物 / 验收标准**
 
-- [ ] Impact Panel 显示 semantic conflict/tool args/state/graph/side effect 分类
-- [ ] Replay Modal 支持历史结果/重新调用/跳过/取消
-- [ ] WRITE/EXTERNAL_WRITE/DESTRUCTIVE/FINANCIAL 的重新调用要求明确二次确认
+- [x] Impact Panel 显示 semantic conflict/tool args/state/graph/side effect 分类
+- [x] Replay Modal 支持历史结果/重新调用/跳过/取消
+- [x] WRITE/EXTERNAL_WRITE/DESTRUCTIVE/FINANCIAL 的重新调用要求明确二次确认
 
 **测试用例**
 
-- [ ] `UI04-T06-TC01`：send_email 重新调用前必须完成二次确认
-- [ ] `UI04-T06-TC02`：默认焦点不是“重新调用 Tool”
-- [ ] `UI04-T06-TC03`：取消 modal 不产生 replay API 请求
+- [x] `UI04-T06-TC01`：send_email 重新调用前必须完成二次确认
+- [x] `UI04-T06-TC02`：默认焦点不是“重新调用 Tool”
+- [x] `UI04-T06-TC03`：取消 modal 不产生 replay API 请求
 
 **任务专属 Prompt**
 
@@ -1143,33 +1143,33 @@ UI07 Debug ───────────────┘
 >
 > ![Workflow Builder 实现基线](./images/03-contextos-workflow-builder.png)
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 基于原计划最小 Canvas，补齐附件图 C 的完整可用编辑器。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI05-T01 · Workflow 三栏编辑器工作台
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 组装 Node Library / Canvas / Node Config 三栏布局和顶部 Save/Preview/Publish。  
 **依赖：** M08-T06, UI00-T03
 
 **交付物 / 验收标准**
 
-- [ ] 中央 Canvas 占主区域，左右面板可伸缩
-- [ ] 顶部显示 dirty/saving/saved/validation/publish 状态
-- [ ] 切换节点不丢未提交表单变更，或明确提示
+- [x] 中央 Canvas 占主区域，左右面板可伸缩
+- [x] 顶部显示 dirty/saving/saved/validation/publish 状态
+- [x] 切换节点不丢未提交表单变更，或明确提示
 
 **测试用例**
 
-- [ ] `UI05-T01-TC01`：拖动左右面板不破坏 Canvas 尺寸计算
-- [ ] `UI05-T01-TC02`：未保存状态刷新前有保护
-- [ ] `UI05-T01-TC03`：保存成功 dirty 状态归零
+- [x] `UI05-T01-TC01`：拖动左右面板不破坏 Canvas 尺寸计算
+- [x] `UI05-T01-TC02`：未保存状态刷新前有保护
+- [x] `UI05-T01-TC03`：保存成功 dirty 状态归零
 
 **任务专属 Prompt**
 
@@ -1185,21 +1185,21 @@ UI07 Debug ───────────────┘
 
 ### UI05-T02 · Node Library 搜索、分类与拖拽
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 实现附件左侧 V1 节点库的可检索、可拖拽创建体验。  
 **依赖：** M08-T06
 
 **交付物 / 验收标准**
 
-- [ ] 仅包含 Agent/LLM/Prompt/Tool/Condition/Router/SubGraph/HumanApproval/ContextOperator/Memory/Output/CustomNode
-- [ ] 节点类型按 Manifest schema 决定可用性
-- [ ] drag preview 和 drop position 稳定
+- [x] 仅包含 Agent/LLM/Prompt/Tool/Condition/Router/SubGraph/HumanApproval/ContextOperator/Memory/Output/CustomNode
+- [x] 节点类型按 Manifest schema 决定可用性
+- [x] drag preview 和 drop position 稳定
 
 **测试用例**
 
-- [ ] `UI05-T02-TC01`：搜索 `Context` 只显示相关节点
-- [ ] `UI05-T02-TC02`：拖拽创建节点后 manifest node id 唯一
-- [ ] `UI05-T02-TC03`：不允许创建后端 validator 不支持的节点类型
+- [x] `UI05-T02-TC01`：搜索 `Context` 只显示相关节点
+- [x] `UI05-T02-TC02`：拖拽创建节点后 manifest node id 唯一
+- [x] `UI05-T02-TC03`：不允许创建后端 validator 不支持的节点类型
 
 **任务专属 Prompt**
 
@@ -1215,21 +1215,21 @@ UI07 Debug ───────────────┘
 
 ### UI05-T03 · Canvas 交互、Toolbar 与快捷键
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 补齐选择、平移、缩放、适应窗口、删除、复制/粘贴（仅 UI node，不复制运行历史）、框选等编辑体验。  
 **依赖：** UI05-T02
 
 **交付物 / 验收标准**
 
-- [ ] Toolbar 对应 pointer/pan/zoom/fit/grid
-- [ ] Delete/Backspace 只删除选中设计节点，不操作运行时 Context
-- [ ] 快捷键在输入框聚焦时不误触 Canvas
+- [x] Toolbar 对应 pointer/pan/zoom/fit/grid
+- [x] Delete/Backspace 只删除选中设计节点，不操作运行时 Context
+- [x] 快捷键在输入框聚焦时不误触 Canvas
 
 **测试用例**
 
-- [ ] `UI05-T03-TC01`：输入 Prompt 时 Backspace 不删节点
-- [ ] `UI05-T03-TC02`：fit view 可显示完整图
-- [ ] `UI05-T03-TC03`：删除节点后相关 edge 一并从 draft manifest 移除
+- [x] `UI05-T03-TC01`：输入 Prompt 时 Backspace 不删节点
+- [x] `UI05-T03-TC02`：fit view 可显示完整图
+- [x] `UI05-T03-TC03`：删除节点后相关 edge 一并从 draft manifest 移除
 
 **任务专属 Prompt**
 
@@ -1245,21 +1245,21 @@ UI07 Debug ───────────────┘
 
 ### UI05-T04 · Edge / Condition / Router 可视化编辑
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 补齐连线创建、条件出口标签、非法边提示和删除。  
 **依赖：** M08-T03,M08-T06, UI05-T03
 
 **交付物 / 验收标准**
 
-- [ ] Condition/Router edge 显示分支 label
-- [ ] 连接时做前端轻量校验，最终以后端 validator 为准
-- [ ] 非法 edge 在 Canvas 和 Validation Panel 双重定位
+- [x] Condition/Router edge 显示分支 label
+- [x] 连接时做前端轻量校验，最终以后端 validator 为准
+- [x] 非法 edge 在 Canvas 和 Validation Panel 双重定位
 
 **测试用例**
 
-- [ ] `UI05-T04-TC01`：Condition Yes/No 序列化保持稳定
-- [ ] `UI05-T04-TC02`：后端拒绝 edge 时高亮对应边
-- [ ] `UI05-T04-TC03`：删除 edge 不删除两端节点
+- [x] `UI05-T04-TC01`：Condition Yes/No 序列化保持稳定
+- [x] `UI05-T04-TC02`：后端拒绝 edge 时高亮对应边
+- [x] `UI05-T04-TC03`：删除 edge 不删除两端节点
 
 **任务专属 Prompt**
 
@@ -1275,21 +1275,21 @@ UI07 Debug ───────────────┘
 
 ### UI05-T05 · Schema-driven Node Config Panel
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 按节点类型渲染 Prompt、Model、Tool Binding、Context Policy、Retry、Checkpoint、UI Exposure 等配置。  
 **依赖：** M08-T01~T02, UI05-T01
 
 **交付物 / 验收标准**
 
-- [ ] 配置表单由 schema/metadata 驱动，避免每节点复制大段表单
-- [ ] 字段错误可定位到具体 section
-- [ ] 保存前可以本地校验，保存/发布仍以后端 validator 为准
+- [x] 配置表单由 schema/metadata 驱动，避免每节点复制大段表单
+- [x] 字段错误可定位到具体 section
+- [x] 保存前可以本地校验，保存/发布仍以后端 validator 为准
 
 **测试用例**
 
-- [ ] `UI05-T05-TC01`：Agent node 显示 model/tool/context/retry/checkpoint
-- [ ] `UI05-T05-TC02`：Tool node 不出现无关 Agent 字段
-- [ ] `UI05-T05-TC03`：服务端字段错误映射回对应表单控件
+- [x] `UI05-T05-TC01`：Agent node 显示 model/tool/context/retry/checkpoint
+- [x] `UI05-T05-TC02`：Tool node 不出现无关 Agent 字段
+- [x] `UI05-T05-TC03`：服务端字段错误映射回对应表单控件
 
 **任务专属 Prompt**
 
@@ -1305,21 +1305,21 @@ UI07 Debug ───────────────┘
 
 ### UI05-T06 · SubGraph 视觉容器与折叠
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 按附件图 C 将 SubGraph 作为视觉容器展示，避免和普通节点混淆。  
 **依赖：** M08-T03, UI05-T03
 
 **交付物 / 验收标准**
 
-- [ ] SubGraph 可折叠显示内部摘要
-- [ ] 内部节点编辑仍写回同一 Manifest 层级/引用模型
-- [ ] 折叠不改变 graph 语义
+- [x] SubGraph 可折叠显示内部摘要
+- [x] 内部节点编辑仍写回同一 Manifest 层级/引用模型
+- [x] 折叠不改变 graph 语义
 
 **测试用例**
 
-- [ ] `UI05-T06-TC01`：折叠/展开后序列化结果完全一致
-- [ ] `UI05-T06-TC02`：内部节点 validation error 在折叠时有外层提示
-- [ ] `UI05-T06-TC03`：SubGraph 选择后右栏显示对应配置
+- [x] `UI05-T06-TC01`：折叠/展开后序列化结果完全一致
+- [x] `UI05-T06-TC02`：内部节点 validation error 在折叠时有外层提示
+- [x] `UI05-T06-TC03`：SubGraph 选择后右栏显示对应配置
 
 **任务专属 Prompt**
 
@@ -1335,21 +1335,21 @@ UI07 Debug ───────────────┘
 
 ### UI05-T07 · Save / Validate / Preview / Publish 完整状态机
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 把顶部四个动作做成稳定的编辑器生命周期。  
 **依赖：** M08-T05~T06, UI05-T05
 
 **交付物 / 验收标准**
 
-- [ ] Save 保存 draft；Validate 单独显示结果；Preview 使用未发布版本测试运行；Publish 仅在后端 validation 通过后允许
-- [ ] 发布前显示版本/变更摘要，但不引入复杂审批流
-- [ ] 失败时保留 draft 和用户选择
+- [x] Save 保存 draft；Validate 单独显示结果；Preview 使用未发布版本测试运行；Publish 仅在后端 validation 通过后允许
+- [x] 发布前显示版本/变更摘要，但不引入复杂审批流
+- [x] 失败时保留 draft 和用户选择
 
 **测试用例**
 
-- [ ] `UI05-T07-TC01`：validation 失败时 Publish disabled
-- [ ] `UI05-T07-TC02`：Preview 不改变 published version
-- [ ] `UI05-T07-TC03`：Save 失败后 dirty 状态仍为 true
+- [x] `UI05-T07-TC01`：validation 失败时 Publish disabled
+- [x] `UI05-T07-TC02`：Preview 不改变 published version
+- [x] `UI05-T07-TC03`：Save 失败后 dirty 状态仍为 true
 
 **任务专属 Prompt**
 
@@ -1367,33 +1367,33 @@ UI07 Debug ───────────────┘
 
 # UI06 · Agent Template 管理页补全
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 在原计划 Template 基础入口上补齐可日常使用的管理与配置体验。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI06-T01 · Template 列表与详情工作台
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 实现 Template 搜索/选择/创建入口和详情编辑布局，不实现 Marketplace。  
 **依赖：** M08-T07, UI01-T01
 
 **交付物 / 验收标准**
 
-- [ ] Template list + current version + status
-- [ ] 详情包含 Basic/Model/Prompt/Tools/Context/Workflow/UI sections
-- [ ] 切换 Template 时处理未保存变更
+- [x] Template list + current version + status
+- [x] 详情包含 Basic/Model/Prompt/Tools/Context/Workflow/UI sections
+- [x] 切换 Template 时处理未保存变更
 
 **测试用例**
 
-- [ ] `UI06-T01-TC01`：切换 template 不串表单
-- [ ] `UI06-T01-TC02`：未保存变更切换有保护
-- [ ] `UI06-T01-TC03`：空模板列表有创建入口
+- [x] `UI06-T01-TC01`：切换 template 不串表单
+- [x] `UI06-T01-TC02`：未保存变更切换有保护
+- [x] `UI06-T01-TC03`：空模板列表有创建入口
 
 **任务专属 Prompt**
 
@@ -1409,21 +1409,22 @@ UI07 Debug ───────────────┘
 
 ### UI06-T02 · Model / Prompt / Tool Binding 配置
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 补齐模型选择、Prompt 编辑、Tool Binding 可搜索多选和能力提示。  
 **依赖：** M08-T07, UI06-T01
 
 **交付物 / 验收标准**
 
-- [ ] 只展示 Provider/Template capability 允许的 model/tool
-- [ ] Prompt 支持多行编辑和基本 token 估算（若 API 可用）
-- [ ] side-effect Tool 在绑定列表中显示风险徽标
+- [x] 只展示 Provider/Template capability 允许的 model/tool
+- [x] Prompt 支持多行编辑和基本 token 估算（若 API 可用）
+- [x] side-effect Tool 在绑定列表中显示风险徽标
 
 **测试用例**
 
-- [ ] `UI06-T02-TC01`：不可用 model 不可被提交
-- [ ] `UI06-T02-TC02`：Tool side effect label 可见
-- [ ] `UI06-T02-TC03`：服务端 validation error 回填到对应 field
+- [x] `UI06-T02-TC01`：不可用 model 不可被提交
+- [x] `UI06-T02-TC02`：Tool side effect label 可见
+- [x] `UI06-T02-TC03`：服务端 validation error 回填到对应 field
+- [x] `UI06-T02-TC04`：Prompt 多行编辑显示 token estimate
 
 **任务专属 Prompt**
 
@@ -1439,21 +1440,21 @@ UI07 Debug ───────────────┘
 
 ### UI06-T03 · Context Policy / Restore Policy 编辑器
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 以可理解表单编辑 high_watermark/target_watermark/restore.mode/max token/max restores。  
 **依赖：** M07-T05,M08-T07
 
 **交付物 / 验收标准**
 
-- [ ] 水位线字段具备范围和相互关系提示
-- [ ] AUTO/ASK/MANUAL 说明清晰
-- [ ] 保存后重新加载值一致
+- [x] 水位线字段具备范围和相互关系提示
+- [x] AUTO/ASK/MANUAL 说明清晰
+- [x] 保存后重新加载值一致
 
 **测试用例**
 
-- [ ] `UI06-T03-TC01`：target >= high 时前端提示且后端仍最终校验
-- [ ] `UI06-T03-TC02`：restore.mode 切换显示/隐藏相关字段
-- [ ] `UI06-T03-TC03`：保存并刷新配置不丢
+- [x] `UI06-T03-TC01`：target >= high 时前端提示且后端仍最终校验
+- [x] `UI06-T03-TC02`：restore.mode 切换显示/隐藏相关字段
+- [x] `UI06-T03-TC03`：保存并刷新配置不丢
 
 **任务专属 Prompt**
 
@@ -1469,21 +1470,21 @@ UI07 Debug ───────────────┘
 
 ### UI06-T04 · Template Test Run / Validation 结果页内联
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 让用户在 Template 页直接 Validate/Compile/Test Run，并能跳到 Debug。  
 **依赖：** M08-T05,M08-T07, UI06-T03
 
 **交付物 / 验收标准**
 
-- [ ] 显示 validate/compile result 和字段定位
-- [ ] Test Run 创建独立 session 或按 API 契约运行
-- [ ] 运行后提供跳转 Chat/Debug 的链接
+- [x] 显示 validate/compile result 和字段定位
+- [x] Test Run 创建独立 session 或按 API 契约运行
+- [x] 运行后提供跳转 Chat/Debug 的链接
 
 **测试用例**
 
-- [ ] `UI06-T04-TC01`：compile error 可定位到 workflow/node/field
-- [ ] `UI06-T04-TC02`：test run 成功后可打开对应 session
-- [ ] `UI06-T04-TC03`：失败不会把模板标记为 published
+- [x] `UI06-T04-TC01`：compile error 可定位到 workflow/node/field
+- [x] `UI06-T04-TC02`：test run 成功后可打开对应 session
+- [x] `UI06-T04-TC03`：失败不会把模板标记为 published
 
 **任务专属 Prompt**
 
@@ -1505,7 +1506,7 @@ UI07 Debug ───────────────┘
 >
 > ![Developer Debug 实现基线](./images/04-contextos-debug-view.png)
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** 🟨 In Progress  
 **模块目标：** 补齐附件图 D 的调试工作台交互、联动、过滤和安全控制。
 
 ## 模块 DoD
@@ -1517,21 +1518,21 @@ UI07 Debug ───────────────┘
 
 ### UI07-T01 · Debug 可伸缩三栏布局
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 构建 Timeline 左栏、Conversation+Trace 中栏、Inspector 右栏的完整 Debug Workbench。  
 **依赖：** M09-T02~T03, UI00-T03
 
 **交付物 / 验收标准**
 
-- [ ] 左/中/右独立滚动，底部 Trace 可调整高度
-- [ ] 布局偏好本地保存
-- [ ] 从 Chat deep link 进入时自动定位 selection
+- [x] 左/中/右独立滚动，底部 Trace 可调整高度
+- [x] 布局偏好本地保存
+- [x] 从 Chat deep link 进入时自动定位 selection
 
 **测试用例**
 
-- [ ] `UI07-T01-TC01`：trace deep link 首屏选中正确 message/timeline
-- [ ] `UI07-T01-TC02`：调整 panel 不导致表格宽度溢出
-- [ ] `UI07-T01-TC03`：刷新后 server selection 重新加载成功
+- [x] `UI07-T01-TC01`：trace deep link 首屏选中正确 message/timeline
+- [x] `UI07-T01-TC02`：调整 panel 不导致表格宽度溢出
+- [x] `UI07-T01-TC03`：刷新后 server selection 重新加载成功
 
 **任务专属 Prompt**
 
@@ -1547,21 +1548,21 @@ UI07 Debug ───────────────┘
 
 ### UI07-T02 · Timeline / Checkpoint 树与迷你地图
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 增强原计划 TimelineView，使 fork/checkpoint/message/当前节点关系可视化且可定位。  
 **依赖：** M09-T02, UI01-T03
 
 **交付物 / 验收标准**
 
-- [ ] Timeline tree 显示 parent/fork checkpoint/current
-- [ ] 支持 checkpoint/message filter
-- [ ] 大 Timeline 可用 mini map/fit view 或等价导航
+- [x] Timeline tree 显示 parent/fork checkpoint/current
+- [x] 支持 checkpoint/message filter
+- [x] 大 Timeline 可用 mini map/fit view 或等价导航
 
 **测试用例**
 
-- [ ] `UI07-T02-TC01`：切换 timeline 时中右栏一起更新
-- [ ] `UI07-T02-TC02`：current checkpoint 高亮唯一
-- [ ] `UI07-T02-TC03`：100+ checkpoint 仍可导航
+- [x] `UI07-T02-TC01`：切换 timeline 时中右栏一起更新
+- [x] `UI07-T02-TC02`：current checkpoint 高亮唯一
+- [x] `UI07-T02-TC03`：100+ checkpoint 仍可导航
 
 **任务专属 Prompt**
 
@@ -1577,21 +1578,21 @@ UI07 Debug ───────────────┘
 
 ### UI07-T03 · Conversation ↔ Trace 双向 Selection
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 选 Message 能定位 Trace，选 Trace 能定位 Message/Tool/Context，形成调试闭环。  
 **依赖：** M09-T02~T03, UI07-T01
 
 **交付物 / 验收标准**
 
-- [ ] 定义统一 DebugSelection
-- [ ] Message/Trace/Tool/Context 点击更新 URL selection
-- [ ] 不存在对应对象时显示“无直接关联”而不是静默错选
+- [x] 定义统一 DebugSelection
+- [x] Message/Trace/Tool/Context 点击更新 URL selection
+- [x] 不存在对应对象时显示“无直接关联”而不是静默错选
 
 **测试用例**
 
-- [ ] `UI07-T03-TC01`：选 message #6 自动过滤/定位对应 trace
-- [ ] `UI07-T03-TC02`：选 ToolResult trace 高亮对应 conversation card
-- [ ] `UI07-T03-TC03`：浏览器后退恢复上一个 selection
+- [x] `UI07-T03-TC01`：选 message #6 自动过滤/定位对应 trace
+- [x] `UI07-T03-TC02`：选 ToolResult trace 高亮对应 conversation card
+- [x] `UI07-T03-TC03`：浏览器后退恢复上一个 selection
 
 **任务专属 Prompt**
 

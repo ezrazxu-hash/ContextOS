@@ -30,12 +30,36 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
         id: node.id,
         type: node.type,
         config: { ...(node.config ?? {}) },
+        ...(node.position ? { position: { ...node.position } } : {}),
         ...(node.extension ? { extension: node.extension } : {}),
       });
       return this.view();
     },
+    updateNodeConfig(nodeId, patch) {
+      const node = state.nodes.find((item) => item.id === nodeId);
+      if (!node) {
+        throw new Error(`Unknown workflow node: ${nodeId}`);
+      }
+      node.config = { ...(node.config ?? {}), ...patch };
+      return this.view();
+    },
     connect(source, target, condition = null) {
       state.edges.push(condition ? { from: source, to: target, condition } : { from: source, to: target });
+      return this.view();
+    },
+    removeEdge(edgeToRemove) {
+      state.edges = state.edges.filter((edge) => {
+        return !(
+          edge.from === edgeToRemove.from &&
+          edge.to === edgeToRemove.to &&
+          (edge.condition ?? null) === (edgeToRemove.condition ?? null)
+        );
+      });
+      return this.view();
+    },
+    removeNode(nodeId) {
+      state.nodes = state.nodes.filter((node) => node.id !== nodeId);
+      state.edges = state.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId);
       return this.view();
     },
     view() {
@@ -126,6 +150,7 @@ function cloneNode(node) {
     id: node.id,
     type: node.type,
     config: { ...(node.config ?? {}) },
+    ...(node.position ? { position: { ...node.position } } : {}),
     ...(node.extension ? { extension: node.extension } : {}),
   };
 }

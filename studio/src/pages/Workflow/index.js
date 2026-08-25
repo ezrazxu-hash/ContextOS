@@ -3,7 +3,7 @@ export const WorkflowPage = {
   name: "Workflow",
 };
 
-export async function createWorkflowPage(apiClient) {
-  const { createWorkflowBuilder } = await import("../../features/workflow-builder/WorkflowBuilder.js");
-  return createWorkflowBuilder(apiClient);
+export async function createWorkflowPage(apiClient, options = {}) {
+  const { createWorkflowWorkbench } = await import("./WorkflowWorkbench.js");
+  return createWorkflowWorkbench({ ...options, apiClient });
 }

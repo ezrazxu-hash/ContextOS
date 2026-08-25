@@ -1,0 +1,654 @@
+import { createWorkbenchLayout } from "../../design-system/layout/workbenchLayout.js";
+import { createWorkflowBuilder } from "../../features/workflow-builder/WorkflowBuilder.js";
+
+const DEFAULT_VIEWPORT_WIDTH = 1280;
+const NODE_LIBRARY = [
+  { type: "agent", label: "Agent", category: "Core" },
+  { type: "llm", label: "LLM", category: "Model" },
+  { type: "prompt", label: "Prompt", category: "Model" },
+  { type: "tool", label: "Tool", category: "Tools" },
+  { type: "condition", label: "Condition", category: "Flow" },
+  { type: "router", label: "Router", category: "Flow" },
+  { type: "subgraph", label: "SubGraph", category: "Flow" },
+  { type: "human_approval", label: "Human Approval", category: "Control" },
+  { type: "context_operator", label: "Context Operator", category: "Context" },
+  { type: "memory", label: "Memory", category: "Context" },
+  { type: "output", label: "Output", category: "Output" },
+  { type: "custom", label: "Custom Node", category: "Extension" },
+];
+const CANVAS_TOOLS = ["pointer", "pan", "zoom", "fit", "grid"];
+const NODE_CONFIG_SCHEMAS = {
+  agent: [
+    { id: "model", fields: [{ path: "model", label: "Model", required: true }] },
+    { id: "tool_bindings", fields: [{ path: "tools", label: "Tool Bindings" }] },
+    { id: "context_policy", fields: [{ path: "context.policy", label: "Context Policy" }] },
+    { id: "retry", fields: [{ path: "retry.max_attempts", label: "Retry Attempts" }] },
+    { id: "checkpoint", fields: [{ path: "checkpoint.enabled", label: "Checkpoint" }] },
+  ],
+  tool: [
+    { id: "tool", fields: [{ path: "tool_id", label: "Tool", required: true }] },
+    { id: "args", fields: [{ path: "args_schema", label: "Args Schema" }] },
+    { id: "retry", fields: [{ path: "retry.max_attempts", label: "Retry Attempts" }] },
+  ],
+  subgraph: [
+    { id: "subgraph", fields: [{ path: "label", label: "Label" }, { path: "internal_node_ids", label: "Internal Nodes" }] },
+  ],
+};
+const FALLBACK_PLATFORM = {
+  readUiState() {
+    return null;
+  },
+  writeUiState() {},
+};
+
+export function createWorkflowWorkbench(options = {}) {
+  const apiClient = options.apiClient ?? {};
+  const platform = options.platform ?? FALLBACK_PLATFORM;
+  const layout = createWorkbenchLayout(platform, {
+    layoutId: "workflow",
+    viewportWidth: options.viewportWidth ?? DEFAULT_VIEWPORT_WIDTH,
+  });
+  const builder = createWorkflowBuilder(apiClient, options.initialManifest ?? null);
+  const configDrafts = new Map();
+  const draftDirty = new Set();
+  const state = {
+    dirty: false,
+    status: "saved",
+    selectedNodeId: null,
+    lastValidation: null,
+    publish: {
+      status: "idle",
+      version: options.publishedVersion ?? null,
+      lastValidated: false,
+      changeSummary: null,
+    },
+    nodeLibraryQuery: "",
+    nextNodeNumber: 1,
+    activeCanvasTool: "pointer",
+    canvasViewport: { mode: "manual", bounds: null },
+    edgeErrors: new Map(),
+    validationIssues: [],
+    configFieldErrors: new Map(),
+    nodeConfigValidation: { valid: true, errors: [] },
+    collapsedSubgraphs: new Set(),
+  };
+  function markDirty() {
+    state.dirty = true;
+    state.status = "dirty";
+  }
+
+  return {
+    nodeLibrary() {
+      return libraryItems(builder, options.manifestSchema, state.nodeLibraryQuery);
+    },
+    addNode(node) {
+      const result = builder.addNode(node);
+      markDirty();
+      return result;
+    },
+    connect(source, target, condition = null) {
+      const result = builder.connect(source, target, condition);
+      markDirty();
+      return result;
+    },
+    updateNodeConfig(nodeId, patch) {
+      const result = builder.updateNodeConfig(nodeId, patch);
+      if (state.selectedNodeId === nodeId) {
+        configDrafts.set(nodeId, { ...selectedNodeConfig(result, nodeId) });
+      }
+      markDirty();
+      return result;
+    },
+    connectCanvasEdge(source, target, options = {}) {
+      const condition = options.branch ?? null;
+      const edge = { from: source, to: target, ...(condition ? { condition } : {}) };
+      const localIssue = validateEdgeDraft(builder.view(), edge);
+      if (localIssue) {
+        state.validationIssues = [localIssue];
+        return { accepted: false, issue: localIssue };
+      }
+      builder.connect(source, target, condition);
+      markDirty();
+      const index = builder.view().edges.length - 1;
+      return { accepted: true, edge: canvasEdge(builder.view().edges[index], index, state.edgeErrors) };
+    },
+    deleteCanvasEdge(edgeId) {
+      const parsed = parseEdgeId(edgeId);
+      const workflowView = builder.view();
+      const edge = workflowView.edges[parsed.index];
+      if (!edge || edgeIdFor(edge, parsed.index) !== edgeId) {
+        return { deleted: false };
+      }
+      builder.removeEdge(edge);
+      state.edgeErrors.delete(parsed.index);
+      state.validationIssues = [];
+      markDirty();
+      return { deleted: true };
+    },
+    toggleSubGraphCollapse(nodeId) {
+      const node = selectedNode(builder.view(), nodeId);
+      if (!node || node.type !== "subgraph") {
+        throw new Error(`Unknown workflow SubGraph node: ${nodeId}`);
+      }
+      if (state.collapsedSubgraphs.has(nodeId)) {
+        state.collapsedSubgraphs.delete(nodeId);
+      } else {
+        state.collapsedSubgraphs.add(nodeId);
+      }
+      return this.view().canvas.nodes.find((item) => item.id === nodeId);
+    },
+    setCanvasTool(tool) {
+      if (!CANVAS_TOOLS.includes(tool)) {
+        throw new Error(`Unknown workflow canvas tool: ${tool}`);
+      }
+      state.activeCanvasTool = tool;
+      return this.view().canvas.toolbar;
+    },
+    fitCanvasView() {
+      const bounds = graphBounds(builder.view().nodes);
+      state.canvasViewport = { mode: "fit", bounds };
+      return { bounds };
+    },
+    handleCanvasKeyDown(event) {
+      if (!isDeleteKey(event.key) || isEditableTarget(event.targetRole)) {
+        return { handled: false };
+      }
+      if (!state.selectedNodeId) {
+        return { handled: false };
+      }
+      builder.removeNode(state.selectedNodeId);
+      configDrafts.delete(state.selectedNodeId);
+      draftDirty.delete(state.selectedNodeId);
+      state.configFieldErrors.delete(state.selectedNodeId);
+      state.selectedNodeId = null;
+      markDirty();
+      return { handled: true };
+    },
+    resizePanel(panel, size) {
+      layout.resizePanel(panel, size);
+      return this.view();
+    },
+    searchNodeLibrary(query) {
+      state.nodeLibraryQuery = query ?? "";
+      return this.view().nodeLibrary;
+    },
+    dropLibraryNode(type, position) {
+      ensureSupportedType(type, builder, options.manifestSchema);
+      const node = {
+        id: nextNodeId(type, state),
+        type,
+        config: {},
+        position: { x: position.x, y: position.y },
+      };
+      builder.addNode(node);
+      state.selectedNodeId = node.id;
+      markDirty();
+      return {
+        node,
+        preview: {
+          type,
+          dropPosition: { ...node.position },
+        },
+      };
+    },
+    selectNode(nodeId) {
+      state.selectedNodeId = nodeId;
+      return this.view();
+    },
+    updateNodeConfigDraft(patch) {
+      if (!state.selectedNodeId) {
+        throw new Error("Select a workflow node before editing config");
+      }
+      const current = configDrafts.get(state.selectedNodeId) ?? selectedNodeConfig(builder.view(), state.selectedNodeId);
+      configDrafts.set(state.selectedNodeId, { ...current, ...patch });
+      draftDirty.add(state.selectedNodeId);
+      markDirty();
+      return this.view();
+    },
+    validate() {
+      state.lastValidation = builder.validate();
+      state.status = state.lastValidation.valid ? (state.dirty ? "dirty" : "saved") : "validation";
+      return state.lastValidation;
+    },
+    validateSelectedNodeConfig() {
+      const workflowView = builder.view();
+      const currentNode = selectedNode(workflowView, state.selectedNodeId);
+      const draft = selectedNodeDraft(workflowView, state.selectedNodeId, configDrafts);
+      const errors = validateNodeConfig(currentNode, draft);
+      state.nodeConfigValidation = { valid: errors.length === 0, errors };
+      if (currentNode) {
+        state.configFieldErrors.set(currentNode.id, fieldErrorMap(errors));
+      }
+      return state.nodeConfigValidation;
+    },
+    async validateDraft(template) {
+      return this.validateWithBackend(template);
+    },
+    async validateWithBackend(template) {
+      const manifest = builder.serializeManifest(template);
+      const validation = apiClient.validateTemplate
+        ? await apiClient.validateTemplate(manifest)
+        : { valid: true, issues: [] };
+      state.edgeErrors = new Map();
+      state.validationIssues = normalizeValidationIssues(validation, builder.view());
+      state.configFieldErrors = configErrorsByNode(state.validationIssues, builder.view());
+      state.nodeConfigValidation = selectedConfigValidation(state.selectedNodeId, state.configFieldErrors, builder.view());
+      state.lastValidation = validation;
+      state.status = validation.valid ? (state.dirty ? "dirty" : "saved") : "validation";
+      state.publish.lastValidated = Boolean(validation.valid);
+      state.validationIssues.forEach((issue) => {
+        if (issue.target?.kind === "edge") {
+          state.edgeErrors.set(issue.target.index, issue);
+        }
+      });
+      return validation;
+    },
+    async previewDraft(options = {}) {
+      state.preview = "previewing";
+      const manifest = builder.serializeManifest(options.template);
+      const response = apiClient.previewTemplate
+        ? await apiClient.previewTemplate(manifest, options)
+        : { status: "previewed", manifest };
+      state.preview = "idle";
+      return response;
+    },
+    async publishDraft(template) {
+      if (!state.publish.lastValidated || state.status === "validation") {
+        return { status: "blocked", reason: "validation_failed" };
+      }
+      const manifest = builder.serializeManifest(template);
+      state.publish.status = "publishing";
+      const response = apiClient.publishTemplate
+        ? await apiClient.publishTemplate(manifest)
+        : { status: "published", version: manifest.template.version };
+      state.publish.status = "published";
+      state.publish.version = response.version ?? manifest.template.version;
+      state.publish.changeSummary = {
+        templateId: manifest.template.id,
+        version: state.publish.version,
+        nodes: manifest.graph.nodes.length,
+        edges: manifest.graph.edges.length,
+      };
+      state.dirty = false;
+      state.status = "saved";
+      return response;
+    },
+    serializeManifest(template) {
+      return builder.serializeManifest(template);
+    },
+    async saveDraft(template) {
+      return this.save(template);
+    },
+    async save(template) {
+      state.status = "saving";
+      let result;
+      try {
+        result = await builder.save(template);
+      } catch (error) {
+        state.dirty = true;
+        state.status = "error";
+        state.lastValidation = { valid: false, error: { code: "save_failed", message: error.message } };
+        return { status: "failed", error };
+      }
+      if (result.status === "saved") {
+        state.dirty = false;
+        state.status = "saved";
+      } else {
+        state.status = "validation";
+      }
+      return result;
+    },
+    view() {
+      const layoutView = layout.view();
+      const workflowView = builder.view();
+      const selected = selectedNode(workflowView, state.selectedNodeId);
+      const selectedDraft = selectedNodeDraft(workflowView, state.selectedNodeId, configDrafts);
+      const configErrors = state.selectedNodeId ? state.configFieldErrors.get(state.selectedNodeId) ?? new Map() : new Map();
+
+      return {
+        kind: "workflow-workbench",
+        header: {
+          title: "Workflow",
+          status: state.status,
+          dirty: state.dirty,
+          validation: state.lastValidation,
+          publish: state.publish,
+          actions: {
+            save: { enabled: state.dirty, status: state.status === "saving" ? "saving" : "idle" },
+            preview: { enabled: true, status: state.preview ?? "idle" },
+            publish: {
+              enabled: state.publish.lastValidated && state.status !== "validation",
+              status: state.publish.status,
+              reason: state.publish.lastValidated && state.status !== "validation" ? "" : "validation_failed",
+            },
+          },
+        },
+        columns: [
+          { id: "node-library", role: "navigation", width: layoutView.panels.left.width },
+          { id: "canvas", role: "main", width: layoutView.panels.main.width, minWidth: layoutView.panels.main.minWidth },
+          {
+            id: "node-config",
+            role: "complementary",
+            width: layoutView.panels.right.width,
+            mode: layoutView.panels.right.mode,
+          },
+        ],
+        nodeLibrary: {
+          query: state.nodeLibraryQuery,
+          items: libraryItems(builder, options.manifestSchema, state.nodeLibraryQuery),
+        },
+        canvas: {
+          role: "workflow-canvas",
+          width: layoutView.panels.main.width,
+          minWidth: layoutView.panels.main.minWidth,
+          toolbar: {
+            activeTool: state.activeCanvasTool,
+            tools: CANVAS_TOOLS.map((id) => ({ id, active: id === state.activeCanvasTool })),
+          },
+          viewport: {
+            mode: state.canvasViewport.mode,
+            bounds: state.canvasViewport.bounds ? { ...state.canvasViewport.bounds } : null,
+          },
+          nodes: workflowView.nodes.map((node) => canvasNode(node, state)),
+          edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, state.edgeErrors)),
+        },
+        nodeConfig: {
+          selectedNodeId: state.selectedNodeId,
+          draft: selectedDraft,
+          schemaDriven: true,
+          sections: nodeConfigSections(selected, selectedDraft, configErrors),
+          validation: state.nodeConfigValidation,
+          hasUncommittedChanges: state.selectedNodeId ? draftDirty.has(state.selectedNodeId) : false,
+        },
+        refreshProtection: {
+          enabled: state.dirty,
+          message: state.dirty ? "You have unsaved workflow changes." : "",
+        },
+        validationPanel: {
+          issues: state.validationIssues,
+        },
+      };
+    },
+  };
+}
+
+function selectedNodeConfig(workflowView, nodeId) {
+  return { ...(workflowView.nodes.find((node) => node.id === nodeId)?.config ?? {}) };
+}
+
+function selectedNode(workflowView, nodeId) {
+  return workflowView.nodes.find((node) => node.id === nodeId) ?? null;
+}
+
+function nodeConfigSections(node, draft, fieldErrors) {
+  if (!node) {
+    return [];
+  }
+  return (NODE_CONFIG_SCHEMAS[node.type] ?? []).map((section) => ({
+    id: section.id,
+    fields: section.fields.map((field) => ({
+      path: field.path,
+      label: field.label,
+      required: Boolean(field.required),
+      value: valueAtPath(draft, field.path),
+      error: fieldErrors.get(field.path) ?? null,
+    })),
+  }));
+}
+
+function validateNodeConfig(node, draft) {
+  if (!node) {
+    return [];
+  }
+  return (NODE_CONFIG_SCHEMAS[node.type] ?? [])
+    .flatMap((section) => {
+      return section.fields
+        .filter((field) => field.required && isBlank(valueAtPath(draft, field.path)))
+        .map((field) => ({
+          sectionId: section.id,
+          fieldPath: `graph.nodes[${node.id}].config.${field.path}`,
+          code: "required",
+          message: `${field.label} is required`,
+          controlPath: field.path,
+        }));
+    })
+    .map(({ controlPath, ...error }) => error);
+}
+
+function valueAtPath(source, path) {
+  return path.split(".").reduce((value, segment) => {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    return value[segment];
+  }, source);
+}
+
+function isBlank(value) {
+  return value === undefined || value === null || value === "";
+}
+
+function fieldErrorMap(errors) {
+  return new Map(errors.map((error) => [configPathFromFieldPath(error.fieldPath), error]));
+}
+
+function isDeleteKey(key) {
+  return key === "Delete" || key === "Backspace";
+}
+
+function isEditableTarget(targetRole) {
+  return ["input", "textarea", "contenteditable"].includes(targetRole);
+}
+
+function graphBounds(nodes) {
+  if (nodes.length === 0) {
+    return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  }
+  const positions = nodes.map((node) => node.position ?? { x: 0, y: 0 });
+  return {
+    minX: Math.min(...positions.map((position) => position.x)),
+    minY: Math.min(...positions.map((position) => position.y)),
+    maxX: Math.max(...positions.map((position) => position.x)),
+    maxY: Math.max(...positions.map((position) => position.y)),
+  };
+}
+
+function validateEdgeDraft(workflowView, edge) {
+  const nodes = new Set(workflowView.nodes.map((node) => node.id));
+  if (!nodes.has(edge.from) || !nodes.has(edge.to)) {
+    return {
+      fieldPath: "graph.edges",
+      code: "unknown_node",
+      message: "Edge endpoints must reference existing workflow nodes",
+      target: { kind: "edge", from: edge.from, to: edge.to },
+    };
+  }
+  return null;
+}
+
+function canvasNode(node, state) {
+  if (node.type !== "subgraph") {
+    return node;
+  }
+  const internalNodeIds = Array.isArray(node.config?.internal_node_ids) ? node.config.internal_node_ids : [];
+  const collapsed = state.collapsedSubgraphs.has(node.id);
+  return {
+    ...node,
+    visualRole: "subgraph-container",
+    collapsed,
+    summary: {
+      internalNodeCount: internalNodeIds.length,
+      internalNodeIds: [...internalNodeIds],
+    },
+    validationHint: collapsed ? subgraphValidationHint(internalNodeIds, state.validationIssues) : null,
+  };
+}
+
+function subgraphValidationHint(internalNodeIds, validationIssues) {
+  const internalIssueNodeIds = validationIssues
+    .filter((issue) => issue.target?.kind === "node_config" && internalNodeIds.includes(issue.target.nodeId))
+    .map((issue) => issue.target.nodeId);
+  if (internalIssueNodeIds.length === 0) {
+    return null;
+  }
+  return {
+    kind: "subgraph_internal_validation",
+    severity: "error",
+    internalNodeIds: [...new Set(internalIssueNodeIds)],
+    issueCount: internalIssueNodeIds.length,
+  };
+}
+
+function canvasEdge(edge, index, edgeErrors) {
+  const error = edgeErrors.get(index) ?? null;
+  return {
+    ...edge,
+    id: edgeIdFor(edge, index),
+    label: edge.condition ? branchLabel(edge.condition) : "",
+    status: error ? "invalid" : "valid",
+    error,
+  };
+}
+
+function edgeIdFor(edge, index) {
+  return `${index}:${edge.from}->${edge.to}${edge.condition ? `:${edge.condition}` : ""}`;
+}
+
+function parseEdgeId(edgeId) {
+  return { index: Number(edgeId.split(":", 1)[0]) };
+}
+
+function branchLabel(condition) {
+  if (condition === "yes") {
+    return "Yes";
+  }
+  if (condition === "no") {
+    return "No";
+  }
+  return String(condition);
+}
+
+function normalizeValidationIssues(validation, workflowView) {
+  const rawIssues = validation.issues ?? (validation.error ? [validation.error] : []);
+  return rawIssues.map((issue) => {
+    const fieldPath = issue.fieldPath ?? issue.field_path ?? "";
+    const edgeIndex = edgeIndexFromFieldPath(fieldPath);
+    const edge = Number.isInteger(edgeIndex) ? workflowView.edges[edgeIndex] : null;
+    const nodeIndex = nodeIndexFromFieldPath(fieldPath);
+    const node = Number.isInteger(nodeIndex) ? workflowView.nodes[nodeIndex] : null;
+    const configPath = configPathFromFieldPath(fieldPath);
+    return {
+      fieldPath,
+      code: issue.code,
+      ...(issue.message ? { message: issue.message } : {}),
+      ...(edge
+        ? {
+            target: { kind: "edge", index: edgeIndex, from: edge.from, to: edge.to },
+          }
+        : {}),
+      ...(node && configPath
+        ? {
+            sectionId: sectionIdForConfigPath(node.type, configPath),
+            target: { kind: "node_config", nodeId: node.id, path: configPath },
+          }
+        : {}),
+    };
+  });
+}
+
+function edgeIndexFromFieldPath(fieldPath) {
+  const match = /^graph\.edges\[(\d+)\]/.exec(fieldPath);
+  return match ? Number(match[1]) : null;
+}
+
+function nodeIndexFromFieldPath(fieldPath) {
+  const match = /^graph\.nodes\[(\d+)\]/.exec(fieldPath);
+  return match ? Number(match[1]) : null;
+}
+
+function configPathFromFieldPath(fieldPath) {
+  const match = /\.config\.(.+)$/.exec(fieldPath);
+  return match ? match[1] : "";
+}
+
+function sectionIdForConfigPath(nodeType, configPath) {
+  return (
+    (NODE_CONFIG_SCHEMAS[nodeType] ?? []).find((section) => {
+      return section.fields.some((field) => field.path === configPath);
+    })?.id ?? ""
+  );
+}
+
+function configErrorsByNode(issues, workflowView) {
+  const errors = new Map();
+  issues.forEach((issue) => {
+    if (issue.target?.kind !== "node_config") {
+      return;
+    }
+    const node = workflowView.nodes.find((item) => item.id === issue.target.nodeId);
+    if (!node) {
+      return;
+    }
+    const nodeErrors = errors.get(node.id) ?? new Map();
+    nodeErrors.set(issue.target.path, {
+      fieldPath: issue.fieldPath,
+      code: issue.code,
+      ...(issue.message ? { message: issue.message } : {}),
+    });
+    errors.set(node.id, nodeErrors);
+  });
+  return errors;
+}
+
+function selectedConfigValidation(selectedNodeId, configFieldErrors, workflowView) {
+  if (!selectedNodeId) {
+    return { valid: true, errors: [] };
+  }
+  const node = selectedNode(workflowView, selectedNodeId);
+  const errors = [...(configFieldErrors.get(selectedNodeId)?.values() ?? [])].map((error) => ({
+    sectionId: sectionIdForConfigPath(node?.type, configPathFromFieldPath(error.fieldPath)),
+    fieldPath: error.fieldPath,
+    code: error.code,
+    ...(error.message ? { message: error.message } : {}),
+  }));
+  return { valid: errors.length === 0, errors };
+}
+
+function libraryItems(builder, manifestSchema, query) {
+  const supported = supportedNodeTypes(builder, manifestSchema);
+  const normalizedQuery = query.trim().toLowerCase();
+  return NODE_LIBRARY.filter((node) => supported.has(node.type)).filter((node) => {
+    if (!normalizedQuery) {
+      return true;
+    }
+    return [node.type, node.label].some((value) => value.toLowerCase().includes(normalizedQuery));
+  });
+}
+
+function supportedNodeTypes(builder, manifestSchema) {
+  const builderTypes = new Set(builder.nodeLibrary().map((node) => node.type));
+  if (!manifestSchema?.supportedNodeTypes) {
+    return builderTypes;
+  }
+  return new Set(manifestSchema.supportedNodeTypes.filter((type) => builderTypes.has(type)));
+}
+
+function ensureSupportedType(type, builder, manifestSchema) {
+  if (!supportedNodeTypes(builder, manifestSchema).has(type)) {
+    throw new Error(`Workflow node type ${type} is not supported by the active workflow schema`);
+  }
+}
+
+function nextNodeId(type, state) {
+  const normalizedType = type.replace(/_/g, "-");
+  const id = `${normalizedType}-${state.nextNodeNumber}`;
+  state.nextNodeNumber += 1;
+  return id;
+}
+
+function selectedNodeDraft(workflowView, nodeId, configDrafts) {
+  if (!nodeId) {
+    return null;
+  }
+  return { ...(configDrafts.get(nodeId) ?? selectedNodeConfig(workflowView, nodeId)) };
+}

@@ -9,10 +9,13 @@ export function createReplayPlanDialog(apiClient, options) {
 
   return {
     view() {
+      const requires = requiresConfirmation(options.toolCall, state.selectedAction);
       return {
         availableActions: [...AVAILABLE_ACTIONS],
         selectedAction: state.selectedAction,
-        requiresConfirmation: requiresConfirmation(options.toolCall, state.selectedAction),
+        requiresConfirmation: requires,
+        confirmationStep: requires ? "secondary_required" : "none",
+        defaultFocusAction: "CANCEL",
       };
     },
     selectAction(action) {
@@ -27,6 +30,9 @@ export function createReplayPlanDialog(apiClient, options) {
       return this.view();
     },
     async submit() {
+      if (state.selectedAction === "CANCEL") {
+        return { status: "cancelled" };
+      }
       if (requiresConfirmation(options.toolCall, state.selectedAction) && !state.confirmationToken) {
         return { status: "blocked", reason: "confirmation_required" };
       }
