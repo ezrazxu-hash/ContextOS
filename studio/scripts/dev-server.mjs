@@ -127,32 +127,17 @@ function renderShell(pathname) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ContextOS Studio</title>
     <style>
-      body { margin: 0; font: 14px Arial, sans-serif; color: #111827; background: #f8fafc; }
-      nav { display: flex; gap: 16px; padding: 16px 24px; background: #111827; }
-      a { color: white; text-decoration: none; }
-      main { padding: 24px; }
-      code { background: #e5e7eb; padding: 2px 4px; }
+      :root { color-scheme: light; font-family: Inter, "Segoe UI", Arial, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: #172033; background: #f4f6f8; }
+      button, input { font: inherit; }
     </style>
   </head>
   <body>
-    <nav>
-      <a href="/chat">Chat</a>
-      <a href="/workflow">Workflow</a>
-      <a href="/template">Template</a>
-      <a href="/debug">Debug</a>
-    </nav>
-    <main>
-      <h1>ContextOS Studio ${pageName(pathname)}</h1>
-      <p data-testid="runtime-mode">Runtime mode: ${config.mockRuntime ? "mock" : "real"}</p>
-      <p>API: <code>${config.apiBaseUrl}</code></p>
-      <p>SSE: <code>${config.sseBaseUrl}</code></p>
-    </main>
+    <div id="app" data-initial-path="${pathname}"></div>
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>`;
-}
-
-function pageName(pathname) {
-  return pathname === "/" ? "Chat" : pathname.slice(1).replace(/^\w/, (char) => char.toUpperCase());
 }
 
 function contentType(path) {

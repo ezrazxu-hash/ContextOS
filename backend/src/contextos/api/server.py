@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
-from contextos.api.routes.sessions import get_session, get_session_messages
+from contextos.api.routes.sessions import get_session, get_session_messages, post_session_message
 from contextos.api.streaming.sse import format_sse
 from contextos.runtime.checkpoint.model import Checkpoint
 from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
@@ -225,6 +225,17 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
 
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            segments = [segment for segment in parsed.path.split("/") if segment]
+            payload = self._read_json_body()
+
+            if segments == ["api", "sessions", "demo-session", "messages"]:
+                self._send_route_response(post_session_message("demo-session", payload, services.message_service))
+                return
+
+            self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
+
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -238,6 +249,15 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+
+        def _read_json_body(self) -> dict[str, object]:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length == 0:
+                return {}
+            try:
+                return json.loads(self.rfile.read(length).decode("utf-8"))
+            except json.JSONDecodeError:
+                return {}
 
         def _send_sse(self, frames: list[str]) -> None:
             payload = "".join(frames).encode("utf-8")

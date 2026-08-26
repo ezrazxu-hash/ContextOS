@@ -1,3 +1,9 @@
 # Python bytecode caches
 __pycache__/
 *.py[cod]
+backend-runtime.err.log
+backend-runtime.log
+studio-dev-5174.err.log
+studio-dev-5174.log
+studio-dev.err.log
+studio-dev.log

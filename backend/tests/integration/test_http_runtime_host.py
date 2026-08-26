@@ -34,6 +34,24 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertIn("event: token", sse)
         self.assertIn("event: done", sse)
 
+    def test_host_accepts_session_message_post_over_http(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            created = post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "Run the Studio interaction smoke.", "token_count": 6},
+            )
+            messages = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertEqual(created["role"], "user")
+        self.assertEqual(created["content"], "Run the Studio interaction smoke.")
+        self.assertIn("Run the Studio interaction smoke.", [message["content"] for message in messages["messages"]])
+
 
 def get_json(url: str) -> dict[str, object]:
     with urlopen(url, timeout=5) as response:
@@ -44,6 +62,17 @@ def get_text(url: str) -> str:
     request = Request(url, headers={"Accept": "text/event-stream"})
     with urlopen(request, timeout=5) as response:
         return response.read().decode("utf-8")
+
+
+def post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 if __name__ == "__main__":
