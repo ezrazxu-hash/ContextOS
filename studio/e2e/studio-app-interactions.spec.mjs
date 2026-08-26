@@ -27,17 +27,29 @@ test("Studio app has working navigation chat send selection and disabled action 
     await expect(page.getByTestId("main-title")).toHaveText("Chat Workbench");
     await expect(page.getByTestId("session-demo-session")).toHaveAttribute("aria-pressed", "true");
 
-    await page.getByTestId("composer-input").fill("Send an integration smoke message");
+    const postRequest = page.waitForRequest((request) => {
+      return request.method() === "POST" && request.url().includes("/api/sessions/demo-session/messages");
+    });
+    const streamResponse = page.waitForResponse((response) => {
+      return response.url().includes("/sse/sessions/demo-session/chat") && response.status() === 200;
+    });
+
+    await page.getByTestId("composer-input").fill("Hello, please reply with OK");
     await page.getByTestId("send-message").click();
-    await expect(page.getByTestId("send-message")).toBeDisabled();
-    await expect(page.getByTestId("status-toast")).toContainText("Sending");
-    await expect(page.getByText("Send an integration smoke message")).toBeVisible();
-    await expect(page.getByText("Report sent")).toBeVisible();
+
+    const request = await postRequest;
+    expect(request.postDataJSON()).toMatchObject({ role: "user", content: "Hello, please reply with OK" });
+    await streamResponse;
+    await expect(page.getByText("Hello, please reply with OK")).toBeVisible();
+    await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
     await expect(page.getByTestId("status-toast")).toContainText("Sent");
 
-    await page.getByTestId("message-message-stream").click();
+    await page.reload();
+    await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
+
+    await page.locator(".message-card.assistant", { hasText: "OK" }).click();
     await expect(page.getByTestId("right-panel-title")).toHaveText("Impact");
-    await expect(page.getByTestId("impact-anchor")).toContainText("message-stream");
+    await expect(page.getByTestId("impact-anchor")).toContainText("message_");
 
     await page.getByTestId("nav-workflow").click();
     await expect(page.getByTestId("main-title")).toHaveText("Workflow Builder");

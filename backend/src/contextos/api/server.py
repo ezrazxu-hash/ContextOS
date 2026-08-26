@@ -11,9 +11,11 @@ from urllib.parse import parse_qs, urlparse
 
 from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
+from contextos.api.routes.chat import stream_chat_events
 from contextos.api.routes.sessions import get_session, get_session_messages, post_session_message
 from contextos.api.streaming.sse import format_sse
 from contextos.runtime.checkpoint.model import Checkpoint
+from contextos.runtime.checkpoint.service import CheckpointService
 from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
 from contextos.runtime.debug.projection import DebugProjection
 from contextos.runtime.session.message_service import MessageService
@@ -47,6 +49,14 @@ class RuntimeServices:
             self.checkpoint_store,
             self.trace_repository,
         )
+
+    @property
+    def checkpoint_service(self) -> CheckpointService:
+        return CheckpointService(self.checkpoint_store)
+
+    @property
+    def trace_collector(self) -> TraceCollector:
+        return TraceCollector(self.trace_repository)
 
     @property
     def debug_projection(self) -> DebugProjection:
@@ -214,12 +224,17 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 return
 
             if segments == ["sse", "sessions", "demo-session", "chat"]:
+                timeline_id = _first(query, "timelineId") or _first(query, "timeline_id") or "demo-timeline"
                 self._send_sse(
-                    [
-                        format_sse("token", {"message_id": "message-stream", "content": "Report"}),
-                        format_sse("token", {"message_id": "message-stream", "content": " sent"}),
-                        format_sse("done", {"message_id": "message-stream", "checkpoint_id": "demo-checkpoint"}),
-                    ]
+                    stream_chat_events(
+                        session_id="demo-session",
+                        timeline_id=timeline_id,
+                        trace_id="trace-chat-response",
+                        runtime_events=_chat_runtime_events("demo-session", timeline_id, services.message_service),
+                        message_service=services.message_service,
+                        trace_collector=services.trace_collector,
+                        checkpoint_service=services.checkpoint_service,
+                    )
                 )
                 return
 
@@ -274,4 +289,55 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 def _first(query: dict[str, list[str]], key: str) -> str | None:
     values = query.get(key)
     return values[0] if values else None
+
+
+def _chat_runtime_events(session_id: str, timeline_id: str, message_service: MessageService) -> list[dict[str, object]]:
+    response = _assistant_response_for(_latest_user_content(session_id, message_service))
+    chunks = _stream_chunks(response)
+    return [
+        *[
+            {
+                "type": "token",
+                "data": {
+                    "message_id": "message-stream",
+                    "role": "assistant",
+                    "content": chunk,
+                    "trace_id": "trace-chat-response",
+                },
+            }
+            for chunk in chunks
+        ],
+        {
+            "type": "checkpoint",
+            "data": {
+                "graph_state": {"node": "chat", "status": "completed", "timeline_id": timeline_id},
+                "message_cursor": len(message_service.list_messages(session_id)[0]) + 1,
+                "context_revision": "demo-context-revision",
+            },
+        },
+        {"type": "done", "data": {"message_id": "message-stream"}},
+    ]
+
+
+def _latest_user_content(session_id: str, message_service: MessageService) -> str:
+    messages, _ = message_service.list_messages(session_id, limit=500)
+    for message in reversed(messages):
+        if message.role.value == "user":
+            return message.content
+    return ""
+
+
+def _assistant_response_for(user_content: str) -> str:
+    if "reply with ok" in user_content.lower():
+        return "OK"
+    if not user_content:
+        return "Ready."
+    return f"Runtime received: {user_content}"
+
+
+def _stream_chunks(content: str) -> list[str]:
+    if len(content) <= 8:
+        return [content]
+    midpoint = max(1, len(content) // 2)
+    return [content[:midpoint], content[midpoint:]]
 

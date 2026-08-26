@@ -9,6 +9,7 @@ $BackendLog = Join-Path $RepoRoot "backend-runtime.log"
 $BackendErr = Join-Path $RepoRoot "backend-runtime.err.log"
 $StudioLog = Join-Path $RepoRoot "studio-dev.log"
 $StudioErr = Join-Path $RepoRoot "studio-dev.err.log"
+$BackendEnv = Join-Path $RepoRoot "backend/.env"
 
 function Get-ListeningPids([int[]]$Ports) {
     $pattern = ($Ports | ForEach-Object { ":$_" }) -join "|"
@@ -42,8 +43,23 @@ function Wait-HttpOk([string]$Url) {
     throw "Timed out waiting for $Url"
 }
 
+function Import-DotEnv([string]$Path) {
+    if (!(Test-Path $Path)) {
+        return
+    }
+    Get-Content -LiteralPath $Path | ForEach-Object {
+        $line = $_.Trim()
+        if ($line.Length -eq 0 -or $line.StartsWith("#") -or !$line.Contains("=")) {
+            return
+        }
+        $name, $value = $line.Split("=", 2)
+        [Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim().Trim('"'), "Process")
+    }
+}
+
 Stop-Ports @($BackendPort, $StudioPort)
 
+Import-DotEnv $BackendEnv
 $env:PYTHONPATH = "backend/src"
 $backend = Start-Process `
     -FilePath "python" `

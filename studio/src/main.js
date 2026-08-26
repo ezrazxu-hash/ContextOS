@@ -385,10 +385,20 @@ function applyToken(data) {
 }
 
 function completeStreamMessage(data) {
-  const message = state.messages.find((item) => item.id === data.message_id);
+  let message = state.messages.find((item) => item.id === data.message_id);
+  if (!message) {
+    message = [...state.messages].reverse().find((item) => item.role === "assistant" && item.status === "streaming");
+    if (message && data.message_id) {
+      if (state.selection.messageId === message.id) {
+        state.selection.messageId = data.message_id;
+      }
+      message.id = data.message_id;
+    }
+  }
   if (message) {
     message.status = "completed";
     message.checkpoint_id = data.checkpoint_id ?? message.checkpoint_id;
+    message.trace_id = data.trace_id ?? message.trace_id ?? "trace-chat-response";
   }
 }
 

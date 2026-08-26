@@ -52,6 +52,27 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(created["content"], "Run the Studio interaction smoke.")
         self.assertIn("Run the Studio interaction smoke.", [message["content"] for message in messages["messages"]])
 
+    def test_chat_stream_uses_latest_user_message_and_persists_assistant_response(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "Hello, please reply with OK", "token_count": 5},
+            )
+            sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+            messages = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertIn("event: token", sse)
+        self.assertIn('"content": "OK"', sse)
+        assistant_messages = [message for message in messages["messages"] if message["role"] == "assistant"]
+        self.assertEqual(assistant_messages[-1]["content"], "OK")
+        self.assertEqual(assistant_messages[-1]["trace_id"], "trace-chat-response")
+
 
 def get_json(url: str) -> dict[str, object]:
     with urlopen(url, timeout=5) as response:
