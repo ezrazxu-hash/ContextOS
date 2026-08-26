@@ -17,6 +17,7 @@ const BOUNDARY_NODES = new Set(["START", "END"]);
 
 export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
   const state = initialManifest ? stateFromManifest(initialManifest) : emptyState();
+  state.selectedNodeId = null;
 
   return {
     nodeLibrary() {
@@ -60,12 +61,34 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
     removeNode(nodeId) {
       state.nodes = state.nodes.filter((node) => node.id !== nodeId);
       state.edges = state.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId);
+      if (state.selectedNodeId === nodeId) {
+        state.selectedNodeId = null;
+      }
+      return this.view();
+    },
+    handleCanvasKey({ key, nodeId = null } = {}) {
+      if (key === "Enter" && nodeId) {
+        state.selectedNodeId = nodeId;
+      }
+      if ((key === "Delete" || key === "Backspace") && state.selectedNodeId) {
+        return this.removeNode(state.selectedNodeId);
+      }
       return this.view();
     },
     view() {
       return {
         nodes: state.nodes.map(cloneNode),
         edges: state.edges.map(cloneEdge),
+        selectedNodeId: state.selectedNodeId,
+        canvas: {
+          role: "application",
+          tabIndex: 0,
+          ariaLabel: "Workflow canvas",
+          keyboardShortcuts: {
+            select: "Enter",
+            delete: "Delete",
+          },
+        },
       };
     },
     validate() {
@@ -118,6 +141,7 @@ function emptyState() {
     template: { id: "workflow", name: "Workflow", version: "1.0.0" },
     nodes: [],
     edges: [],
+    selectedNodeId: null,
   };
 }
 
@@ -126,6 +150,7 @@ function stateFromManifest(manifest) {
     template: { ...manifest.template },
     nodes: manifest.graph.nodes.map(cloneNode),
     edges: manifest.graph.edges.map(cloneEdge),
+    selectedNodeId: null,
   };
 }
 

@@ -1,7 +1,9 @@
 import { ClientError } from "../../client/http.js";
+import { runtimeApiContract } from "../../client-core/contracts.js";
 import { demoFixtures } from "../fixtures/demoRuntime.js";
 
 export { demoFixtures };
+export { runtimeApiContract };
 
 export function createMockRuntimeClient(fixtures = demoFixtures) {
   let contextItems = clone(fixtures.context);
@@ -63,7 +65,7 @@ export function createMockRuntimeClient(fixtures = demoFixtures) {
       if (decision?.tool_call_id !== fixtures.replay.sideEffectToolCall.tool_call_id) {
         throw clientError("replay.tool_call_not_found", "Tool call not found", 400);
       }
-      if (decision.action === "REINVOKE" && decision.confirmation_token !== "confirm-demo-send-email") {
+      if (decision.action === "REINVOKE" && decision.confirmation_token !== "confirm-demo-send-report-email") {
         throw clientError("replay.confirmation_required", "Replay confirmation required", 409);
       }
       return {
@@ -101,14 +103,46 @@ function createDebugIndex(fixtures, contextItems) {
     timelines: [clone(fixtures.timeline)],
     checkpoints: [clone(fixtures.checkpoint)],
     messages: clone(fixtures.messages),
-    traces: { items: [{ trace_id: "demo-trace", checkpoint_id: fixtures.checkpoint.id }], total: 1, offset: 0, limit: 50 },
+    traces: {
+      items: [
+        {
+          id: "event-sales-search",
+          trace_id: "demo-trace",
+          checkpoint_id: fixtures.checkpoint.id,
+          message_id: "demo-assistant-message",
+          step_type: "tool_call",
+          component: "sales.search",
+          status: "success",
+          duration: 120,
+          tool_call_id: "tool-call-sales",
+          replay_policy: "SAFE",
+        },
+        {
+          id: "event-send-report-email",
+          trace_id: "trace-send-report-email",
+          checkpoint_id: fixtures.checkpoint.id,
+          message_id: "demo-assistant-message",
+          step_type: "tool_call",
+          component: "send_report_email",
+          status: "blocked",
+          duration: 48,
+          tool_call_id: fixtures.replay.sideEffectToolCall.tool_call_id,
+          side_effect: fixtures.replay.sideEffectToolCall.side_effect,
+          replay_policy: fixtures.replay.sideEffectToolCall.replay_policy,
+          replayable: true,
+        },
+      ],
+      total: 2,
+      offset: 0,
+      limit: 50,
+    },
     state: { graph_state: clone(fixtures.checkpoint.graph_state) },
     tools: [
       {
-        trace_id: "demo-trace",
+        trace_id: "trace-send-report-email",
         checkpoint_id: fixtures.checkpoint.id,
-        tool_call_id: "tool-call-sales",
-        tool_result_id: "tool-call-sales",
+        tool_call_id: fixtures.replay.sideEffectToolCall.tool_call_id,
+        tool_result_id: null,
       },
     ],
     context: { revision: fixtures.checkpoint.context_revision, items: clone(contextItems) },

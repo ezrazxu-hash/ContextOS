@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ContextOS Studio</title>
+    <style>
+      body { margin: 0; font: 14px Arial, sans-serif; color: #111827; background: #f8fafc; }
+      nav { display: flex; gap: 16px; padding: 16px 24px; background: #111827; }
+      a { color: white; text-decoration: none; }
+      main { padding: 24px; }
+      code { background: #e5e7eb; padding: 2px 4px; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <a href="/chat">Chat</a>
+      <a href="/workflow">Workflow</a>
+      <a href="/template">Template</a>
+      <a href="/debug">Debug</a>
+    </nav>
+    <main>
+      <h1>ContextOS Studio</h1>
+      <p data-testid="route"></p>
+      <p data-testid="rehydrate-status">Rehydrating</p>
+      <p>API: <code data-testid="api-base-url"></code></p>
+      <p>SSE: <code data-testid="sse-base-url"></code></p>
+    </main>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

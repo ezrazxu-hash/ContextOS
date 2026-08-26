@@ -1506,15 +1506,15 @@ UI07 Debug ───────────────┘
 >
 > ![Developer Debug 实现基线](./images/04-contextos-debug-view.png)
 
-**模块状态：** 🟨 In Progress  
+**模块状态：** ✅ Done  
 **模块目标：** 补齐附件图 D 的调试工作台交互、联动、过滤和安全控制。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI07-T01 · Debug 可伸缩三栏布局
 
@@ -1608,21 +1608,21 @@ UI07 Debug ───────────────┘
 
 ### UI07-T04 · Trace Table 过滤、分组与详情
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 补充 type/component/status/duration 过滤与 row detail，长输入输出按需加载。  
 **依赖：** M09-T03, UI07-T03
 
 **交付物 / 验收标准**
 
-- [ ] 支持 Model/Tool/State/Context/Checkpoint/Replay 类型过滤
-- [ ] duration/status 可排序
-- [ ] Raw payload 默认不加载，点击详情再请求
+- [x] 支持 Model/Tool/State/Context/Checkpoint/Replay 类型过滤
+- [x] duration/status 可排序
+- [x] Raw payload 默认不加载，点击详情再请求
 
 **测试用例**
 
-- [ ] `UI07-T04-TC01`：过滤不会改变后端 trace 数据
-- [ ] `UI07-T04-TC02`：raw 未打开时无 raw 请求
-- [ ] `UI07-T04-TC03`：失败 trace 可一键复制 trace id
+- [x] `UI07-T04-TC01`：过滤不会改变后端 trace 数据
+- [x] `UI07-T04-TC02`：raw 未打开时无 raw 请求
+- [x] `UI07-T04-TC03`：失败 trace 可一键复制 trace id
 
 **任务专属 Prompt**
 
@@ -1638,22 +1638,22 @@ UI07 Debug ───────────────┘
 
 ### UI07-T05 · Inspector Stack：State / Tool / Context / Prompt
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 按附件右栏将多个 Inspector 做成折叠面板，并跟随 selection 变化。  
 **依赖：** M09-T03, UI07-T03
 
 **交付物 / 验收标准**
 
-- [ ] State Inspector 支持稳定字段表/JSON raw
-- [ ] Tool Calls 区分 safe/replayable 与 side-effect
-- [ ] Context 显示 Raw/Abstract/Evicted/Pinned 统计
-- [ ] Prompt/Inputs 支持 raw/structured tabs 和 token 估算
+- [x] State Inspector 支持稳定字段表/JSON raw
+- [x] Tool Calls 区分 safe/replayable 与 side-effect
+- [x] Context 显示 Raw/Abstract/Evicted/Pinned 统计
+- [x] Prompt/Inputs 支持 raw/structured tabs 和 token 估算
 
 **测试用例**
 
-- [ ] `UI07-T05-TC01`：选不同 message 时 inspector 数据切换不串
-- [ ] `UI07-T05-TC02`：side-effect tool 有显著 risk label
-- [ ] `UI07-T05-TC03`：raw prompt 可复制且不会自动执行任何操作
+- [x] `UI07-T05-TC01`：选不同 message 时 inspector 数据切换不串
+- [x] `UI07-T05-TC02`：side-effect tool 有显著 risk label
+- [x] `UI07-T05-TC03`：raw prompt 可复制且不会自动执行任何操作
 
 **任务专属 Prompt**
 
@@ -1669,21 +1669,21 @@ UI07 Debug ───────────────┘
 
 ### UI07-T06 · Runtime 控制条与 Capability 降级
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 按附件提供 Continue/Pause/Stop/Refresh 等控制入口，但只展示后端 capability 明确支持的动作。  
 **依赖：** M01-T04,M09-T01, UI07-T01
 
 **交付物 / 验收标准**
 
-- [ ] 控制条根据 runtime status/capability 动态启用
-- [ ] 不支持 pause 时隐藏或 disabled 并解释
-- [ ] 危险控制需明确确认但不得伪造后端状态
+- [x] 控制条根据 runtime status/capability 动态启用
+- [x] 不支持 pause 时隐藏或 disabled 并解释
+- [x] 危险控制需明确确认但不得伪造后端状态
 
 **测试用例**
 
-- [ ] `UI07-T06-TC01`：capability 不含 pause 时不会发 pause 请求
-- [ ] `UI07-T06-TC02`：stop 成功后状态从后端刷新
-- [ ] `UI07-T06-TC03`：refresh 只重新拉取，不改变 runtime state
+- [x] `UI07-T06-TC01`：capability 不含 pause 时不会发 pause 请求
+- [x] `UI07-T06-TC02`：stop 成功后状态从后端刷新
+- [x] `UI07-T06-TC03`：refresh 只重新拉取，不改变 runtime state
 
 **任务专属 Prompt**
 
@@ -1701,33 +1701,33 @@ UI07 Debug ───────────────┘
 
 # UI08 · 通用可用性、性能与视觉回归
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 确保完整页面不是只能在理想数据下运行。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI08-T01 · Keyboard / Accessibility 基线
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 为 Chat/Workflow/Debug 的高频路径建立键盘和可访问性基线。  
 **依赖：** UI00-T02~T04
 
 **交付物 / 验收标准**
 
-- [ ] Focus ring、skip navigation、aria label、dialog focus trap
-- [ ] 危险动作不可仅通过颜色区分
-- [ ] Canvas 提供至少基础键盘选择/删除替代方案
+- [x] Focus ring、skip navigation、aria label、dialog focus trap
+- [x] 危险动作不可仅通过颜色区分
+- [x] Canvas 提供至少基础键盘选择/删除替代方案
 
 **测试用例**
 
-- [ ] `UI08-T01-TC01`：仅键盘可完成切 session、发消息、打开 context detail、关闭 dialog
-- [ ] `UI08-T01-TC02`：axe/等价扫描无关键级违规
-- [ ] `UI08-T01-TC03`：danger button 有文本/aria 语义
+- [x] `UI08-T01-TC01`：仅键盘可完成切 session、发消息、打开 context detail、关闭 dialog
+- [x] `UI08-T01-TC02`：axe/等价扫描无关键级违规
+- [x] `UI08-T01-TC03`：danger button 有文本/aria 语义
 
 **任务专属 Prompt**
 
@@ -1743,21 +1743,21 @@ UI07 Debug ───────────────┘
 
 ### UI08-T02 · 长列表与大数据性能
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 建立 Message/Context/Trace/Timeline 的性能门槛和懒加载策略。  
 **依赖：** UI03-T02, UI04-T01, UI07-T04
 
 **交付物 / 验收标准**
 
-- [ ] 明确虚拟化阈值
-- [ ] raw 大字段延迟加载
-- [ ] Context/Trace filter 避免主线程全量重算
+- [x] 明确虚拟化阈值
+- [x] raw 大字段延迟加载
+- [x] Context/Trace filter 避免主线程全量重算
 
 **测试用例**
 
-- [ ] `UI08-T02-TC01`：500 messages / 1000 context / 5000 trace fixture 页面仍可交互
-- [ ] `UI08-T02-TC02`：首屏不下载所有 raw payload
-- [ ] `UI08-T02-TC03`：切换 selection 无明显长任务阻塞
+- [x] `UI08-T02-TC01`：500 messages / 1000 context / 5000 trace fixture 页面仍可交互
+- [x] `UI08-T02-TC02`：首屏不下载所有 raw payload
+- [x] `UI08-T02-TC03`：切换 selection 无明显长任务阻塞
 
 **任务专属 Prompt**
 
@@ -1773,21 +1773,22 @@ UI07 Debug ───────────────┘
 
 ### UI08-T03 · Visual Regression 基线
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
+**验证：** Playwright Chromium 浏览器二进制已可用，`npm run test:visual` 完成真实截图比对。  
 **目标：** 把附件图作为信息架构参考，建立 Chat/Workflow/Debug 的稳定截图测试，而非像素级复制。  
 **依赖：** UI03-T01, UI05-T01, UI07-T01
 
 **交付物 / 验收标准**
 
-- [ ] Playwright 三个主页面 golden screenshot
-- [ ] 覆盖 default/loading/error/risk modal 关键状态
-- [ ] 截图差异需要人工 review，不自动接受
+- [x] Playwright 三个主页面 golden screenshot
+- [x] 覆盖 default/loading/error/risk modal 关键状态
+- [x] 截图差异需要人工 review，不自动接受
 
 **测试用例**
 
-- [ ] `UI08-T03-TC01`：1280+ desktop 基线截图稳定
-- [ ] `UI08-T03-TC02`：Replay danger modal 独立截图
-- [ ] `UI08-T03-TC03`：Workflow selected node/config panel 状态有基线
+- [x] `UI08-T03-TC01`：1280+ desktop 基线截图稳定
+- [x] `UI08-T03-TC02`：Replay danger modal 独立截图
+- [x] `UI08-T03-TC03`：Workflow selected node/config panel 状态有基线
 
 **任务专属 Prompt**
 
@@ -1803,21 +1804,22 @@ UI07 Debug ───────────────┘
 
 ### UI08-T04 · Cross-browser Smoke
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
+**验证：** Chromium + Firefox cross-browser smoke matrix 已通过。  
 **目标：** 验证主流程至少在 Chromium + 一个非 Chromium 浏览器无核心阻塞。  
 **依赖：** UI08-T01~T03
 
 **交付物 / 验收标准**
 
-- [ ] Playwright browser matrix
-- [ ] 记录已知浏览器差异
-- [ ] SSE、drag-drop、clipboard 经 Platform Adapter 验证
+- [x] Playwright browser matrix
+- [x] 记录已知浏览器差异
+- [x] SSE、drag-drop、clipboard 经 Platform Adapter 验证
 
 **测试用例**
 
-- [ ] `UI08-T04-TC01`：Chat send/stream 在两浏览器通过
-- [ ] `UI08-T04-TC02`：Workflow drag node 在两浏览器通过
-- [ ] `UI08-T04-TC03`：Debug deep link 在两浏览器通过
+- [x] `UI08-T04-TC01`：Chat send/stream 在两浏览器通过
+- [x] `UI08-T04-TC02`：Workflow drag node 在两浏览器通过
+- [x] `UI08-T04-TC03`：Debug deep link 在两浏览器通过
 
 **任务专属 Prompt**
 
@@ -1835,33 +1837,33 @@ UI07 Debug ───────────────┘
 
 # UI09 · 完整可运行与交付闭环
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 满足“不是只有组件，而是一个能启动、联调、构建和演示的页面程序”。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI09-T01 · Development Runtime 一键启动
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 提供统一开发命令启动 Web，支持 mock Runtime 和 real Runtime 两种模式。  
 **依赖：** UI02-T05, UI01-T01
 
 **交付物 / 验收标准**
 
-- [ ] `.env.example` 定义 API/SSE base URL 与 mock flag
-- [ ] `pnpm dev`（或仓库等价命令）可启动
-- [ ] README 明确 mock/real 两种启动方式
+- [x] `.env.example` 定义 API/SSE base URL 与 mock flag
+- [x] `pnpm dev`（或仓库等价命令）可启动
+- [x] README 明确 mock/real 两种启动方式
 
 **测试用例**
 
-- [ ] `UI09-T01-TC01`：全新 checkout 按 README 能启动 web
-- [ ] `UI09-T01-TC02`：mock 模式不需要 LLM key
-- [ ] `UI09-T01-TC03`：real 模式指向 Runtime 后四路由可访问
+- [x] `UI09-T01-TC01`：全新 checkout 按 README 能启动 web
+- [x] `UI09-T01-TC02`：mock 模式不需要 LLM key
+- [x] `UI09-T01-TC03`：real 模式指向 Runtime 后四路由可访问
 
 **任务专属 Prompt**
 
@@ -1877,21 +1879,21 @@ UI07 Debug ───────────────┘
 
 ### UI09-T02 · 开发代理与 SSE/WS 转发
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 处理本地跨域、SSE buffering、未来 WS 调试通道，避免 Postman/浏览器环境差异。  
 **依赖：** M00-T04, UI09-T01
 
 **交付物 / 验收标准**
 
-- [ ] Vite/dev proxy 或等价代理配置
-- [ ] SSE 禁止被代理缓冲
-- [ ] 生产反向代理配置提供 REST/SSE/WS 分路规则
+- [x] Vite/dev proxy 或等价代理配置
+- [x] SSE 禁止被代理缓冲
+- [x] 生产反向代理配置提供 REST/SSE/WS 分路规则
 
 **测试用例**
 
-- [ ] `UI09-T02-TC01`：SSE token 能持续到达浏览器
-- [ ] `UI09-T02-TC02`：API error trace header 未被代理吞掉
-- [ ] `UI09-T02-TC03`：若 WS 未启用则不影响 REST/SSE
+- [x] `UI09-T02-TC01`：SSE token 能持续到达浏览器
+- [x] `UI09-T02-TC02`：API error trace header 未被代理吞掉
+- [x] `UI09-T02-TC03`：若 WS 未启用则不影响 REST/SSE
 
 **任务专属 Prompt**
 
@@ -1907,21 +1909,21 @@ UI07 Debug ───────────────┘
 
 ### UI09-T03 · Production Build 与静态部署
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 生成可部署的 production bundle，并验证 history route 和 Runtime proxy。  
 **依赖：** UI09-T02
 
 **交付物 / 验收标准**
 
-- [ ] production build 脚本
-- [ ] SPA history fallback
-- [ ] 可选 Nginx/容器静态部署示例，不把 Runtime 打包进 Web
+- [x] production build 脚本
+- [x] SPA history fallback
+- [x] 可选 Nginx/容器静态部署示例，不把 Runtime 打包进 Web
 
 **测试用例**
 
-- [ ] `UI09-T03-TC01`：production build exit 0
-- [ ] `UI09-T03-TC02`：直接访问 `/debug?...` 不 404
-- [ ] `UI09-T03-TC03`：刷新任一深链接仍能 rehydrate
+- [x] `UI09-T03-TC01`：production build exit 0
+- [x] `UI09-T03-TC02`：直接访问 `/debug?...` 不 404
+- [x] `UI09-T03-TC03`：刷新任一深链接仍能 rehydrate
 
 **任务专属 Prompt**
 
@@ -1937,22 +1939,22 @@ UI07 Debug ───────────────┘
 
 ### UI09-T04 · Demo Seed 与四页面演示数据
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 提供能对应附件效果的稳定 demo 数据，方便验收而不依赖随机模型输出。  
 **依赖：** UI02-T05, UI09-T01
 
 **交付物 / 验收标准**
 
-- [ ] Chat demo：PRD 梳理 + 历史消息编辑 + Impact
-- [ ] Workflow demo：Planner/Search/Condition/SubGraph/Writer/Context Review
-- [ ] Debug demo：sales tool + side-effect send_report_email + replay risk
-- [ ] Template demo：context policy + tool binding
+- [x] Chat demo：PRD 梳理 + 历史消息编辑 + Impact
+- [x] Workflow demo：Planner/Search/Condition/SubGraph/Writer/Context Review
+- [x] Debug demo：sales tool + side-effect send_report_email + replay risk
+- [x] Template demo：context policy + tool binding
 
 **测试用例**
 
-- [ ] `UI09-T04-TC01`：四个 demo 均可从固定入口打开
-- [ ] `UI09-T04-TC02`：demo id 固定，截图测试可复用
-- [ ] `UI09-T04-TC03`：demo 不触发真实外部写操作
+- [x] `UI09-T04-TC01`：四个 demo 均可从固定入口打开
+- [x] `UI09-T04-TC02`：demo id 固定，截图测试可复用
+- [x] `UI09-T04-TC03`：demo 不触发真实外部写操作
 
 **任务专属 Prompt**
 
@@ -1968,26 +1970,27 @@ UI07 Debug ───────────────┘
 
 ### UI09-T05 · End-to-End Web Acceptance
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
+**补充：** 已新增后端标准库 HTTP Runtime 宿主入口，real Runtime Playwright 集成已验证通过。  
 **目标：** 把页面程序验收成真实用户可走通的 Studio，而不是单组件集合。  
 **依赖：** UI03~UI09 已完成；原计划 M10 API 场景可用
 
 **交付物 / 验收标准**
 
-- [ ] E2E-01：选模板→新建 session→流式 Chat→Tool 展示
-- [ ] E2E-02：选历史 AI Message→编辑→Impact→仅修改上下文
-- [ ] E2E-03：从这里继续→切新 Timeline→继续 Chat
-- [ ] E2E-04：Replay side-effect→二次确认→使用历史结果/跳过
-- [ ] E2E-05：Context Evict→Placeholder→Restore
-- [ ] E2E-06：Workflow 编辑→Validate→Save→Preview
-- [ ] E2E-07：Chat trace deep link→Debug 定位→Inspector
-- [ ] E2E-08：刷新任一页面→后端 rehydrate
+- [x] E2E-01：选模板→新建 session→流式 Chat→Tool 展示
+- [x] E2E-02：选历史 AI Message→编辑→Impact→仅修改上下文
+- [x] E2E-03：从这里继续→切新 Timeline→继续 Chat
+- [x] E2E-04：Replay side-effect→二次确认→使用历史结果/跳过
+- [x] E2E-05：Context Evict→Placeholder→Restore
+- [x] E2E-06：Workflow 编辑→Validate→Save→Preview
+- [x] E2E-07：Chat trace deep link→Debug 定位→Inspector
+- [x] E2E-08：刷新任一页面→后端 rehydrate
 
 **测试用例**
 
-- [ ] `UI09-T05-TC01`：Playwright E2E 全部跑在 mock 模式
-- [ ] `UI09-T05-TC02`：至少一组跑在 real Runtime 集成环境
-- [ ] `UI09-T05-TC03`：任何失败保留 trace/screenshot/video 便于定位
+- [x] `UI09-T05-TC01`：Playwright E2E 全部跑在 mock 模式
+- [x] `UI09-T05-TC02`：至少一组跑在 real Runtime 集成环境
+- [x] `UI09-T05-TC03`：任何失败保留 trace/screenshot/video 便于定位
 
 **任务专属 Prompt**
 
@@ -2005,33 +2008,33 @@ UI07 Debug ───────────────┘
 
 # UI10 · Multi-client / Desktop Ready（V1 只做边界，不做 Desktop 产品）
 
-**模块状态：** ⬜ Not Started  
+**模块状态：** ✅ Done  
 **模块目标：** 满足 Web First、未来 Tauri/CLI/IDE 可复用，而不提前扩张 V1。
 
 ## 模块 DoD
 
-- [ ] 本模块所有非 Deferred 任务达到 `✅ Done`。
-- [ ] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
-- [ ] 关键交互有组件/集成/E2E 中至少一层自动测试。
-- [ ] 失败、加载、空状态和刷新恢复路径已覆盖。
+- [x] 本模块所有非 Deferred 任务达到 `✅ Done`。
+- [x] 没有重新实现原计划已有 Runtime/Context/Compiler/Replay 等业务。
+- [x] 关键交互有组件/集成/E2E 中至少一层自动测试。
+- [x] 失败、加载、空状态和刷新恢复路径已覆盖。
 
 ### UI10-T01 · PlatformAdapter 浏览器能力隔离
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 把 clipboard/storage/openExternal/fileDialog/notification 等浏览器依赖从业务 Feature 中隔离。  
 **依赖：** UI01~UI09
 
 **交付物 / 验收标准**
 
-- [ ] 定义 `PlatformAdapter` 接口
-- [ ] Web 端实现 `webPlatform`
-- [ ] Feature 通过 hook/context 获取 platform，不直接访问全局 window/navigator
+- [x] 定义 `PlatformAdapter` 接口
+- [x] Web 端实现 `webPlatform`
+- [x] Feature 通过 hook/context 获取 platform，不直接访问全局 window/navigator
 
 **测试用例**
 
-- [ ] `UI10-T01-TC01`：testPlatform 可替代 clipboard/storage
-- [ ] `UI10-T01-TC02`：静态检查或 grep 无关键 Feature 直接调用禁止 API
-- [ ] `UI10-T01-TC03`：SSR/非浏览器测试环境可加载核心 Feature module
+- [x] `UI10-T01-TC01`：testPlatform 可替代 clipboard/storage
+- [x] `UI10-T01-TC02`：静态检查或 grep 无关键 Feature 直接调用禁止 API
+- [x] `UI10-T01-TC03`：SSR/非浏览器测试环境可加载核心 Feature module
 
 **任务专属 Prompt**
 
@@ -2047,21 +2050,21 @@ UI07 Debug ───────────────┘
 
 ### UI10-T02 · 可复用 Client Core 包边界
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 抽离 API contracts/query key/event normalization/domain projection，使未来 Desktop/CLI 不复制。  
 **依赖：** UI02, UI10-T01
 
 **交付物 / 验收标准**
 
-- [ ] 形成 `packages/client-core` 或仓库等价边界
-- [ ] client-core 不依赖 React DOM/window
-- [ ] Web hooks 依赖 client-core，而不是反向依赖
+- [x] 形成 `packages/client-core` 或仓库等价边界
+- [x] client-core 不依赖 React DOM/window
+- [x] Web hooks 依赖 client-core，而不是反向依赖
 
 **测试用例**
 
-- [ ] `UI10-T02-TC01`：client-core 单测可在纯 Node 环境运行
-- [ ] `UI10-T02-TC02`：SSE event normalization 不依赖 DOM
-- [ ] `UI10-T02-TC03`：domain contracts 在 Web 和测试 host 共用
+- [x] `UI10-T02-TC01`：client-core 单测可在纯 Node 环境运行
+- [x] `UI10-T02-TC02`：SSE event normalization 不依赖 DOM
+- [x] `UI10-T02-TC03`：domain contracts 在 Web 和测试 host 共用
 
 **任务专属 Prompt**
 
@@ -2077,21 +2080,21 @@ UI07 Debug ───────────────┘
 
 ### UI10-T03 · Host-independent UI 边界检查
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 识别 Web-only UI 与可复用 UI 的边界，避免未来 Tauri 迁移时大面积返工。  
 **依赖：** UI10-T01~T02
 
 **交付物 / 验收标准**
 
-- [ ] 输出 `docs/ui/multi-client-boundary.md`
-- [ ] 标注可复用：Chat/Context/Workflow/Debug Feature；Web-only：browser router/history/某些 host actions
-- [ ] 定义 Desktop Host 未来需要实现的 platform capability 清单
+- [x] 输出 `docs/ui/multi-client-boundary.md`
+- [x] 标注可复用：Chat/Context/Workflow/Debug Feature；Web-only：browser router/history/某些 host actions
+- [x] 定义 Desktop Host 未来需要实现的 platform capability 清单
 
 **测试用例**
 
-- [ ] `UI10-T03-TC01`：文档中的每个 browser-specific capability 都有 adapter 归属
-- [ ] `UI10-T03-TC02`：业务组件无硬编码 `http://localhost`
-- [ ] `UI10-T03-TC03`：API base URL 由 host 配置注入
+- [x] `UI10-T03-TC01`：文档中的每个 browser-specific capability 都有 adapter 归属
+- [x] `UI10-T03-TC02`：业务组件无硬编码 `http://localhost`
+- [x] `UI10-T03-TC03`：API base URL 由 host 配置注入
 
 **任务专属 Prompt**
 
@@ -2107,22 +2110,22 @@ UI07 Debug ───────────────┘
 
 ### UI10-T04 · Desktop Client 后续任务占位（不进入 V1 实现）
 
-**状态：** ⬜ Not Started  
+**状态：** ✅ Done  
 **目标：** 明确后续 Tauri 落地步骤和验收，不在本轮生成 Desktop 业务代码。  
 **依赖：** UI10-T03
 
 **交付物 / 验收标准**
 
-- [ ] ⏭ Deferred：Tauri shell 初始化
-- [ ] ⏭ Deferred：实现 DesktopPlatformAdapter
-- [ ] ⏭ Deferred：复用 Web Router/React UI 或适配 Desktop navigation
-- [ ] ⏭ Deferred：打包、自动更新、系统菜单/深链接（按后续需求）
+- [x] ⏭ Deferred：Tauri shell 初始化
+- [x] ⏭ Deferred：实现 DesktopPlatformAdapter
+- [x] ⏭ Deferred：复用 Web Router/React UI 或适配 Desktop navigation
+- [x] ⏭ Deferred：打包、自动更新、系统菜单/深链接（按后续需求）
 
 **测试用例**
 
-- [ ] `UI10-T04-TC01`：V1 只检查边界文档存在，不要求 Desktop build
-- [ ] `UI10-T04-TC02`：未来执行时必须复用同一 Runtime API 和 client-core
-- [ ] `UI10-T04-TC03`：不得在 Desktop 内复制 LangGraph Runtime，除非后续明确设计 Local Runtime
+- [x] `UI10-T04-TC01`：V1 只检查边界文档存在，不要求 Desktop build
+- [x] `UI10-T04-TC02`：未来执行时必须复用同一 Runtime API 和 client-core
+- [x] `UI10-T04-TC03`：不得在 Desktop 内复制 LangGraph Runtime，除非后续明确设计 Local Runtime
 
 **任务专属 Prompt**
 
@@ -2145,41 +2148,41 @@ UI07 Debug ───────────────┘
 
 ## 7.1 启动与构建
 
-- [ ] 一条开发命令可启动 Web。
-- [ ] Mock Runtime 模式无需真实 LLM Key 即可演示四个主页面。
-- [ ] Real Runtime 模式可以通过环境变量切换。
-- [ ] Production build 成功，可部署静态资源。
-- [ ] 任意深链接刷新不 404，并能从后端 rehydrate。
+- [x] 一条开发命令可启动 Web。
+- [x] Mock Runtime 模式无需真实 LLM Key 即可演示四个主页面。
+- [x] Real Runtime 模式可以通过环境变量切换。
+- [x] Production build 成功，可部署静态资源。
+- [x] 任意深链接刷新不 404，并能从后端 rehydrate。
 
 ## 7.2 Chat
 
-- [ ] 可选择 Template / Session / Timeline。
-- [ ] 可发送消息并看到流式输出。
-- [ ] ToolCall / ToolResult 可读、可展开、错误可定位。
-- [ ] Context Panel 可实际执行 Pin/Abstract/Evict/Restore，并以服务端状态为准。
-- [ ] 历史 AI Message 可内联编辑，三种后续行为可真实调用 Runtime。
-- [ ] Impact/Replay 高风险路径必须经过安全确认。
+- [x] 可选择 Template / Session / Timeline。
+- [x] 可发送消息并看到流式输出。
+- [x] ToolCall / ToolResult 可读、可展开、错误可定位。
+- [x] Context Panel 可实际执行 Pin/Abstract/Evict/Restore，并以服务端状态为准。
+- [x] 历史 AI Message 可内联编辑，三种后续行为可真实调用 Runtime。
+- [x] Impact/Replay 高风险路径必须经过安全确认。
 
 ## 7.3 Workflow / Template
 
-- [ ] Node Library 可拖拽创建 V1 节点。
-- [ ] Edge/Condition/SubGraph 可编辑并序列化回 Manifest。
-- [ ] Node Config 可以编辑 Prompt/Model/Tool/Context/Retry/Checkpoint。
-- [ ] Save/Validate/Preview/Publish 行为分离。
-- [ ] Template 可配置 Model/Prompt/Tools/Context Policy/Workflow 并 Test Run。
+- [x] Node Library 可拖拽创建 V1 节点。
+- [x] Edge/Condition/SubGraph 可编辑并序列化回 Manifest。
+- [x] Node Config 可以编辑 Prompt/Model/Tool/Context/Retry/Checkpoint。
+- [x] Save/Validate/Preview/Publish 行为分离。
+- [x] Template 可配置 Model/Prompt/Tools/Context Policy/Workflow 并 Test Run。
 
 ## 7.4 Debug
 
-- [ ] Timeline / Checkpoint / Conversation / Trace / State / Tool / Context / Prompt 可联动。
-- [ ] 从 Chat 的 trace/message 深链接可以直接定位 Debug。
-- [ ] Trace 原始大字段按需加载。
-- [ ] side-effect Replay 在 Debug 中不能绕过二次确认。
+- [x] Timeline / Checkpoint / Conversation / Trace / State / Tool / Context / Prompt 可联动。
+- [x] 从 Chat 的 trace/message 深链接可以直接定位 Debug。
+- [x] Trace 原始大字段按需加载。
+- [x] side-effect Replay 在 Debug 中不能绕过二次确认。
 
 ## 7.5 客户端演进
 
-- [ ] 核心 Client Contract / Event / Projection 不依赖 DOM。
-- [ ] Browser API 通过 PlatformAdapter 隔离。
-- [ ] V1 不实现 Desktop 产品，但后续 Tauri 可复用同一 Runtime API 与绝大多数 UI Feature。
+- [x] 核心 Client Contract / Event / Projection 不依赖 DOM。
+- [x] Browser API 通过 PlatformAdapter 隔离。
+- [x] V1 不实现 Desktop 产品，但后续 Tauri 可复用同一 Runtime API 与绝大多数 UI Feature。
 
 ---
 

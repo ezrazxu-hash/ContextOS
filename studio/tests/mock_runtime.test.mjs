@@ -42,7 +42,7 @@ test("UI02-T05-TC02 chat mock streams text with ToolCall and ToolResult", async 
   assert.deepEqual(assistant.toolRelation.toolResultIds, ["tool-call-sales"]);
 });
 
-test("UI02-T05-TC03 replay send_email fixture triggers high-risk confirmation UI", async () => {
+test("UI02-T05-TC03 replay send_report_email fixture triggers high-risk confirmation UI", async () => {
   const apiClient = createMockRuntimeClient();
   const toolCall = demoFixtures.replay.sideEffectToolCall;
   const dialog = createReplayPlanDialog(apiClient, {
@@ -58,9 +58,9 @@ test("UI02-T05-TC03 replay send_email fixture triggers high-risk confirmation UI
   assert.equal(dialog.view().requiresConfirmation, true);
   assert.deepEqual(await dialog.submit(), { status: "blocked", reason: "confirmation_required" });
 
-  dialog.setConfirmationToken("confirm-demo-send-email");
+  dialog.setConfirmationToken("confirm-demo-send-report-email");
   const result = await dialog.submit();
 
   assert.equal(result.status, "planned");
-  assert.equal(result.body.decisions[0].tool_call_id, "tool-call-send-email");
+  assert.equal(result.body.decisions[0].tool_call_id, "tool-call-send-report-email");
 });

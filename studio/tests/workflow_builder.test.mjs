@@ -96,3 +96,20 @@ test("saved workflow reopens with the same manifest", async () => {
 
   assert.deepEqual(reopened.serializeManifest(), storedManifest);
 });
+
+test("UI08-T01: workflow canvas exposes keyboard select and delete alternatives", async () => {
+  const { createWorkflowBuilder } = await import(moduleUrl("src/features/workflow-builder/WorkflowBuilder.js"));
+  const builder = createWorkflowBuilder();
+  builder.addNode({ id: "agent", type: "agent", config: { model: "default" } });
+  builder.addNode({ id: "tool", type: "tool", config: { tool_id: "web_search" } });
+  builder.connect("agent", "tool");
+
+  const selected = builder.handleCanvasKey({ key: "Enter", nodeId: "agent" });
+  const deleted = builder.handleCanvasKey({ key: "Delete" });
+
+  assert.equal(selected.canvas.ariaLabel, "Workflow canvas");
+  assert.equal(selected.canvas.keyboardShortcuts.select, "Enter");
+  assert.equal(selected.selectedNodeId, "agent");
+  assert.deepEqual(deleted.nodes.map((node) => node.id), ["tool"]);
+  assert.deepEqual(deleted.edges, []);
+});

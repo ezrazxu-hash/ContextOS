@@ -3,15 +3,21 @@ export const demoTemplateManifest = {
   graph: {
     state_schema: "default_chat_state",
     nodes: [
-      { id: "planner", type: "agent", config: { model: "demo-model" } },
-      { id: "sales_tool", type: "tool", config: { tool_id: "sales.search" } },
+      { id: "planner", type: "agent", config: { model: "demo-model", prompt: "Plan the PRD review answer" } },
+      { id: "sales_search", type: "tool", config: { tool_id: "sales.search" } },
+      { id: "region_condition", type: "condition", config: { expression: "region == 'enterprise'" } },
+      { id: "analysis_subgraph", type: "subgraph", config: { internal_node_ids: ["sales_search", "region_condition"] } },
       { id: "writer", type: "output", config: { output_key: "answer" } },
+      { id: "context_review", type: "context_operator", config: { action: "review_working_set" } },
     ],
     edges: [
       { from: "START", to: "planner" },
-      { from: "planner", to: "sales_tool" },
-      { from: "sales_tool", to: "writer" },
-      { from: "writer", to: "END" },
+      { from: "planner", to: "sales_search" },
+      { from: "sales_search", to: "region_condition" },
+      { from: "region_condition", to: "analysis_subgraph", condition: "yes" },
+      { from: "analysis_subgraph", to: "writer" },
+      { from: "writer", to: "context_review" },
+      { from: "context_review", to: "END" },
     ],
   },
   context: {
@@ -21,6 +27,16 @@ export const demoTemplateManifest = {
   },
   checkpoint: { enabled: true },
   ui: { editable_messages: true, expose_context_panel: true },
+};
+
+export const demoSeedCatalog = {
+  seedId: "contextos-v1-studio-demo-seed",
+  entries: [
+    { id: "demo-chat-prd-review", page: "chat", route: "/chat?sessionId=demo-session&timelineId=demo-timeline" },
+    { id: "demo-workflow-sales-report", page: "workflow", route: "/workflow?templateId=demo-template" },
+    { id: "demo-template-context-policy", page: "template", route: "/template?templateId=demo-template" },
+    { id: "demo-debug-replay-risk", page: "debug", route: "/debug?sessionId=demo-session&traceId=trace-send-report-email" },
+  ],
 };
 
 export const demoFixtures = {
@@ -46,9 +62,9 @@ export const demoFixtures = {
     {
       id: "demo-user-message",
       role: "user",
-      content: "Summarize Q3 sales",
+      content: "梳理 ContextOS V1 PRD 中 Q3 sales demo 的关键结论。",
       status: "completed",
-      token_count: 4,
+      token_count: 14,
       context_group_ids: ["demo-context-group"],
       checkpoint_id: null,
       trace_id: "demo-trace",
@@ -59,9 +75,11 @@ export const demoFixtures = {
     {
       id: "demo-assistant-message",
       role: "assistant",
-      content: "Q3 sales are up 18%.",
+      content: "PRD demo summary: Q3 sales are up 18%, with enterprise renewals leading.",
       status: "completed",
-      token_count: 6,
+      editable: true,
+      revision_id: "demo-message-revision",
+      token_count: 12,
       context_group_ids: ["demo-context-group"],
       checkpoint_id: "demo-checkpoint",
       trace_id: "demo-trace",
@@ -70,6 +88,16 @@ export const demoFixtures = {
       created_at: "2026-08-24T00:00:01+00:00",
     },
   ],
+  impact: {
+    issues: [
+      {
+        issue_type: "message_context_drift",
+        severity: "info",
+        evidence: { message_id: "demo-assistant-message", context_group_id: "demo-context-group" },
+        related_ids: ["demo-assistant-message", "demo-context-group"],
+      },
+    ],
+  },
   context: [
     {
       id: "demo-context-item",
@@ -86,9 +114,12 @@ export const demoFixtures = {
   ],
   replay: {
     sideEffectToolCall: {
-      tool_call_id: "tool-call-send-email",
-      tool_id: "send_email",
+      tool_call_id: "tool-call-send-report-email",
+      tool_id: "send_report_email",
       side_effect: "EXTERNAL_WRITE",
+      replay_policy: "ASK",
+      external_write_allowed: false,
+      mock_only: true,
       args: { to: "finance@example.com", subject: "Q3 sales summary" },
     },
   },

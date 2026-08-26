@@ -1,5 +1,8 @@
 import { createGraphView } from "../../features/trace/GraphView.js";
 import { createStateInspector } from "../../features/trace/StateInspector.js";
+import { createToolTracePanel } from "../../features/trace/ToolTracePanel.js";
+import { createContextTracePanel } from "../../features/trace/ContextTracePanel.js";
+import { createPromptInputsPanel } from "../../features/trace/PromptInputsPanel.js";
 import { createTimelineView } from "../../features/timeline/TimelineView.js";
 import { createWorkbenchLayout } from "../../design-system/layout/workbenchLayout.js";
 
@@ -39,9 +42,34 @@ export function createDebugPage(apiClient, sessionId, routeParams = {}, options 
 
   return {
     async rehydrate() {
-      state.index = await apiClient.fetchDebugIndex(sessionId, routeParams);
+      await refreshDebugIndex(state, apiClient, routeParams);
       applyInitialSelection(state);
       rememberSelection(state);
+      return view(state, layout, createGraphView, createTimelineView, createStateInspector);
+    },
+    async pauseRuntime() {
+      if (!hasRuntimeCapability(state, "pause")) {
+        return { status: "unsupported", reason: "pause is not supported by this runtime" };
+      }
+      await apiClient.pauseRuntime?.(sessionId);
+      await refreshDebugIndex(state, apiClient, routeParams);
+      return view(state, layout, createGraphView, createTimelineView, createStateInspector);
+    },
+    async stopRuntime({ confirmed = false } = {}) {
+      if (!hasRuntimeCapability(state, "stop")) {
+        return { status: "unsupported", reason: "stop is not supported by this runtime" };
+      }
+      if (!confirmed) {
+        return { status: "confirmation_required", action: "stop" };
+      }
+      await apiClient.stopRuntime?.(sessionId);
+      await refreshDebugIndex(state, apiClient, routeParams);
+      applyInitialSelection(state);
+      return view(state, layout, createGraphView, createTimelineView, createStateInspector);
+    },
+    async refreshRuntime() {
+      await refreshDebugIndex(state, apiClient, routeParams);
+      applyInitialSelection(state);
       return view(state, layout, createGraphView, createTimelineView, createStateInspector);
     },
     selectTimeline(timelineId) {
@@ -160,6 +188,7 @@ function view(state, layout, createGraphView, createTimelineView, createStateIns
     selectedTimelineId: state.selectedTimelineId,
     selectedCheckpointId: state.selectedCheckpointId,
     selectedMessageId: state.selectedMessageId,
+    runtimeControls: createRuntimeControls(state.index),
     debugSelection: createDebugSelection(state),
     urlSelection: createUrlSelection(state),
     selectionNotice: state.selectionRelation === "none" ? "无直接关联" : null,
@@ -192,7 +221,48 @@ function view(state, layout, createGraphView, createTimelineView, createStateIns
     }),
     conversation,
     stateInspector: createStateInspector(checkpoint),
+    inspectorStack: createInspectorStack(state.index, checkpoint),
   };
+}
+
+function createInspectorStack(debugIndex, checkpoint) {
+  return {
+    kind: "inspector-stack",
+    sections: {
+      state: createStateInspector(checkpoint),
+      tool: createToolTracePanel(debugIndex),
+      context: createContextTracePanel(debugIndex),
+      prompt: createPromptInputsPanel(debugIndex),
+    },
+  };
+}
+
+async function refreshDebugIndex(state, apiClient, routeParams) {
+  state.index = await apiClient.fetchDebugIndex(state.sessionId, routeParams);
+}
+
+function createRuntimeControls(debugIndex) {
+  const runtime = debugIndex?.runtime ?? {};
+  const capabilities = new Set(runtime.capabilities ?? []);
+  return {
+    status: runtime.status ?? "unknown",
+    actions: ["continue", "pause", "stop", "refresh"].map((id) => runtimeAction(id, capabilities, runtime.status)),
+  };
+}
+
+function runtimeAction(id, capabilities, status) {
+  const enabled = id === "refresh" || capabilities.has(id);
+  return {
+    id,
+    enabled,
+    dangerous: id === "stop",
+    status,
+    reason: enabled ? null : `${id} is not supported by this runtime`,
+  };
+}
+
+function hasRuntimeCapability(state, capability) {
+  return (state.index?.runtime?.capabilities ?? []).includes(capability);
 }
 
 function conversationForTimeline(debugIndex, timelineId) {

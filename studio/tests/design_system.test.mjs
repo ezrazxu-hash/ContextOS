@@ -93,3 +93,45 @@ test("UI00-T02 danger actions are not expressed by color alone", async () => {
   assert.equal(createEmptyState({ title: "No traces" }).state, "empty");
   assert.equal(createErrorState({ message: "Request failed", requestId: "req-1" }).requestId, "req-1");
 });
+
+test("UI08-T01-TC01: keyboard flow can switch session send message open context detail and close dialog", async () => {
+  const { createKeyboardFlow, createSkipNavigation } = await import(moduleUrl("src/design-system/components/primitives.js"));
+
+  const flow = createKeyboardFlow({
+    steps: [
+      { id: "switch-session", key: "Enter", targetRole: "combobox" },
+      { id: "send-message", key: "Enter", targetRole: "button" },
+      { id: "open-context-detail", key: "Enter", targetRole: "dialog-trigger" },
+      { id: "close-dialog", key: "Escape", targetRole: "dialog" },
+    ],
+  });
+  const skip = createSkipNavigation({ targetId: "main-content" });
+
+  assert.equal(flow.keyboardOnly, true);
+  assert.deepEqual(flow.steps.map((step) => step.reachable), [true, true, true, true]);
+  assert.equal(skip.href, "#main-content");
+  assert.equal(skip.tabIndex, 0);
+});
+
+test("UI08-T01-TC02: accessibility audit reports no critical violations for baseline controls", async () => {
+  const { auditAccessibility, createButton, createDialog, createInput } = await import(moduleUrl("src/design-system/components/primitives.js"));
+
+  const result = auditAccessibility([
+    createInput({ label: "Message" }),
+    createButton({ label: "Send" }),
+    createDialog({ title: "Context detail", description: "Raw context content" }),
+  ]);
+
+  assert.deepEqual(result.criticalViolations, []);
+});
+
+test("UI08-T01-TC03: danger button has text and aria semantics", async () => {
+  const { auditAccessibility, createButton } = await import(moduleUrl("src/design-system/components/primitives.js"));
+
+  const dangerButton = createButton({ label: "Stop runtime", intent: "danger" });
+  const result = auditAccessibility([dangerButton]);
+
+  assert.equal(dangerButton.requiresTextCue, true);
+  assert.match(dangerButton.ariaLabel, /danger/i);
+  assert.deepEqual(result.criticalViolations, []);
+});

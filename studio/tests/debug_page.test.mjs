@@ -374,3 +374,176 @@ test("UI07-T03-TC03: browser back restores the previous debug selection", async 
   assert.equal(restored.urlSelection.messageId, "message-6");
   assert.equal(restored.urlSelection.traceId, "trace-message-6");
 });
+
+test("UI07-T05-TC01: selecting different messages switches inspector data without bleed", async () => {
+  const { createDebugPage } = await import(moduleUrl("src/pages/Debug/index.js"));
+  const page = createDebugPage(
+    {
+      async fetchDebugIndex() {
+        return createDebugIndex();
+      },
+    },
+    "session-1",
+  );
+
+  await page.rehydrate();
+  const messageA = page.selectMessage("message-a");
+  const messageB = page.selectMessage("message-b");
+
+  assert.equal(messageA.inspectorStack.sections.state.checkpointId, "checkpoint-a");
+  assert.deepEqual(messageA.inspectorStack.sections.state.fields.find((field) => field.path === "draft"), {
+    path: "draft",
+    value: "A",
+  });
+  assert.equal(messageB.inspectorStack.sections.state.checkpointId, "checkpoint-b");
+  assert.deepEqual(messageB.inspectorStack.sections.state.fields.find((field) => field.path === "draft"), {
+    path: "draft",
+    value: "B",
+  });
+});
+
+test("UI07-T05-TC02: side-effect tool has prominent risk label", async () => {
+  const { createDebugPage } = await import(moduleUrl("src/pages/Debug/index.js"));
+  const debugIndex = createDebugIndex();
+  debugIndex.traces.items.push({
+    id: "event-send-email",
+    trace_id: "trace-send-email",
+    checkpoint_id: "checkpoint-b",
+    message_id: "message-b",
+    tool_call_id: "call-send-email",
+    step_type: "tool_call",
+    component: "send_email",
+    status: "success",
+    side_effect: "EXTERNAL_WRITE",
+    replay_policy: "ASK",
+  });
+  const page = createDebugPage(
+    {
+      async fetchDebugIndex() {
+        return debugIndex;
+      },
+    },
+    "session-1",
+  );
+
+  await page.rehydrate();
+  const view = page.selectTrace("trace-send-email");
+  const tool = view.inspectorStack.sections.tool.calls.find((item) => item.id === "event-send-email");
+
+  assert.deepEqual(tool.risk, {
+    kind: "side_effect",
+    label: "Side effect",
+    sideEffect: "EXTERNAL_WRITE",
+    replayPolicy: "ASK",
+  });
+});
+
+test("UI07-T05-TC03: raw prompt is copyable without executing any operation", async () => {
+  const { createDebugPage } = await import(moduleUrl("src/pages/Debug/index.js"));
+  const calls = [];
+  const debugIndex = createDebugIndex();
+  debugIndex.prompt_inputs = [{ message_id: "message-a", content: "Use pinned context only", token_count: 4 }];
+  const page = createDebugPage(
+    {
+      async fetchDebugIndex() {
+        return debugIndex;
+      },
+      async replay() {
+        calls.push("replay");
+      },
+      async sendMessage() {
+        calls.push("send");
+      },
+    },
+    "session-1",
+  );
+
+  const view = await page.rehydrate();
+  const copied = view.inspectorStack.sections.prompt.copyRaw("message-a");
+
+  assert.equal(view.inspectorStack.sections.prompt.tabs.raw.copyable, true);
+  assert.equal(copied, "Use pinned context only");
+  assert.deepEqual(calls, []);
+});
+
+test("UI07-T06-TC01: missing pause capability does not send pause request", async () => {
+  const { createDebugPage } = await import(moduleUrl("src/pages/Debug/index.js"));
+  const calls = [];
+  const debugIndex = createDebugIndex();
+  debugIndex.runtime = { status: "running", capabilities: ["continue", "stop", "refresh"] };
+  const page = createDebugPage(
+    {
+      async fetchDebugIndex() {
+        return debugIndex;
+      },
+      async pauseRuntime() {
+        calls.push("pause");
+      },
+    },
+    "session-1",
+  );
+
+  const view = await page.rehydrate();
+  const pause = await page.pauseRuntime();
+
+  assert.equal(view.runtimeControls.actions.find((action) => action.id === "pause").enabled, false);
+  assert.match(view.runtimeControls.actions.find((action) => action.id === "pause").reason, /not supported/i);
+  assert.deepEqual(calls, []);
+  assert.equal(pause.status, "unsupported");
+});
+
+test("UI07-T06-TC02: stop success refreshes runtime status from backend", async () => {
+  const { createDebugPage } = await import(moduleUrl("src/pages/Debug/index.js"));
+  let status = "running";
+  const calls = [];
+  const page = createDebugPage(
+    {
+      async fetchDebugIndex() {
+        const debugIndex = createDebugIndex();
+        debugIndex.runtime = { status, capabilities: ["stop", "refresh"] };
+        calls.push(["fetch", status]);
+        return debugIndex;
+      },
+      async stopRuntime(sessionId) {
+        calls.push(["stop", sessionId]);
+        status = "stopped";
+        return { accepted: true };
+      },
+    },
+    "session-1",
+  );
+
+  await page.rehydrate();
+  const stopped = await page.stopRuntime({ confirmed: true });
+
+  assert.deepEqual(calls, [["fetch", "running"], ["stop", "session-1"], ["fetch", "stopped"]]);
+  assert.equal(stopped.runtimeControls.status, "stopped");
+});
+
+test("UI07-T06-TC03: refresh only refetches and does not mutate runtime state", async () => {
+  const { createDebugPage } = await import(moduleUrl("src/pages/Debug/index.js"));
+  const calls = [];
+  const page = createDebugPage(
+    {
+      async fetchDebugIndex() {
+        const debugIndex = createDebugIndex();
+        debugIndex.runtime = { status: "running", capabilities: ["refresh"] };
+        calls.push("fetch");
+        return debugIndex;
+      },
+      async stopRuntime() {
+        calls.push("stop");
+      },
+      async pauseRuntime() {
+        calls.push("pause");
+      },
+    },
+    "session-1",
+  );
+
+  await page.rehydrate();
+  const refreshed = await page.refreshRuntime();
+
+  assert.deepEqual(calls, ["fetch", "fetch"]);
+  assert.equal(refreshed.runtimeControls.status, "running");
+});

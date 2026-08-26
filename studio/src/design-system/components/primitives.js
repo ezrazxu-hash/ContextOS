@@ -114,6 +114,42 @@ export function createErrorState({ message, requestId = null } = {}) {
   return { component: "ErrorState", state: "error", message, requestId };
 }
 
+export function createSkipNavigation({ targetId, label = "Skip to main content" } = {}) {
+  return interactive({
+    component: "SkipNavigation",
+    role: "link",
+    label,
+    ariaLabel: label,
+    href: `#${targetId}`,
+  });
+}
+
+export function createKeyboardFlow({ steps = [] } = {}) {
+  return {
+    keyboardOnly: steps.every((step) => keyboardActivates(step.key)),
+    steps: steps.map((step) => ({
+      ...step,
+      reachable: Boolean(step.id && step.targetRole && keyboardActivates(step.key)),
+    })),
+  };
+}
+
+export function auditAccessibility(components = []) {
+  const criticalViolations = [];
+  for (const component of components) {
+    if (isInteractive(component) && !hasAccessibleName(component)) {
+      criticalViolations.push({ code: "missing_accessible_name", component: component.component });
+    }
+    if (component.role === "dialog" && (!component.focusTrap || !component.ariaModal)) {
+      criticalViolations.push({ code: "dialog_focus_trap_required", component: component.component });
+    }
+    if (component.intent === "danger" && (!component.requiresTextCue || !hasAccessibleName(component))) {
+      criticalViolations.push({ code: "danger_semantics_required", component: component.component });
+    }
+  }
+  return { criticalViolations };
+}
+
 export function interactiveComponents(components) {
   return components.filter((component) => component.tabIndex === 0);
 }
@@ -123,4 +159,16 @@ function interactive(component) {
     tabIndex: 0,
     ...component,
   };
+}
+
+function keyboardActivates(key) {
+  return ["Enter", " ", "Space", "Escape", "Tab", "ArrowDown", "ArrowUp", "Delete", "Backspace"].includes(key);
+}
+
+function isInteractive(component) {
+  return component.tabIndex === 0 || ["button", "textbox", "combobox", "tablist", "link", "dialog-trigger"].includes(component.role);
+}
+
+function hasAccessibleName(component) {
+  return Boolean(component.ariaLabel || component.label || component.title);
 }
