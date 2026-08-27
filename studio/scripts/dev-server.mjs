@@ -7,8 +7,8 @@ const root = join(fileURLToPath(new URL("..", import.meta.url)));
 const port = Number(process.env.CONTEXTOS_STUDIO_PORT ?? 5173);
 const runtimeModeArg = process.argv.includes("--real") ? "real" : process.argv.includes("--mock") ? "mock" : null;
 const config = {
-  apiBaseUrl: process.env.CONTEXTOS_STUDIO_API_BASE_URL ?? "http://localhost:8000",
-  sseBaseUrl: process.env.CONTEXTOS_STUDIO_SSE_BASE_URL ?? "http://localhost:8000",
+  apiBaseUrl: process.env.CONTEXTOS_STUDIO_API_BASE_URL ?? "http://localhost:18000",
+  sseBaseUrl: process.env.CONTEXTOS_STUDIO_SSE_BASE_URL ?? "http://localhost:18000",
   wsBaseUrl: process.env.CONTEXTOS_STUDIO_WS_BASE_URL ?? "",
   mockRuntime: runtimeModeArg ? runtimeModeArg === "mock" : process.env.CONTEXTOS_STUDIO_MOCK_RUNTIME !== "false",
 };

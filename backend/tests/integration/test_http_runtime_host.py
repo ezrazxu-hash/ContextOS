@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import sys
+import tempfile
 import unittest
 from urllib.request import Request, urlopen
 
@@ -70,6 +71,24 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(created["role"], "user")
         self.assertEqual(created["content"], "Windows JSON body")
 
+    def test_host_rejects_message_for_timeline_outside_session(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            first = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            second = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            response = post_json_error(
+                f"{host.url}/api/sessions/{first['id']}/messages",
+                {"role": "user", "content": "wrong timeline", "token_count": 2, "timeline_id": second["current_timeline_id"]},
+            )
+        finally:
+            host.stop()
+
+        self.assertEqual(response["status"], 400)
+        self.assertEqual(response["body"]["error"]["code"], "timeline.invalid")
+
     def test_chat_stream_uses_latest_user_message_and_persists_assistant_response(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -91,7 +110,7 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(assistant_messages[-1]["content"], "OK")
         self.assertEqual(assistant_messages[-1]["trace_id"], "trace-chat-response")
 
-    def test_chat_stream_calls_configured_llm_client_and_persists_response(self) -> None:
+    def test_chat_stream_calls_configured_llm_client_with_persisted_context_and_persists_response(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
         llm_client = RecordingLlmClient("ContextOS Chat OK")
@@ -100,14 +119,17 @@ class HttpRuntimeHostTests(unittest.TestCase):
         try:
             post_json(
                 f"{host.url}/api/sessions/demo-session/messages",
-                {"role": "user", "content": "你好，请回复“ContextOS Chat OK”", "token_count": 5},
+                {"role": "user", "content": "Please reply with ContextOS Chat OK", "token_count": 5},
             )
             sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
             messages = get_json(f"{host.url}/api/sessions/demo-session/messages")
         finally:
             host.stop()
 
-        self.assertEqual(llm_client.user_messages, ["你好，请回复“ContextOS Chat OK”"])
+        self.assertEqual(
+            llm_client.user_messages,
+            ["Summarize the incident report and email the team.", "Please reply with ContextOS Chat OK"],
+        )
         self.assertEqual(sse_token_text(sse), "ContextOS Chat OK")
         assistant_messages = [message for message in messages["messages"] if message["role"] == "assistant"]
         self.assertEqual(assistant_messages[-1]["content"], "ContextOS Chat OK")
@@ -128,7 +150,7 @@ class HttpRuntimeHostTests(unittest.TestCase):
         finally:
             host.stop()
 
-        self.assertEqual(llm_client.user_messages, ["stream please"])
+        self.assertEqual(llm_client.user_messages, ["Summarize the incident report and email the team.", "stream please"])
         self.assertEqual(sse_token_text(sse), "ContextOS stream OK")
         assistant_messages = [message for message in messages["messages"] if message["role"] == "assistant"]
         self.assertEqual(assistant_messages[-1]["content"], "ContextOS stream OK")
@@ -186,6 +208,59 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(len(after_assistants), len(before_assistants) + 1)
         self.assertEqual(after_assistants[-1]["content"], "retry ok")
 
+    def test_session_timeline_groups_reload_and_continue_with_persisted_llm_context(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            first_llm = RecordingStreamingLlmClient(["Hello Tom.", "Your name is Tom."])
+            host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=first_llm, storage_path=storage_path)
+            host.start()
+            try:
+                session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+                session_id = str(session["id"])
+                timeline_id = str(session["current_timeline_id"])
+                post_json(
+                    f"{host.url}/api/sessions/{session_id}/messages",
+                    {"role": "user", "content": "My name is Tom", "token_count": 4, "timeline_id": timeline_id},
+                )
+                get_text(f"{host.url}/sse/sessions/{session_id}/chat?timelineId={timeline_id}")
+                post_json(
+                    f"{host.url}/api/sessions/{session_id}/messages",
+                    {"role": "user", "content": "What is my name?", "token_count": 4, "timeline_id": timeline_id},
+                )
+                get_text(f"{host.url}/sse/sessions/{session_id}/chat?timelineId={timeline_id}")
+            finally:
+                host.stop()
+
+            second_llm = RecordingStreamingLlmClient(["We discussed that your name is Tom."])
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=second_llm, storage_path=storage_path)
+            restarted.start()
+            try:
+                reloaded = get_json(f"{restarted.url}/api/sessions/{session_id}/messages?timelineId={timeline_id}")
+                post_json(
+                    f"{restarted.url}/api/sessions/{session_id}/messages",
+                    {"role": "user", "content": "Summarize what we discussed.", "token_count": 5, "timeline_id": timeline_id},
+                )
+                get_text(f"{restarted.url}/sse/sessions/{session_id}/chat?timelineId={timeline_id}")
+            finally:
+                restarted.stop()
+
+        self.assertEqual(
+            [message["content"] for message in reloaded["messages"]],
+            ["My name is Tom", "Hello Tom.", "What is my name?", "Your name is Tom."],
+        )
+        self.assertEqual(
+            second_llm.calls[-1],
+            [
+                {"role": "user", "content": "My name is Tom"},
+                {"role": "assistant", "content": "Hello Tom."},
+                {"role": "user", "content": "What is my name?"},
+                {"role": "assistant", "content": "Your name is Tom."},
+                {"role": "user", "content": "Summarize what we discussed."},
+            ],
+        )
+
 
 def get_json(url: str) -> dict[str, object]:
     with urlopen(url, timeout=5) as response:
@@ -211,6 +286,22 @@ def post_raw_json(url: str, payload: bytes) -> dict[str, object]:
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def post_json_error(url: str, payload: dict[str, object]) -> dict[str, object]:
+    from urllib.error import HTTPError
+
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return {"status": response.status, "body": json.loads(response.read().decode("utf-8"))}
+    except HTTPError as error:
+        return {"status": error.code, "body": json.loads(error.read().decode("utf-8"))}
 
 
 def sse_token_text(sse: str) -> str:
@@ -271,6 +362,17 @@ class FlakyStreamingLlmClient:
             yield "partial"
             raise LlmStreamError("DeepSeek stream error overloaded_error: busy")
         yield "retry ok"
+
+
+class RecordingStreamingLlmClient:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.calls: list[list[dict[str, str]]] = []
+
+    def stream_complete(self, messages: list[dict[str, str]]):
+        self.calls.append(messages)
+        response = self.responses.pop(0)
+        yield response
 
 
 if __name__ == "__main__":

@@ -10,25 +10,13 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-
-class LlmProviderError(Exception):
-    pass
-
-
-class LlmHttpError(LlmProviderError):
-    pass
-
-
-class LlmResponseFormatError(LlmProviderError):
-    pass
-
-
-class LlmStreamError(LlmProviderError):
-    pass
-
-
-class LlmTimeoutError(LlmProviderError):
-    pass
+from contextos.provider.base.chat_client import (
+    LlmHttpError,
+    LlmProviderError,
+    LlmResponseFormatError,
+    LlmStreamError,
+    LlmTimeoutError,
+)
 
 
 @dataclass(frozen=True)

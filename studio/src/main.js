@@ -63,7 +63,7 @@ async function loadRouteData() {
     const client = runtimeClient();
     if (state.route === "/chat") {
       const [messages, debugIndex] = await Promise.all([
-        client.fetchSessionMessages(state.selection.sessionId),
+        client.fetchSessionMessages(state.selection.sessionId, state.selection.timelineId),
         client.fetchDebugIndex(state.selection.sessionId),
       ]);
       state.messages = messages.messages ?? [];
@@ -122,14 +122,15 @@ function renderLeftRail() {
   if (state.leftCollapsed) {
     return `<aside class="left-rail collapsed"><button data-action="toggle-left" aria-label="Expand navigation">></button></aside>`;
   }
+  const currentSessionId = state.selection.sessionId ?? DEFAULT_SESSION_ID;
   const timelines = state.debugIndex?.timelines ?? [demoFixtures.timeline];
   return `
     <aside class="left-rail">
       <div class="rail-head"><h2>Workspace</h2><button data-action="toggle-left" aria-label="Collapse navigation"><</button></div>
       <section>
         <h3>Sessions</h3>
-        <button data-action="select-session" data-session-id="${DEFAULT_SESSION_ID}" data-testid="session-demo-session" aria-pressed="${state.selection.sessionId === DEFAULT_SESSION_ID}" class="nav-item selected">
-          <span>demo-session</span><small>${state.config.mockRuntime ? "mock" : "runtime"}</small>
+        <button data-action="select-session" data-session-id="${escapeAttr(currentSessionId)}" data-testid="session-${escapeAttr(currentSessionId)}" aria-pressed="true" class="nav-item selected">
+          <span>${escapeHtml(currentSessionId)}</span><small>${state.config.mockRuntime ? "mock" : "runtime"}</small>
         </button>
       </section>
       <section>
@@ -140,7 +141,7 @@ function renderLeftRail() {
           </button>
         `).join("")}
       </section>
-      <button class="secondary full" data-action="not-implemented">New Session</button>
+      <button class="secondary full" data-action="create-session">New Session</button>
     </aside>
   `;
 }
@@ -335,6 +336,19 @@ async function handleAction(event) {
   } else if (action === "refresh-route") {
     await loadRouteData();
     render();
+  } else if (action === "create-session") {
+    state.toast = { tone: "loading", text: "Creating session" };
+    render();
+    try {
+      const session = await runtimeClient().createSession();
+      const timelineId = session.current_timeline_id ?? session.currentTimelineId ?? DEFAULT_TIMELINE_ID;
+      await navigate(`/chat?sessionId=${encodeURIComponent(session.id)}&timelineId=${encodeURIComponent(timelineId)}`);
+      state.toast = { tone: "success", text: "Session created" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    }
   } else if (action === "add-workflow-node") {
     addWorkflowNode(target.dataset.nodeType ?? "agent");
     render();
@@ -359,7 +373,7 @@ async function handleChatSubmit(event) {
   state.toast = { tone: "loading", text: "Sending message to Runtime" };
   render();
   try {
-    const created = await client.postSessionMessage(state.selection.sessionId, content);
+    const created = await client.postSessionMessage(state.selection.sessionId, content, state.selection.timelineId ?? DEFAULT_TIMELINE_ID);
     state.messages.push(created);
     render();
     await streamAssistantReply(client);
@@ -448,8 +462,9 @@ function runtimeClient() {
 
 function realClient() {
   return {
-    fetchSessionMessages: (sessionId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`),
-    postSessionMessage: (sessionId, content) => postJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content) }),
+    fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
+    createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
+    postSessionMessage: (sessionId, content, timelineId) => postJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content), timeline_id: timelineId }),
     fetchDebugIndex(sessionId, params = {}) {
       const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value)).toString();
       return getJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}${query ? `?${query}` : ""}`);
@@ -471,6 +486,9 @@ function mockClient() {
   return {
     async fetchSessionMessages() {
       return { messages: demoFixtures.messages.map(clone), next_cursor: null };
+    },
+    async createSession() {
+      return { ...clone(demoFixtures.session), id: `local-session-${Date.now()}`, current_timeline_id: demoFixtures.timeline.id };
     },
     async postSessionMessage(sessionId, content) {
       return { id: `local-user-${Date.now()}`, session_id: sessionId, role: "user", content, status: "completed", token_count: tokenEstimate(content), context_group_ids: [], checkpoint_id: null, trace_id: null, tool_call_ids: [], tool_result_ids: [] };

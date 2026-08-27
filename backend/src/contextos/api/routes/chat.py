@@ -1,6 +1,7 @@
 from collections.abc import Iterable, Iterator
 
 from contextos.api.streaming.sse import format_sse
+from contextos.runtime.conversation.service import ConversationGroupService
 from contextos.provider.base.token_counter import count_text_tokens
 from contextos.runtime.checkpoint.service import CheckpointService
 from contextos.runtime.session.message_service import MessageService
@@ -16,6 +17,7 @@ def stream_chat_events(
     message_service: MessageService,
     trace_collector: TraceCollector,
     checkpoint_service: CheckpointService,
+    conversation_group_service: ConversationGroupService | None = None,
 ) -> list[str]:
     return list(iter_chat_event_frames(
         session_id=session_id,
@@ -25,6 +27,7 @@ def stream_chat_events(
         message_service=message_service,
         trace_collector=trace_collector,
         checkpoint_service=checkpoint_service,
+        conversation_group_service=conversation_group_service,
     ))
 
 
@@ -37,6 +40,7 @@ def iter_chat_event_frames(
     message_service: MessageService,
     trace_collector: TraceCollector,
     checkpoint_service: CheckpointService,
+    conversation_group_service: ConversationGroupService | None = None,
 ) -> Iterator[str]:
     token_parts: list[str] = []
     tool_call_ids: list[str] = []
@@ -88,17 +92,23 @@ def iter_chat_event_frames(
             data["checkpoint_id"] = checkpoint.id
         elif event_type == "done":
             content = "".join(token_parts)
+            group_id = _optional_str(data.get("group_id"))
             message = message_service.create_message(
                 session_id=session_id,
                 role="assistant",
                 content=content,
                 status="completed",
                 token_count=count_text_tokens(content),
+                timeline_id=timeline_id,
+                group_id=group_id,
+                context_group_ids=[group_id] if group_id else [],
                 checkpoint_id=checkpoint_id,
                 trace_id=trace_id,
                 tool_call_ids=tool_call_ids,
                 tool_result_ids=tool_result_ids,
             )
+            if group_id and conversation_group_service is not None:
+                conversation_group_service.append_message(group_id, message.id)
             trace_collector.record_model_call(
                 trace_id=trace_id,
                 session_id=session_id,

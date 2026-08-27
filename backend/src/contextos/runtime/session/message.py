@@ -23,6 +23,8 @@ class SessionMessage:
     content: str
     status: MessageStatus
     token_count: int
+    timeline_id: str | None = None
+    group_id: str | None = None
     context_group_ids: list[str] = field(default_factory=list)
     checkpoint_id: str | None = None
     trace_id: str | None = None
@@ -34,6 +36,8 @@ class SessionMessage:
         return {
             "id": self.id,
             "session_id": self.session_id,
+            "timeline_id": self.timeline_id,
+            "group_id": self.group_id,
             "cursor": self.cursor,
             "role": self.role.value,
             "content": self.content,

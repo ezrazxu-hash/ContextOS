@@ -1,6 +1,8 @@
 from contextos.api.errors import ApiError
+from contextos.runtime.conversation.service import ConversationGroupService
 from contextos.runtime.session.message_service import MessageService
 from contextos.runtime.session.service import SessionNotFound, SessionService
+from uuid import uuid4
 
 
 def post_session(payload: dict[str, object], service: SessionService, request_id: str = "req-session-create") -> dict[str, object]:
@@ -34,7 +36,14 @@ def get_session(session_id: str, service: SessionService, request_id: str = "req
     }
 
 
-def post_session_message(session_id: str, payload: dict[str, object], service: MessageService) -> dict[str, object]:
+def post_session_message(
+    session_id: str,
+    payload: dict[str, object],
+    service: MessageService,
+    *,
+    conversation_group_service: ConversationGroupService | None = None,
+    default_timeline_id: str | None = None,
+) -> dict[str, object]:
     role = payload.get("role")
     content = payload.get("content")
     if role is None or content is None:
@@ -47,17 +56,31 @@ def post_session_message(session_id: str, payload: dict[str, object], service: M
                 status=400,
             ).to_rest_payload(),
         }
+    timeline_id = _optional_str(payload.get("timeline_id") or payload.get("timelineId") or default_timeline_id)
+    group_id = _optional_str(payload.get("group_id") or payload.get("groupId"))
+    message_id = _optional_str(payload.get("id") or payload.get("message_id") or payload.get("messageId"))
+    context_group_ids = list(payload.get("context_group_ids", []))
+
+    if role == "user" and conversation_group_service is not None and timeline_id is not None:
+        message_id = message_id or f"message_{uuid4().hex}"
+        group = conversation_group_service.start_turn(session_id, timeline_id, message_id, group_id=group_id)
+        group_id = group.id
+        context_group_ids = [group.id]
+
     message = service.create_message(
         session_id=session_id,
         role=str(role),
         content=str(content),
         status=str(payload.get("status", "completed")),
         token_count=int(payload.get("token_count", 0)),
-        context_group_ids=list(payload.get("context_group_ids", [])),
+        timeline_id=timeline_id,
+        group_id=group_id,
+        context_group_ids=context_group_ids,
         checkpoint_id=_optional_str(payload.get("checkpoint_id")),
         trace_id=_optional_str(payload.get("trace_id")),
         tool_call_ids=list(payload.get("tool_call_ids", [])),
         tool_result_ids=list(payload.get("tool_result_ids", [])),
+        message_id=message_id,
     )
     return {
         "status": 201,
@@ -70,8 +93,9 @@ def get_session_messages(
     service: MessageService,
     after_cursor: int | None = None,
     limit: int = 50,
+    timeline_id: str | None = None,
 ) -> dict[str, object]:
-    messages, next_cursor = service.list_messages(session_id, after_cursor=after_cursor, limit=limit)
+    messages, next_cursor = service.list_messages(session_id, after_cursor=after_cursor, limit=limit, timeline_id=timeline_id)
     return {
         "status": 200,
         "body": {

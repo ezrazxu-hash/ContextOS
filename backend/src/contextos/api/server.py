@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import argparse
 import json
+import os
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
@@ -12,26 +14,27 @@ from contextos.api.env import load_backend_env
 from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
-from contextos.api.routes.sessions import get_session, get_session_messages, post_session_message
-from contextos.api.streaming.sse import format_sse
+from contextos.api.routes.sessions import get_session, get_session_messages, post_session, post_session_message
+from contextos.api.routes.timelines import list_session_timelines
 from contextos.provider.base.chat_client import ChatCompletionClient
-from contextos.provider.deepseek_anthropic import (
-    LlmProviderError,
-    LlmResponseFormatError,
-    create_deepseek_client_from_env,
-    describe_deepseek_env,
-)
+from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
+from contextos.runtime.conversation.context_builder import ConversationContextBuilder
+from contextos.runtime.conversation.orchestrator import ChatOrchestrator
+from contextos.runtime.conversation.repository import InMemoryConversationGroupRepository
+from contextos.runtime.conversation.service import ConversationGroupService
 from contextos.runtime.checkpoint.model import Checkpoint
 from contextos.runtime.checkpoint.service import CheckpointService
 from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
 from contextos.runtime.debug.projection import DebugProjection
-from contextos.runtime.session.message_service import MessageService
+from contextos.runtime.persistence.json_store import JsonRuntimeStore
+from contextos.runtime.session.message_service import InMemoryMessageRepository, MessageService
 from contextos.runtime.session.model import Session, SessionStatus
 from contextos.runtime.session.repository import InMemorySessionRepository
 from contextos.runtime.session.service import SessionService
 from contextos.runtime.session.snapshot_service import RuntimeSnapshotService
 from contextos.runtime.timeline.model import Timeline, TimelineStatus
 from contextos.runtime.timeline.repository import InMemoryTimelineRepository
+from contextos.runtime.timeline.service import TimelineService
 from contextos.runtime.trace.collector import TraceCollector
 from contextos.runtime.trace.repository import InMemoryTraceRepository
 
@@ -42,6 +45,7 @@ class RuntimeServices:
     timeline_repository: InMemoryTimelineRepository
     checkpoint_store: InMemoryCheckpointStore
     message_service: MessageService
+    conversation_group_repository: InMemoryConversationGroupRepository
     trace_repository: InMemoryTraceRepository
     llm_client: ChatCompletionClient | None = None
 
@@ -61,6 +65,27 @@ class RuntimeServices:
     @property
     def checkpoint_service(self) -> CheckpointService:
         return CheckpointService(self.checkpoint_store)
+
+    @property
+    def timeline_service(self) -> TimelineService:
+        return TimelineService(self.timeline_repository, self.session_repository)
+
+    @property
+    def conversation_group_service(self) -> ConversationGroupService:
+        return ConversationGroupService(self.conversation_group_repository)
+
+    @property
+    def conversation_context_builder(self) -> ConversationContextBuilder:
+        return ConversationContextBuilder(self.conversation_group_repository, self.message_service)
+
+    @property
+    def chat_orchestrator(self) -> ChatOrchestrator:
+        return ChatOrchestrator(
+            self.conversation_context_builder,
+            self.conversation_group_service,
+            self.message_service,
+            self.llm_client,
+        )
 
     @property
     def trace_collector(self) -> TraceCollector:
@@ -108,8 +133,9 @@ def create_http_runtime_host(
     host: str = "127.0.0.1",
     port: int = 8000,
     llm_client: ChatCompletionClient | None = None,
+    storage_path: str | Path | None = None,
 ) -> HttpRuntimeHost:
-    services = create_demo_services(llm_client=llm_client)
+    services = create_demo_services(llm_client=llm_client, storage_path=storage_path)
     return HttpRuntimeHost(host=host, port=port, services=services)
 
 
@@ -120,7 +146,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     load_backend_env()
-    runtime_host = create_http_runtime_host(host=args.host, port=args.port)
+    runtime_host = create_http_runtime_host(host=args.host, port=args.port, storage_path=_default_runtime_state_path())
     print(f"ContextOS HTTP runtime listening on {runtime_host.url}", flush=True)
     print(describe_deepseek_env(), flush=True)
     try:
@@ -129,20 +155,29 @@ def main(argv: list[str] | None = None) -> None:
         pass
 
 
-def create_demo_services(llm_client: ChatCompletionClient | None = None) -> RuntimeServices:
-    session_repository = InMemorySessionRepository()
-    timeline_repository = InMemoryTimelineRepository()
-    checkpoint_store = InMemoryCheckpointStore()
-    message_service = MessageService()
+def create_demo_services(
+    llm_client: ChatCompletionClient | None = None,
+    storage_path: str | Path | None = None,
+) -> RuntimeServices:
+    store = JsonRuntimeStore(storage_path) if storage_path is not None else None
+    session_repository = InMemorySessionRepository(store)
+    timeline_repository = InMemoryTimelineRepository(store)
+    checkpoint_store = InMemoryCheckpointStore(store)
+    message_service = MessageService(InMemoryMessageRepository(store))
+    conversation_group_repository = InMemoryConversationGroupRepository(store)
     trace_repository = InMemoryTraceRepository()
     services = RuntimeServices(
         session_repository,
         timeline_repository,
         checkpoint_store,
         message_service,
+        conversation_group_repository,
         trace_repository,
         llm_client=llm_client or create_deepseek_client_from_env(),
     )
+
+    if session_repository.get("demo-session") is not None:
+        return services
 
     created_at = datetime(2026, 8, 26, 0, 0, tzinfo=timezone.utc)
     session_repository.save(
@@ -177,22 +212,37 @@ def create_demo_services(llm_client: ChatCompletionClient | None = None) -> Runt
             created_at=created_at,
         )
     )
+    group = services.conversation_group_service.start_turn(
+        "demo-session",
+        "demo-timeline",
+        "demo-user-message",
+        group_id="demo-group-1",
+    )
     message_service.create_message(
+        message_id="demo-user-message",
         session_id="demo-session",
+        timeline_id="demo-timeline",
+        group_id=group.id,
         role="user",
         content="Summarize the incident report and email the team.",
         token_count=8,
+        context_group_ids=[group.id],
     )
     assistant = message_service.create_message(
+        message_id="demo-assistant-message",
         session_id="demo-session",
+        timeline_id="demo-timeline",
+        group_id=group.id,
         role="assistant",
         content="The report is ready and the send_report_email tool can notify the team.",
         token_count=12,
+        context_group_ids=[group.id],
         checkpoint_id="demo-checkpoint",
         trace_id="trace-send-report-email",
         tool_call_ids=["tool-call-send-report-email"],
         tool_result_ids=["tool-result-send-report-email"],
     )
+    services.conversation_group_service.append_message(group.id, assistant.id)
     TraceCollector(trace_repository).record_tool_call(
         trace_id="trace-send-report-email",
         session_id="demo-session",
@@ -204,6 +254,13 @@ def create_demo_services(llm_client: ChatCompletionClient | None = None) -> Runt
         message_id=assistant.id,
     )
     return services
+
+
+def _default_runtime_state_path() -> Path:
+    configured = os.environ.get("CONTEXTOS_RUNTIME_STATE_PATH")
+    if configured:
+        return Path(configured)
+    return Path("backend") / ".contextos" / "runtime-state.json"
 
 
 def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
@@ -222,7 +279,12 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "messages":
-                self._send_route_response(get_session_messages(segments[2], services.message_service))
+                timeline_id = _first(query, "timelineId") or _first(query, "timeline_id")
+                self._send_route_response(get_session_messages(segments[2], services.message_service, timeline_id=timeline_id))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "timelines":
+                self._send_route_response(list_session_timelines(segments[2], services.timeline_service))
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "context":
@@ -259,12 +321,12 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                         runtime_events=_chat_runtime_events(
                             segments[2],
                             timeline_id,
-                            services.message_service,
-                            services.llm_client,
+                            services,
                         ),
                         message_service=services.message_service,
                         trace_collector=services.trace_collector,
                         checkpoint_service=services.checkpoint_service,
+                        conversation_group_service=services.conversation_group_service,
                     )
                 )
                 return
@@ -276,8 +338,36 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
             segments = [segment for segment in parsed.path.split("/") if segment]
             payload = self._read_json_body()
 
+            if len(segments) == 2 and segments == ["api", "sessions"]:
+                response = post_session(payload, services.session_service)
+                if int(response["status"]) == 201:
+                    session_id = str(response["body"]["id"])
+                    timeline = services.timeline_service.create_initial_timeline(session_id)
+                    response["body"] = services.session_service.get_session(session_id).to_dict()
+                    response["body"]["current_timeline_id"] = timeline.id
+                self._send_route_response(response)
+                return
+
             if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "messages":
-                self._send_route_response(post_session_message(segments[2], payload, services.message_service))
+                session = services.session_repository.get(segments[2])
+                if session is None:
+                    self._send_json(404, {"error": {"code": "session.not_found", "message": "Session not found"}})
+                    return
+                timeline_id = str(payload.get("timeline_id") or payload.get("timelineId") or session.current_timeline_id or "")
+                timeline = services.timeline_repository.get(timeline_id) if timeline_id else None
+                if timeline is None or timeline.session_id != segments[2]:
+                    self._send_json(400, {"error": {"code": "timeline.invalid", "message": "Timeline does not belong to this session"}})
+                    return
+                payload["timeline_id"] = timeline.id
+                self._send_route_response(
+                    post_session_message(
+                        segments[2],
+                        payload,
+                        services.message_service,
+                        conversation_group_service=services.conversation_group_service,
+                        default_timeline_id=timeline.id,
+                    )
+                )
                 return
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
@@ -325,80 +415,7 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
 def _chat_runtime_events(
     session_id: str,
     timeline_id: str,
-    message_service: MessageService,
-    llm_client: ChatCompletionClient | None,
-) :
-    latest_user_content = _latest_user_content(session_id, message_service)
-    if llm_client is not None and hasattr(llm_client, "stream_complete"):
-        try:
-            yielded_text = False
-            for chunk in llm_client.stream_complete([{"role": "user", "content": latest_user_content}]):
-                if not chunk:
-                    continue
-                yielded_text = True
-                yield {
-                    "type": "token",
-                    "data": {
-                        "message_id": "message-stream",
-                        "role": "assistant",
-                        "content": chunk,
-                        "trace_id": "trace-chat-response",
-                    },
-                }
-            if not yielded_text:
-                raise LlmResponseFormatError("DeepSeek stream completed without assistant text")
-        except LlmProviderError as error:
-            yield {"type": "error", "data": {"message": str(error), "code": "llm.request_failed"}}
-            return
-    else:
-        try:
-            response = _assistant_response_for(latest_user_content, llm_client)
-        except LlmProviderError as error:
-            yield {"type": "error", "data": {"message": str(error), "code": "llm.request_failed"}}
-            return
-        for chunk in _stream_chunks(response):
-            yield {
-                "type": "token",
-                "data": {
-                    "message_id": "message-stream",
-                    "role": "assistant",
-                    "content": chunk,
-                    "trace_id": "trace-chat-response",
-                },
-            }
-
-    yield {
-        "type": "checkpoint",
-        "data": {
-            "graph_state": {"node": "chat", "status": "completed", "timeline_id": timeline_id},
-            "message_cursor": len(message_service.list_messages(session_id)[0]) + 1,
-            "context_revision": "demo-context-revision",
-        },
-    }
-    yield {"type": "done", "data": {"message_id": "message-stream"}}
-
-
-def _latest_user_content(session_id: str, message_service: MessageService) -> str:
-    messages, _ = message_service.list_messages(session_id, limit=500)
-    for message in reversed(messages):
-        if message.role.value == "user":
-            return message.content
-    return ""
-
-
-def _assistant_response_for(user_content: str, llm_client: ChatCompletionClient | None = None) -> str:
-    if llm_client is not None:
-        return llm_client.complete([{"role": "user", "content": user_content}])
-    if "reply with ok" in user_content.lower():
-        return "OK"
-    if not user_content:
-        return "Ready."
-    return f"Runtime received: {user_content}"
-
-
-def _stream_chunks(content: str) -> list[str]:
-    if len(content) <= 8:
-        return [content]
-    midpoint = max(1, len(content) // 2)
-    return [content[:midpoint], content[midpoint:]]
+    services: RuntimeServices,
+):
+    yield from services.chat_orchestrator.stream_runtime_events(session_id, timeline_id, "trace-chat-response")
 
