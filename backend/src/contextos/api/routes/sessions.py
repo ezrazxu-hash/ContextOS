@@ -35,10 +35,22 @@ def get_session(session_id: str, service: SessionService, request_id: str = "req
 
 
 def post_session_message(session_id: str, payload: dict[str, object], service: MessageService) -> dict[str, object]:
+    role = payload.get("role")
+    content = payload.get("content")
+    if role is None or content is None:
+        return {
+            "status": 400,
+            "body": ApiError(
+                code="message.invalid",
+                message="Message role and content are required",
+                request_id="req-message-create",
+                status=400,
+            ).to_rest_payload(),
+        }
     message = service.create_message(
         session_id=session_id,
-        role=str(payload["role"]),
-        content=str(payload["content"]),
+        role=str(role),
+        content=str(content),
         status=str(payload.get("status", "completed")),
         token_count=int(payload.get("token_count", 0)),
         context_group_ids=list(payload.get("context_group_ids", [])),

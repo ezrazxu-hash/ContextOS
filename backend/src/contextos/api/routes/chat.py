@@ -1,3 +1,5 @@
+from collections.abc import Iterable, Iterator
+
 from contextos.api.streaming.sse import format_sse
 from contextos.provider.base.token_counter import count_text_tokens
 from contextos.runtime.checkpoint.service import CheckpointService
@@ -10,12 +12,32 @@ def stream_chat_events(
     session_id: str,
     timeline_id: str,
     trace_id: str,
-    runtime_events: list[dict[str, object]],
+    runtime_events: Iterable[dict[str, object]],
     message_service: MessageService,
     trace_collector: TraceCollector,
     checkpoint_service: CheckpointService,
 ) -> list[str]:
-    frames: list[str] = []
+    return list(iter_chat_event_frames(
+        session_id=session_id,
+        timeline_id=timeline_id,
+        trace_id=trace_id,
+        runtime_events=runtime_events,
+        message_service=message_service,
+        trace_collector=trace_collector,
+        checkpoint_service=checkpoint_service,
+    ))
+
+
+def iter_chat_event_frames(
+    *,
+    session_id: str,
+    timeline_id: str,
+    trace_id: str,
+    runtime_events: Iterable[dict[str, object]],
+    message_service: MessageService,
+    trace_collector: TraceCollector,
+    checkpoint_service: CheckpointService,
+) -> Iterator[str]:
     token_parts: list[str] = []
     tool_call_ids: list[str] = []
     tool_result_ids: list[str] = []
@@ -91,9 +113,7 @@ def stream_chat_events(
             data["message_id"] = message.id
             data["checkpoint_id"] = checkpoint_id
 
-        frames.append(format_sse(event_type, data))
-
-    return frames
+        yield format_sse(event_type, data)
 
 
 def _optional_str(value: object) -> str | None:

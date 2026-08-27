@@ -16,11 +16,11 @@ const config = {
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   if (url.pathname.startsWith("/api/")) {
-    await proxyHttp(request, response, config.apiBaseUrl, url.pathname.slice("/api".length));
+    await proxyHttp(request, response, config.apiBaseUrl, `${url.pathname}${url.search}`);
     return;
   }
   if (url.pathname.startsWith("/sse/")) {
-    await proxyHttp(request, response, config.sseBaseUrl, url.pathname.slice("/sse".length), { sse: true });
+    await proxyHttp(request, response, config.sseBaseUrl, `${url.pathname}${url.search}`, { sse: true });
     return;
   }
   if (url.pathname.startsWith("/ws/")) {

@@ -52,6 +52,24 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(created["content"], "Run the Studio interaction smoke.")
         self.assertIn("Run the Studio interaction smoke.", [message["content"] for message in messages["messages"]])
 
+    def test_host_accepts_utf8_bom_json_message_post_over_http(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            created = post_raw_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                b"\xef\xbb\xbf" + json.dumps(
+                    {"role": "user", "content": "Windows JSON body", "token_count": 3},
+                ).encode("utf-8"),
+            )
+        finally:
+            host.stop()
+
+        self.assertEqual(created["role"], "user")
+        self.assertEqual(created["content"], "Windows JSON body")
+
     def test_chat_stream_uses_latest_user_message_and_persists_assistant_response(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -73,6 +91,101 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(assistant_messages[-1]["content"], "OK")
         self.assertEqual(assistant_messages[-1]["trace_id"], "trace-chat-response")
 
+    def test_chat_stream_calls_configured_llm_client_and_persists_response(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        llm_client = RecordingLlmClient("ContextOS Chat OK")
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=llm_client)
+        host.start()
+        try:
+            post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "你好，请回复“ContextOS Chat OK”", "token_count": 5},
+            )
+            sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+            messages = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertEqual(llm_client.user_messages, ["你好，请回复“ContextOS Chat OK”"])
+        self.assertEqual(sse_token_text(sse), "ContextOS Chat OK")
+        assistant_messages = [message for message in messages["messages"] if message["role"] == "assistant"]
+        self.assertEqual(assistant_messages[-1]["content"], "ContextOS Chat OK")
+
+    def test_chat_stream_uses_streaming_llm_client_and_persists_final_text(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        llm_client = StreamingLlmClient(["ContextOS ", "stream OK"])
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=llm_client)
+        host.start()
+        try:
+            post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "stream please", "token_count": 2},
+            )
+            sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+            messages = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertEqual(llm_client.user_messages, ["stream please"])
+        self.assertEqual(sse_token_text(sse), "ContextOS stream OK")
+        assistant_messages = [message for message in messages["messages"] if message["role"] == "assistant"]
+        self.assertEqual(assistant_messages[-1]["content"], "ContextOS stream OK")
+
+    def test_chat_stream_reports_midstream_llm_error_without_persisting_partial_assistant(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        llm_client = FailingStreamingLlmClient("DeepSeek stream error overloaded_error: busy")
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=llm_client)
+        host.start()
+        try:
+            before = get_json(f"{host.url}/api/sessions/demo-session/messages")
+            post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "stream fail", "token_count": 2},
+            )
+            sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+            after = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertEqual(sse_token_text(sse), "partial")
+        self.assertIn("event: error", sse)
+        self.assertIn("overloaded_error", sse)
+        before_assistants = [message for message in before["messages"] if message["role"] == "assistant"]
+        after_assistants = [message for message in after["messages"] if message["role"] == "assistant"]
+        self.assertEqual(len(after_assistants), len(before_assistants))
+
+    def test_chat_stream_can_retry_after_midstream_llm_error(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        llm_client = FlakyStreamingLlmClient()
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=llm_client)
+        host.start()
+        try:
+            before = get_json(f"{host.url}/api/sessions/demo-session/messages")
+            post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "first try", "token_count": 2},
+            )
+            failed_sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+            post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "retry try", "token_count": 2},
+            )
+            retry_sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+            after = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertIn("event: error", failed_sse)
+        self.assertEqual(sse_token_text(retry_sse), "retry ok")
+        before_assistants = [message for message in before["messages"] if message["role"] == "assistant"]
+        after_assistants = [message for message in after["messages"] if message["role"] == "assistant"]
+        self.assertEqual(len(after_assistants), len(before_assistants) + 1)
+        self.assertEqual(after_assistants[-1]["content"], "retry ok")
+
 
 def get_json(url: str) -> dict[str, object]:
     with urlopen(url, timeout=5) as response:
@@ -86,14 +199,78 @@ def get_text(url: str) -> str:
 
 
 def post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
+    return post_raw_json(url, json.dumps(payload).encode("utf-8"))
+
+
+def post_raw_json(url: str, payload: bytes) -> dict[str, object]:
     request = Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def sse_token_text(sse: str) -> str:
+    parts: list[str] = []
+    for frame in sse.split("\n\n"):
+        event_type = None
+        data = None
+        for line in frame.splitlines():
+            if line.startswith("event: "):
+                event_type = line.removeprefix("event: ")
+            if line.startswith("data: "):
+                data = json.loads(line.removeprefix("data: "))
+        if event_type == "token" and data is not None:
+            parts.append(str(data["content"]))
+    return "".join(parts)
+
+
+class RecordingLlmClient:
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.user_messages: list[str] = []
+
+    def complete(self, messages: list[dict[str, str]]) -> str:
+        self.user_messages = [message["content"] for message in messages if message["role"] == "user"]
+        return self.response
+
+
+class StreamingLlmClient:
+    def __init__(self, chunks: list[str]) -> None:
+        self.chunks = chunks
+        self.user_messages: list[str] = []
+
+    def stream_complete(self, messages: list[dict[str, str]]):
+        self.user_messages = [message["content"] for message in messages if message["role"] == "user"]
+        yield from self.chunks
+
+
+class FailingStreamingLlmClient:
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def stream_complete(self, messages: list[dict[str, str]]):
+        from contextos.provider.deepseek_anthropic import LlmStreamError
+
+        yield "partial"
+        raise LlmStreamError(self.message)
+
+
+class FlakyStreamingLlmClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def stream_complete(self, messages: list[dict[str, str]]):
+        from contextos.provider.deepseek_anthropic import LlmStreamError
+
+        self.calls += 1
+        if self.calls == 1:
+            yield "partial"
+            raise LlmStreamError("DeepSeek stream error overloaded_error: busy")
+        yield "retry ok"
 
 
 if __name__ == "__main__":

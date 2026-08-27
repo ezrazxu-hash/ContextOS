@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 
 test("UI09-T02-TC01: SSE proxy streams tokens with no-buffer headers", async () => {
   const runtime = await startRuntime(async (request, response) => {
-    if (request.url === "/events") {
+    if (request.url === "/sse/events") {
       response.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
@@ -35,7 +35,7 @@ test("UI09-T02-TC01: SSE proxy streams tokens with no-buffer headers", async () 
 
 test("UI09-T02-TC02: API proxy preserves Runtime trace headers on errors", async () => {
   const runtime = await startRuntime((request, response) => {
-    if (request.url === "/fail") {
+    if (request.url === "/api/fail") {
       response.writeHead(503, {
         "content-type": "application/json",
         "x-contextos-trace-id": "trace-proxy-1",
@@ -61,7 +61,7 @@ test("UI09-T02-TC02: API proxy preserves Runtime trace headers on errors", async
 
 test("UI09-T02-TC03: disabled WS endpoint does not affect REST and SSE proxies", async () => {
   const runtime = await startRuntime((request, response) => {
-    if (request.url === "/health") {
+    if (request.url === "/api/health") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true }));
       return;
@@ -76,6 +76,36 @@ test("UI09-T02-TC03: disabled WS endpoint does not affect REST and SSE proxies",
     assert.equal(wsResponse.status, 501);
     assert.equal(apiResponse.status, 200);
     assert.deepEqual(await apiResponse.json(), { ok: true });
+  } finally {
+    await studio.close();
+    await runtime.close();
+  }
+});
+
+test("UI09-T02-TC05: real Runtime proxy forwards API and SSE prefixes exactly once", async () => {
+  const seen = [];
+  const runtime = await startRuntime((request, response) => {
+    seen.push(request.url);
+    if (request.url === "/api/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (request.url === "/sse/sessions/demo-session/chat") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end("event: done\ndata: {}\n\n");
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const studio = await startStudio({ apiBaseUrl: runtime.url, sseBaseUrl: runtime.url });
+  try {
+    const apiResponse = await fetch(`${studio.url}/api/health`);
+    const sseResponse = await fetch(`${studio.url}/sse/sessions/demo-session/chat`);
+
+    assert.equal(apiResponse.status, 200);
+    assert.equal(sseResponse.status, 200);
+    assert.deepEqual(seen, ["/api/health", "/sse/sessions/demo-session/chat"]);
   } finally {
     await studio.close();
     await runtime.close();

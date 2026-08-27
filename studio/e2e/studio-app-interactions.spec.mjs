@@ -69,7 +69,7 @@ test("Studio app has working navigation chat send selection and disabled action 
 async function startBackend(port) {
   const child = spawn("python", ["-m", "contextos.api", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: repoRoot,
-    env: { ...process.env, PYTHONPATH: "backend/src" },
+    env: { ...process.env, PYTHONPATH: "backend/src", CONTEXTOS_DISABLE_LLM: "1" },
     stdio: "ignore",
   });
   const url = `http://127.0.0.1:${port}`;

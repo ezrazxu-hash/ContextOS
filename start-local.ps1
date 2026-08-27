@@ -1,10 +1,7 @@
-param(
-    [int]$BackendPort = 8000,
-    [int]$StudioPort = 5173
-)
-
 $ErrorActionPreference = "Stop"
-$RepoRoot = Split-Path -Parent $PSScriptRoot
+$RepoRoot = $PSScriptRoot
+$BackendPort = 18000
+$StudioPort = 5173
 $BackendLog = Join-Path $RepoRoot "backend-runtime.log"
 $BackendErr = Join-Path $RepoRoot "backend-runtime.err.log"
 $StudioLog = Join-Path $RepoRoot "studio-dev.log"
@@ -73,6 +70,7 @@ Remove-Item Env:\PYTHONPATH -ErrorAction SilentlyContinue
 
 $env:CONTEXTOS_STUDIO_API_BASE_URL = "http://localhost:$BackendPort"
 $env:CONTEXTOS_STUDIO_SSE_BASE_URL = "http://localhost:$BackendPort"
+$env:CONTEXTOS_STUDIO_WS_BASE_URL = ""
 $env:CONTEXTOS_STUDIO_PORT = "$StudioPort"
 $studio = Start-Process `
     -FilePath "cmd.exe" `
@@ -84,6 +82,7 @@ $studio = Start-Process `
     -PassThru
 Remove-Item Env:\CONTEXTOS_STUDIO_API_BASE_URL -ErrorAction SilentlyContinue
 Remove-Item Env:\CONTEXTOS_STUDIO_SSE_BASE_URL -ErrorAction SilentlyContinue
+Remove-Item Env:\CONTEXTOS_STUDIO_WS_BASE_URL -ErrorAction SilentlyContinue
 Remove-Item Env:\CONTEXTOS_STUDIO_PORT -ErrorAction SilentlyContinue
 
 Wait-HttpOk "http://127.0.0.1:$BackendPort/health"
@@ -91,3 +90,4 @@ Wait-HttpOk "http://127.0.0.1:$StudioPort/__contextos/config.json"
 
 Write-Output "Backend: http://127.0.0.1:$BackendPort PID $($backend.Id)"
 Write-Output "Studio:  http://localhost:$StudioPort PID $($studio.Id)"
+Write-Output "Logs:    backend-runtime.log, backend-runtime.err.log, studio-dev.log, studio-dev.err.log"

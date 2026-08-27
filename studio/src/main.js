@@ -1,4 +1,5 @@
 import { demoFixtures, demoTemplateManifest } from "./test/fixtures/demoRuntime.js";
+import { streamSseEvents } from "./client/sseStream.js";
 
 const ROUTES = ["/chat", "/workflow", "/template", "/debug"];
 const DEFAULT_SESSION_ID = "demo-session";
@@ -24,6 +25,7 @@ const state = {
   workflowSelectedNodeId: "planner",
   templateTab: "basic",
   sending: false,
+  chatDraft: "",
 };
 
 await start();
@@ -174,7 +176,7 @@ function renderChat() {
       </div>
       <div class="messages" data-testid="message-list">${state.messages.map(renderMessage).join("")}</div>
       <form class="composer" data-action="send-chat">
-        <textarea data-testid="composer-input" placeholder="Message the agent. Enter sends, Shift+Enter adds a line." rows="1" ${state.sending ? "disabled" : ""}></textarea>
+        <textarea data-testid="composer-input" placeholder="Message the agent. Enter sends, Shift+Enter adds a line." rows="1" ${state.sending ? "disabled" : ""}>${escapeHtml(state.chatDraft)}</textarea>
         <button data-testid="send-message" type="submit" ${state.sending ? "disabled" : ""}>${state.sending ? "Sending" : "Send"}</button>
       </form>
     </section>
@@ -189,6 +191,7 @@ function renderMessage(message) {
     <article class="message-card ${role} ${selected ? "selected" : ""}" data-action="select-message" data-message-id="${escapeAttr(message.id)}" data-testid="message-${escapeAttr(message.id)}" tabindex="0">
       <header><strong>${role === "assistant" ? "Assistant" : role === "user" ? "User" : titleCase(role)}</strong><span>${message.status ?? "completed"}</span></header>
       <p>${escapeHtml(message.content ?? "")}</p>
+      ${message.error ? `<p class="message-error">${escapeHtml(message.error)}</p>` : ""}
       ${renderToolRelations(message)}
       ${traceId ? `<button class="trace-pill" data-action="open-trace" data-trace-id="${escapeAttr(traceId)}" type="button">Trace ${escapeHtml(traceId)}</button>` : ""}
     </article>
@@ -280,6 +283,9 @@ function bindEvents() {
       composer.requestSubmit();
     }
   });
+  input?.addEventListener("input", () => {
+    state.chatDraft = input.value;
+  });
 }
 
 async function handleAction(event) {
@@ -344,10 +350,12 @@ async function handleAction(event) {
 async function handleChatSubmit(event) {
   event.preventDefault();
   const input = document.querySelector("[data-testid='composer-input']");
-  const content = input.value.trim();
+  state.chatDraft = input?.value ?? state.chatDraft;
+  const content = state.chatDraft.trim();
   if (!content || state.sending) return;
   const client = runtimeClient();
   state.sending = true;
+  state.chatDraft = "";
   state.toast = { tone: "loading", text: "Sending message to Runtime" };
   render();
   try {
@@ -357,6 +365,8 @@ async function handleChatSubmit(event) {
     await streamAssistantReply(client);
     state.toast = { tone: "success", text: "Sent" };
   } catch (error) {
+    state.chatDraft = content;
+    markStreamingMessageFailed(error);
     state.toast = { tone: "error", text: `Send failed: ${error.message}` };
   } finally {
     state.sending = false;
@@ -402,6 +412,14 @@ function completeStreamMessage(data) {
   }
 }
 
+function markStreamingMessageFailed(error) {
+  const message = [...state.messages].reverse().find((item) => item.role === "assistant" && item.status === "streaming");
+  if (message) {
+    message.status = "failed";
+    message.error = error.message;
+  }
+}
+
 function attachTool(data, field) {
   const message = state.messages.find((item) => item.id === data.message_id);
   const id = data.call_id ?? data.tool_call_id;
@@ -430,20 +448,21 @@ function runtimeClient() {
 
 function realClient() {
   return {
-    fetchSessionMessages: (sessionId) => getJson(`/api/api/sessions/${encodeURIComponent(sessionId)}/messages`),
-    postSessionMessage: (sessionId, content) => postJson(`/api/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content) }),
+    fetchSessionMessages: (sessionId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`),
+    postSessionMessage: (sessionId, content) => postJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content) }),
     fetchDebugIndex(sessionId, params = {}) {
       const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value)).toString();
-      return getJson(`/api/api/debug/sessions/${encodeURIComponent(sessionId)}${query ? `?${query}` : ""}`);
+      return getJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}${query ? `?${query}` : ""}`);
     },
     async fetchSessionContext(sessionId) {
       try {
-        return await getJson(`/api/api/sessions/${encodeURIComponent(sessionId)}/context`);
+        const body = await getJson(`/api/sessions/${encodeURIComponent(sessionId)}/context`);
+        return body.items ?? body;
       } catch {
         return contextFromDebug(state.debugIndex);
       }
     },
-    streamChatEvents: (sessionId, timelineId) => streamSse(`/sse/sse/sessions/${encodeURIComponent(sessionId)}/chat?timelineId=${encodeURIComponent(timelineId)}`),
+    streamChatEvents: (sessionId, timelineId) => streamSse(`/sse/sessions/${encodeURIComponent(sessionId)}/chat?timelineId=${encodeURIComponent(timelineId)}`),
   };
 }
 
@@ -487,17 +506,10 @@ async function postJson(path, payload) {
 async function* streamSse(path) {
   const response = await fetch(path, { headers: { accept: "text/event-stream" } });
   if (!response.ok) throw new Error(`Runtime stream failed with ${response.status}`);
-  const text = await response.text();
-  for (const frame of text.split(/\n\n+/)) {
-    const event = parseSseFrame(frame);
+  for await (const event of streamSseEvents(response)) {
+    if (event?.type === "error") throw new Error(event.data?.message ?? "Runtime stream failed");
     if (event) yield event;
   }
-}
-
-function parseSseFrame(frame) {
-  const eventType = /^event:\s*(.+)$/m.exec(frame)?.[1];
-  const dataText = /^data:\s*(.+)$/m.exec(frame)?.[1];
-  return eventType && dataText ? { type: eventType, data: JSON.parse(dataText) } : null;
 }
 
 function selectedMessage() {
@@ -600,6 +612,7 @@ function styleTag() {
     .message-card.selected { outline: 2px solid var(--accent); }
     .message-card header { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); margin-bottom: 8px; }
     .message-card p { margin-bottom: 10px; white-space: pre-wrap; }
+    .message-error { color: var(--error); font-size: 13px; }
     .tool-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
     .tool-call, .tool-result, .trace-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: 12px; }
     .tool-call { background: #fff4e5; color: #875300; }
