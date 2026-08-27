@@ -11,6 +11,7 @@ studio/.env
 
 backend-runtime.err.log
 backend-runtime.log
+backend/.contextos/
 studio-dev-5174.err.log
 studio-dev-5174.log
 studio-dev.err.log
