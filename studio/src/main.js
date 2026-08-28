@@ -13,6 +13,8 @@ const state = {
   selection: { sessionId: DEFAULT_SESSION_ID, timelineId: DEFAULT_TIMELINE_ID, messageId: null, traceId: null },
   loading: false,
   creatingSession: false,
+  deletingSessionId: null,
+  openSessionMenuId: null,
   toast: null,
   leftCollapsed: false,
   rightCollapsed: false,
@@ -42,6 +44,7 @@ async function start() {
     await loadRouteData();
     render();
   });
+  document.addEventListener("click", handleDocumentClick);
   await loadRouteData();
   render();
 }
@@ -74,7 +77,7 @@ async function loadRouteData() {
       ]);
       if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
       state.debugIndex = debugIndex;
-      updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session);
+      updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session, { replace: true });
       state.selection.timelineId = resolveTimelineId(debugIndex, state.selection.timelineId);
 
       const [messages, contextItems] = await Promise.all([
@@ -94,7 +97,7 @@ async function loadRouteData() {
       ]);
       if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
       state.debugIndex = debugIndex;
-      updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session);
+      updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session, { replace: true });
       state.messages = state.debugIndex.messages ?? state.messages;
       state.contextItems = contextFromDebug(state.debugIndex);
     }
@@ -145,9 +148,9 @@ function renderLeftRail() {
   if (state.leftCollapsed) {
     return `<aside class="left-rail collapsed"><button data-action="toggle-left" aria-label="Expand navigation">></button></aside>`;
   }
-  const currentSessionId = state.selection.sessionId ?? DEFAULT_SESSION_ID;
+  const currentSessionId = state.selection.sessionId;
   const sessions = workspaceSessions(currentSessionId);
-  const timelines = state.debugIndex?.timelines ?? [demoFixtures.timeline];
+  const timelines = currentSessionId ? state.debugIndex?.timelines ?? [demoFixtures.timeline] : [];
   return `
     <aside class="left-rail">
       <div class="rail-head"><h2>Workspace</h2><button data-action="toggle-left" aria-label="Collapse navigation"><</button></div>
@@ -155,10 +158,19 @@ function renderLeftRail() {
         <h3>Sessions</h3>
         ${sessions.map((session) => {
           const selected = session.id === currentSessionId;
+          const label = displayResourceLabel(session);
+          const deleting = state.deletingSessionId === session.id;
+          const menuOpen = state.openSessionMenuId === session.id;
           return `
-            <button data-action="select-session" data-session-id="${escapeAttr(session.id)}" data-testid="session-${escapeAttr(session.id)}" aria-pressed="${selected}" class="nav-item ${selected ? "selected" : ""}" title="${escapeAttr(session.id)}">
-              <span data-testid="workspace-item-label">${escapeHtml(displayResourceLabel(session))}</span><small>${escapeHtml(session.status ?? (state.config.mockRuntime ? "mock" : "runtime"))}</small>
-            </button>
+            <div class="session-row">
+              <button data-action="select-session" data-session-id="${escapeAttr(session.id)}" data-testid="session-${escapeAttr(session.id)}" aria-pressed="${selected}" class="nav-item ${selected ? "selected" : ""}" title="${escapeAttr(session.id)}">
+                <span data-testid="workspace-item-label">${escapeHtml(label)}</span><small>${escapeHtml(session.status ?? (state.config.mockRuntime ? "mock" : "runtime"))}</small>
+              </button>
+              <div class="session-menu-host">
+                <button data-action="toggle-session-menu" data-menu-session-id="${escapeAttr(session.id)}" class="session-menu-trigger" aria-label="Session actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Session actions" ${deleting ? "disabled" : ""}>⋮</button>
+                ${menuOpen ? `<div class="session-menu" data-testid="session-menu-${escapeAttr(session.id)}" role="menu"><button data-action="delete-session" data-delete-session-id="${escapeAttr(session.id)}" role="menuitem">Delete</button></div>` : ""}
+              </div>
+            </div>
           `;
         }).join("")}
       </section>
@@ -198,16 +210,17 @@ function renderMainPane() {
 }
 
 function renderChat() {
+  const hasSession = Boolean(state.selection.sessionId);
   return `
     <section class="chat-workbench" data-testid="chat-workbench">
       <div class="page-head">
-        <div><h1 data-testid="main-title">Chat Workbench</h1><p>Session ${escapeHtml(state.selection.sessionId)} / ${escapeHtml(state.selection.timelineId ?? "timeline")}</p></div>
+        <div><h1 data-testid="main-title">Chat Workbench</h1><p>Session ${escapeHtml(state.selection.sessionId ?? "none")} / ${escapeHtml(state.selection.timelineId ?? "timeline")}</p></div>
         <button class="secondary" data-action="refresh-route" ${state.loading ? "disabled" : ""}>Refresh</button>
       </div>
       <div class="messages" data-testid="message-list">${state.messages.map(renderMessage).join("")}</div>
       <form class="composer" data-action="send-chat">
-        <textarea data-testid="composer-input" placeholder="Message the agent. Enter sends, Shift+Enter adds a line." rows="1" ${state.sending ? "disabled" : ""}>${escapeHtml(state.chatDraft)}</textarea>
-        <button data-testid="send-message" type="submit" ${state.sending ? "disabled" : ""}>${state.sending ? "Sending" : "Send"}</button>
+        <textarea data-testid="composer-input" placeholder="Message the agent. Enter sends, Shift+Enter adds a line." rows="1" ${state.sending || !hasSession ? "disabled" : ""}>${escapeHtml(state.chatDraft)}</textarea>
+        <button data-testid="send-message" type="submit" ${state.sending || !hasSession ? "disabled" : ""}>${state.sending ? "Sending" : "Send"}</button>
       </form>
     </section>
   `;
@@ -318,6 +331,13 @@ function bindEvents() {
   });
 }
 
+function handleDocumentClick(event) {
+  if (!state.openSessionMenuId) return;
+  if (event.target.closest?.(".session-menu-host")) return;
+  state.openSessionMenuId = null;
+  render();
+}
+
 async function handleAction(event) {
   const target = event.currentTarget;
   const action = target.dataset.action;
@@ -338,6 +358,7 @@ async function handleAction(event) {
     state.toast = { tone: "success", text: `${titleCase(state.templateTab)} section selected` };
     render();
   } else if (action === "select-session") {
+    state.openSessionMenuId = null;
     state.selection.messageId = null;
     state.selection.traceId = null;
     const sessionId = target.dataset.sessionId;
@@ -386,6 +407,54 @@ async function handleAction(event) {
       state.creatingSession = false;
       render();
     }
+  } else if (action === "toggle-session-menu") {
+    event.stopPropagation();
+    const sessionId = target.dataset.menuSessionId;
+    state.openSessionMenuId = state.openSessionMenuId === sessionId ? null : sessionId;
+    render();
+  } else if (action === "delete-session") {
+    event.stopPropagation();
+    const sessionId = target.dataset.deleteSessionId;
+    if (!sessionId || state.deletingSessionId) return;
+    const session = state.sessions.find((item) => item.id === sessionId);
+    const label = displayResourceLabel(session ?? { id: sessionId });
+    state.openSessionMenuId = null;
+    if (!window.confirm(`Delete session ${label}?`)) {
+      render();
+      return;
+    }
+    const beforeSessions = workspaceSessions(state.selection.sessionId ?? DEFAULT_SESSION_ID);
+    state.deletingSessionId = sessionId;
+    state.toast = { tone: "loading", text: "Deleting session" };
+    render();
+    try {
+      await runtimeClient().deleteSession(sessionId);
+      state.sessions = state.sessions.filter((item) => item.id !== sessionId);
+      if (state.selection.sessionId === sessionId) {
+        const nextSession = nextSessionAfterDelete(beforeSessions, sessionId);
+        state.selection.messageId = null;
+        state.selection.traceId = null;
+        state.debugIndex = null;
+        state.contextItems = [];
+        if (nextSession) {
+          const timelineId = nextSession.current_timeline_id ?? nextSession.currentTimelineId ?? DEFAULT_TIMELINE_ID;
+          await navigate(`/chat?sessionId=${encodeURIComponent(nextSession.id)}&timelineId=${encodeURIComponent(timelineId)}`);
+        } else {
+          state.selection.sessionId = null;
+          state.selection.timelineId = null;
+          state.messages = [];
+          history.pushState({}, "", state.route);
+        }
+      }
+      state.toast = { tone: "success", text: "Session deleted" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.deletingSessionId = null;
+      render();
+    }
   } else if (action === "add-workflow-node") {
     addWorkflowNode(target.dataset.nodeType ?? "agent");
     render();
@@ -400,6 +469,11 @@ async function handleAction(event) {
 
 async function handleChatSubmit(event) {
   event.preventDefault();
+  if (!state.selection.sessionId) {
+    state.toast = { tone: "warning", text: "Select or create a session first" };
+    render();
+    return;
+  }
   const input = document.querySelector("[data-testid='composer-input']");
   state.chatDraft = input?.value ?? state.chatDraft;
   const content = state.chatDraft.trim();
@@ -502,6 +576,7 @@ function realClient() {
     fetchSessions: () => getJson("/api/sessions"),
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
     createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
+    deleteSession: (sessionId) => deleteJson(`/api/sessions/${encodeURIComponent(sessionId)}`),
     postSessionMessage: (sessionId, content, timelineId) => postJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content), timeline_id: timelineId }),
     fetchDebugIndex(sessionId, params = {}) {
       const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value)).toString();
@@ -531,6 +606,9 @@ function mockClient() {
     async createSession() {
       return { ...clone(demoFixtures.session), id: `local-session-${Date.now()}`, current_timeline_id: demoFixtures.timeline.id };
     },
+    async deleteSession() {
+      return {};
+    },
     async postSessionMessage(sessionId, content) {
       return { id: `local-user-${Date.now()}`, session_id: sessionId, role: "user", content, status: "completed", token_count: tokenEstimate(content), context_group_ids: [], checkpoint_id: null, trace_id: null, tool_call_ids: [], tool_result_ids: [] };
     },
@@ -557,6 +635,13 @@ async function getJson(path) {
 
 async function postJson(path, payload) {
   const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.error?.message ?? `Runtime request failed with ${response.status}`);
+  return body;
+}
+
+async function deleteJson(path) {
+  const response = await fetch(path, { method: "DELETE" });
   const body = await response.json().catch(() => null);
   if (!response.ok) throw new Error(body?.error?.message ?? `Runtime request failed with ${response.status}`);
   return body;
@@ -597,10 +682,12 @@ async function fetchWorkspaceSessions(client) {
   return client.fetchSessions();
 }
 
-function updateWorkspaceSessions(sessions, currentSession = null) {
+function updateWorkspaceSessions(sessions, currentSession = null, options = {}) {
   const byId = new Map();
-  for (const session of state.sessions) {
-    if (session?.id) byId.set(session.id, session);
+  if (!options.replace) {
+    for (const session of state.sessions) {
+      if (session?.id) byId.set(session.id, session);
+    }
   }
   for (const session of sessions) {
     if (session?.id) byId.set(session.id, session);
@@ -613,6 +700,9 @@ function updateWorkspaceSessions(sessions, currentSession = null) {
 
 function workspaceSessions(currentSessionId) {
   const sessions = state.sessions.filter((session) => session?.id);
+  if (!currentSessionId) {
+    return sessions;
+  }
   if (sessions.some((session) => session.id === currentSessionId)) {
     return sessions;
   }
@@ -631,6 +721,13 @@ function workspaceSessions(currentSessionId) {
 function timelineIdForSession(sessionId) {
   const session = state.sessions.find((item) => item.id === sessionId);
   return session?.current_timeline_id ?? session?.currentTimelineId ?? null;
+}
+
+function nextSessionAfterDelete(sessions, deletedSessionId) {
+  const deletedIndex = sessions.findIndex((session) => session.id === deletedSessionId);
+  const remaining = sessions.filter((session) => session.id !== deletedSessionId);
+  if (remaining.length === 0) return null;
+  return remaining[Math.min(deletedIndex, remaining.length - 1)];
 }
 
 function resolveTimelineId(debugIndex, requestedTimelineId) {
@@ -748,7 +845,14 @@ function styleTag() {
     .trace-pill { background: var(--accent-soft); border-color: #b9cdfa; color: #1d4ed8; }
     .composer { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; }
     textarea { resize: none; min-height: 42px; max-height: 140px; border: 0; outline: 0; background: transparent; padding: 8px; }
+    .session-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: start; margin-bottom: 8px; overflow: visible; }
     .nav-item { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; margin-bottom: 8px; overflow: hidden; }
+    .session-row .nav-item { margin-bottom: 0; }
+    .session-menu-host { min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+    .session-menu-trigger { width: 34px; min-height: 34px; padding: 6px 0; font-size: 18px; line-height: 1; color: var(--muted); }
+    .session-menu { z-index: 20; min-width: 104px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
+    .session-menu button { width: 100%; border: 0; padding: 8px 10px; text-align: left; color: var(--error); background: transparent; }
+    .session-menu button:hover { background: #fff1f0; }
     .nav-item span, .nav-item small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item small { color: var(--muted); }
     .selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }

@@ -29,6 +29,14 @@ class InMemoryCheckpointStore:
             )
         return [checkpoint for checkpoint in self._checkpoints.values() if checkpoint.timeline_id == timeline_id]
 
+    def remove_by_session(self, session_id: str) -> int:
+        if self._store is not None:
+            return self._store.remove_records_where("checkpoints", lambda record: record.get("session_id") == session_id)
+        removed_ids = [checkpoint_id for checkpoint_id, checkpoint in self._checkpoints.items() if checkpoint.session_id == session_id]
+        for checkpoint_id in removed_ids:
+            self._checkpoints.pop(checkpoint_id, None)
+        return len(removed_ids)
+
 
 def checkpoint_to_dict(checkpoint: Checkpoint) -> dict[str, object]:
     return {

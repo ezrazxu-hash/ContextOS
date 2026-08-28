@@ -30,6 +30,14 @@ class InMemoryTimelineRepository:
             )
         return [timeline for timeline in self._timelines.values() if timeline.session_id == session_id]
 
+    def remove_by_session(self, session_id: str) -> int:
+        if self._store is not None:
+            return self._store.remove_records_where("timelines", lambda record: record.get("session_id") == session_id)
+        removed_ids = [timeline_id for timeline_id, timeline in self._timelines.items() if timeline.session_id == session_id]
+        for timeline_id in removed_ids:
+            self._timelines.pop(timeline_id, None)
+        return len(removed_ids)
+
 
 def _timeline_from_dict(record: dict[str, object]) -> Timeline:
     return Timeline(

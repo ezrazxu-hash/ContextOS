@@ -22,6 +22,12 @@ class InMemorySessionRepository:
             return _session_from_dict(record) if record is not None else None
         return self._sessions.get(session_id)
 
+    def remove(self, session_id: str) -> Session | None:
+        if self._store is not None:
+            record = self._store.remove_record("sessions", session_id)
+            return _session_from_dict(record) if record is not None else None
+        return self._sessions.pop(session_id, None)
+
     def list(self) -> list[Session]:
         if self._store is not None:
             sessions = [_session_from_dict(record) for record in self._store.list_records("sessions")]

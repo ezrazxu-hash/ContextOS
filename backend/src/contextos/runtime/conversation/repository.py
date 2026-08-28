@@ -35,6 +35,14 @@ class InMemoryConversationGroupRepository:
             groups = [group for group in self._groups.values() if group.session_id == session_id and group.timeline_id == timeline_id]
         return sorted(groups, key=lambda group: group.cursor)
 
+    def remove_by_session(self, session_id: str) -> int:
+        if self._store is not None:
+            return self._store.remove_records_where("conversation_groups", lambda record: record.get("session_id") == session_id)
+        removed_ids = [group_id for group_id, group in self._groups.items() if group.session_id == session_id]
+        for group_id in removed_ids:
+            self._groups.pop(group_id, None)
+        return len(removed_ids)
+
     def next_cursor(self, session_id: str, timeline_id: str) -> int:
         groups = self.list_by_timeline(session_id, timeline_id)
         return (groups[-1].cursor + 1) if groups else 1

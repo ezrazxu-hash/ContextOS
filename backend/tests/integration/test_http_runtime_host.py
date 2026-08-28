@@ -133,6 +133,77 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertIn(second["id"], session_ids)
         self.assertIn(third["id"], session_ids)
 
+    def test_host_deletes_session_and_related_runtime_records(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingStreamingLlmClient(["ok"]), storage_path=storage_path)
+            host.start()
+            try:
+                keep = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+                doomed = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+                post_json(
+                    f"{host.url}/api/sessions/{doomed['id']}/messages",
+                    {"role": "user", "content": "Delete this session", "token_count": 3, "timeline_id": doomed["current_timeline_id"]},
+                )
+                get_text(f"{host.url}/sse/sessions/{doomed['id']}/chat?timelineId={doomed['current_timeline_id']}")
+
+                deleted = delete_json(f"{host.url}/api/sessions/{doomed['id']}")
+                sessions = get_json(f"{host.url}/api/sessions")
+                missing = get_json_error(f"{host.url}/api/sessions/{doomed['id']}")
+                kept_messages = get_json(f"{host.url}/api/sessions/{keep['id']}/messages?timelineId={keep['current_timeline_id']}")
+            finally:
+                host.stop()
+
+            self.assertEqual(deleted["id"], doomed["id"])
+            session_ids = [session["id"] for session in sessions["sessions"]]
+            self.assertIn(keep["id"], session_ids)
+            self.assertNotIn(doomed["id"], session_ids)
+            self.assertEqual(missing["status"], 404)
+            self.assertEqual(kept_messages["messages"], [])
+
+            persisted = json.loads(storage_path.read_text(encoding="utf-8"))
+            self.assertNotIn(doomed["id"], persisted["sessions"])
+            self.assertFalse(any(record.get("session_id") == doomed["id"] for record in persisted["timelines"].values()))
+            self.assertFalse(any(record.get("session_id") == doomed["id"] for record in persisted["messages"].values()))
+            self.assertFalse(any(record.get("session_id") == doomed["id"] for record in persisted["conversation_groups"].values()))
+            self.assertFalse(any(record.get("session_id") == doomed["id"] for record in persisted["checkpoints"].values()))
+
+    def test_host_delete_missing_session_returns_not_found(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            response = delete_json_error(f"{host.url}/api/sessions/missing-session")
+        finally:
+            host.stop()
+
+        self.assertEqual(response["status"], 404)
+        self.assertEqual(response["body"]["error"]["code"], "session.not_found")
+
+    def test_deleted_demo_session_is_not_reseeded_after_restart(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            host = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            host.start()
+            try:
+                delete_json(f"{host.url}/api/sessions/demo-session")
+            finally:
+                host.stop()
+
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            restarted.start()
+            try:
+                sessions = get_json(f"{restarted.url}/api/sessions")
+            finally:
+                restarted.stop()
+
+        self.assertNotIn("demo-session", [session["id"] for session in sessions["sessions"]])
+
     def test_chat_stream_uses_latest_user_message_and_persists_assistant_response(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -343,6 +414,33 @@ def post_json_error(url: str, payload: dict[str, object]) -> dict[str, object]:
     )
     try:
         with urlopen(request, timeout=5) as response:
+            return {"status": response.status, "body": json.loads(response.read().decode("utf-8"))}
+    except HTTPError as error:
+        return {"status": error.code, "body": json.loads(error.read().decode("utf-8"))}
+
+
+def delete_json(url: str) -> dict[str, object]:
+    request = Request(url, method="DELETE")
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def delete_json_error(url: str) -> dict[str, object]:
+    from urllib.error import HTTPError
+
+    request = Request(url, method="DELETE")
+    try:
+        with urlopen(request, timeout=5) as response:
+            return {"status": response.status, "body": json.loads(response.read().decode("utf-8"))}
+    except HTTPError as error:
+        return {"status": error.code, "body": json.loads(error.read().decode("utf-8"))}
+
+
+def get_json_error(url: str) -> dict[str, object]:
+    from urllib.error import HTTPError
+
+    try:
+        with urlopen(url, timeout=5) as response:
             return {"status": response.status, "body": json.loads(response.read().decode("utf-8"))}
     except HTTPError as error:
         return {"status": error.code, "body": json.loads(error.read().decode("utf-8"))}

@@ -14,7 +14,7 @@ from contextos.api.env import load_backend_env
 from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
-from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, post_session, post_session_message
+from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, post_session, post_session_message, remove_session
 from contextos.api.routes.timelines import list_session_timelines
 from contextos.provider.base.chat_client import ChatCompletionClient
 from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
@@ -175,6 +175,9 @@ def create_demo_services(
         trace_repository,
         llm_client=llm_client or create_deepseek_client_from_env(),
     )
+
+    if store is not None and store.loaded_existing_state:
+        return services
 
     if session_repository.get("demo-session") is not None:
         return services
@@ -370,6 +373,25 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                         services.message_service,
                         conversation_group_service=services.conversation_group_service,
                         default_timeline_id=timeline.id,
+                    )
+                )
+                return
+
+            self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
+
+        def do_DELETE(self) -> None:
+            parsed = urlparse(self.path)
+            segments = [segment for segment in parsed.path.split("/") if segment]
+
+            if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
+                self._send_route_response(
+                    remove_session(
+                        segments[2],
+                        services.session_service,
+                        services.timeline_repository,
+                        services.message_service,
+                        services.conversation_group_repository,
+                        services.checkpoint_store,
                     )
                 )
                 return

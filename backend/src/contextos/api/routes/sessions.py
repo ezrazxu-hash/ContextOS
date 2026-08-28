@@ -1,7 +1,10 @@
 from contextos.api.errors import ApiError
+from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
+from contextos.runtime.conversation.repository import InMemoryConversationGroupRepository
 from contextos.runtime.conversation.service import ConversationGroupService
 from contextos.runtime.session.message_service import MessageService
 from contextos.runtime.session.service import SessionNotFound, SessionService
+from contextos.runtime.timeline.repository import InMemoryTimelineRepository
 from uuid import uuid4
 
 
@@ -39,6 +42,38 @@ def get_session(session_id: str, service: SessionService, request_id: str = "req
                 status=404,
             ).to_rest_payload(),
         }
+    return {
+        "status": 200,
+        "body": session.to_dict(),
+    }
+
+
+def remove_session(
+    session_id: str,
+    service: SessionService,
+    timeline_repository: InMemoryTimelineRepository,
+    message_service: MessageService,
+    conversation_group_repository: InMemoryConversationGroupRepository,
+    checkpoint_store: InMemoryCheckpointStore,
+    request_id: str = "req-session-delete",
+) -> dict[str, object]:
+    try:
+        session = service.remove_session(session_id)
+    except SessionNotFound:
+        return {
+            "status": 404,
+            "body": ApiError(
+                code="session.not_found",
+                message="Session not found",
+                request_id=request_id,
+                status=404,
+            ).to_rest_payload(),
+        }
+
+    timeline_repository.remove_by_session(session_id)
+    message_service.remove_session_messages(session_id)
+    conversation_group_repository.remove_by_session(session_id)
+    checkpoint_store.remove_by_session(session_id)
     return {
         "status": 200,
         "body": session.to_dict(),

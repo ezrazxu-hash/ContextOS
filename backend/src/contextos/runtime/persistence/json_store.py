@@ -12,6 +12,7 @@ class JsonRuntimeStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._lock = RLock()
+        self.loaded_existing_state = self.path.exists()
         self._data = self._load()
 
     def list_records(self, collection: str) -> list[dict[str, Any]]:
@@ -28,6 +29,23 @@ class JsonRuntimeStore:
             self._data.setdefault(collection, {})[record_id] = deepcopy(record)
             self._flush()
             return deepcopy(record)
+
+    def remove_record(self, collection: str, record_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            removed = self._data.setdefault(collection, {}).pop(record_id, None)
+            if removed is not None:
+                self._flush()
+            return deepcopy(removed) if removed is not None else None
+
+    def remove_records_where(self, collection: str, predicate) -> int:
+        with self._lock:
+            records = self._data.setdefault(collection, {})
+            record_ids = [record_id for record_id, record in records.items() if predicate(record)]
+            for record_id in record_ids:
+                records.pop(record_id, None)
+            if record_ids:
+                self._flush()
+            return len(record_ids)
 
     def is_empty(self) -> bool:
         with self._lock:

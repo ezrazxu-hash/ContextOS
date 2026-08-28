@@ -29,5 +29,11 @@ class SessionService:
             raise SessionNotFound(session_id)
         return session
 
+    def remove_session(self, session_id: str) -> Session:
+        session = self._repository.remove(session_id)
+        if session is None:
+            raise SessionNotFound(session_id)
+        return session
+
     def list_sessions(self) -> list[Session]:
         return self._repository.list()

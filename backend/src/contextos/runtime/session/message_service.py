@@ -43,6 +43,13 @@ class InMemoryMessageRepository:
                     return message
         return None
 
+    def remove_by_session(self, session_id: str) -> int:
+        if self._store is not None:
+            return self._store.remove_records_where("messages", lambda record: record.get("session_id") == session_id)
+        removed = len(self._messages_by_session.get(session_id, []))
+        self._messages_by_session.pop(session_id, None)
+        return removed
+
     def next_cursor(self, session_id: str) -> int:
         messages = self.list_by_session(session_id)
         return (messages[-1].cursor + 1) if messages else 1
@@ -110,6 +117,9 @@ class MessageService:
         if message is not None:
             return message
         raise MessageNotFound(message_id)
+
+    def remove_session_messages(self, session_id: str) -> int:
+        return self._repository.remove_by_session(session_id)
 
 
 def _message_from_dict(record: dict[str, object]) -> SessionMessage:
