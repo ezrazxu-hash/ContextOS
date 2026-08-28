@@ -3,7 +3,9 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const studioRoot = dirname(fileURLToPath(import.meta.url)).replace(/\\e2e$/, "");
@@ -67,18 +69,21 @@ test("Studio app has working navigation chat send selection and disabled action 
 });
 
 async function startBackend(port) {
+  const stateDir = await mkdtemp(join(tmpdir(), "contextos-studio-app-"));
+  const storagePath = join(stateDir, "runtime-state.json");
   const child = spawn("python", ["-m", "contextos.api", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: repoRoot,
-    env: { ...process.env, PYTHONPATH: "backend/src", CONTEXTOS_DISABLE_LLM: "1" },
+    env: { ...process.env, PYTHONPATH: "backend/src", CONTEXTOS_DISABLE_LLM: "1", CONTEXTOS_RUNTIME_STATE_PATH: storagePath },
     stdio: "ignore",
   });
   const url = `http://127.0.0.1:${port}`;
   await waitForServer(`${url}/health`);
   return {
     url,
-    close() {
+    async close() {
       child.kill();
-      return once(child, "exit").catch(() => {});
+      await once(child, "exit").catch(() => {});
+      await rm(stateDir, { recursive: true, force: true });
     },
   };
 }

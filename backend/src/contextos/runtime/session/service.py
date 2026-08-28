@@ -28,3 +28,6 @@ class SessionService:
         if session is None:
             raise SessionNotFound(session_id)
         return session
+
+    def list_sessions(self) -> list[Session]:
+        return self._repository.list()

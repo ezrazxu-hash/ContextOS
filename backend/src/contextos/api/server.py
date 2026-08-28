@@ -14,7 +14,7 @@ from contextos.api.env import load_backend_env
 from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
-from contextos.api.routes.sessions import get_session, get_session_messages, post_session, post_session_message
+from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, post_session, post_session_message
 from contextos.api.routes.timelines import list_session_timelines
 from contextos.provider.base.chat_client import ChatCompletionClient
 from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
@@ -272,6 +272,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if parsed.path == "/health":
                 self._send_json(200, {"status": "ok"})
+                return
+
+            if len(segments) == 2 and segments == ["api", "sessions"]:
+                self._send_route_response(list_sessions(services.session_service))
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:

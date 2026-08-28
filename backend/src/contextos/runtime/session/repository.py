@@ -22,6 +22,13 @@ class InMemorySessionRepository:
             return _session_from_dict(record) if record is not None else None
         return self._sessions.get(session_id)
 
+    def list(self) -> list[Session]:
+        if self._store is not None:
+            sessions = [_session_from_dict(record) for record in self._store.list_records("sessions")]
+        else:
+            sessions = list(self._sessions.values())
+        return sorted(sessions, key=lambda session: (session.created_at, session.id))
+
 
 def _session_from_dict(record: dict[str, object]) -> Session:
     return Session(

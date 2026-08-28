@@ -17,6 +17,15 @@ def post_session(payload: dict[str, object], service: SessionService, request_id
     }
 
 
+def list_sessions(service: SessionService) -> dict[str, object]:
+    return {
+        "status": 200,
+        "body": {
+            "sessions": [session.to_dict() for session in service.list_sessions()],
+        },
+    }
+
+
 def get_session(session_id: str, service: SessionService, request_id: str = "req-session-get") -> dict[str, object]:
     try:
         session = service.get_session(session_id)

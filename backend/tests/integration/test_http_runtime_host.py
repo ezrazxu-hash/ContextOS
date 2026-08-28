@@ -89,6 +89,50 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(response["status"], 400)
         self.assertEqual(response["body"]["error"]["code"], "timeline.invalid")
 
+    def test_host_lists_created_sessions_for_workspace_navigation(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            first = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            second = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            sessions = get_json(f"{host.url}/api/sessions")
+        finally:
+            host.stop()
+
+        session_ids = [session["id"] for session in sessions["sessions"]]
+        self.assertIn("demo-session", session_ids)
+        self.assertIn(first["id"], session_ids)
+        self.assertIn(second["id"], session_ids)
+        self.assertEqual(len(session_ids), len(set(session_ids)))
+
+    def test_host_restores_all_empty_sessions_from_runtime_state(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            host = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            host.start()
+            try:
+                first = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+                second = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+                third = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            finally:
+                host.stop()
+
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            restarted.start()
+            try:
+                sessions = get_json(f"{restarted.url}/api/sessions")
+            finally:
+                restarted.stop()
+
+        session_ids = [session["id"] for session in sessions["sessions"]]
+        self.assertIn(first["id"], session_ids)
+        self.assertIn(second["id"], session_ids)
+        self.assertIn(third["id"], session_ids)
+
     def test_chat_stream_uses_latest_user_message_and_persists_assistant_response(self) -> None:
         from contextos.api.server import create_http_runtime_host
 

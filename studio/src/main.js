@@ -5,17 +5,20 @@ const ROUTES = ["/chat", "/workflow", "/template", "/debug"];
 const DEFAULT_SESSION_ID = "demo-session";
 const DEFAULT_TIMELINE_ID = "demo-timeline";
 const app = document.querySelector("#app");
+let routeLoadVersion = 0;
 
 const state = {
-  config: { apiBaseUrl: "http://localhost:8000", sseBaseUrl: "http://localhost:8000", mockRuntime: true },
+  config: { apiBaseUrl: "http://localhost:18000", sseBaseUrl: "http://localhost:18000", mockRuntime: true },
   route: routePath(window.location.pathname),
   selection: { sessionId: DEFAULT_SESSION_ID, timelineId: DEFAULT_TIMELINE_ID, messageId: null, traceId: null },
   loading: false,
+  creatingSession: false,
   toast: null,
   leftCollapsed: false,
   rightCollapsed: false,
   rightTab: "context",
   messages: [],
+  sessions: [demoFixtures.session],
   debugIndex: null,
   contextItems: [],
   workflowNodes: demoTemplateManifest.graph.nodes.slice(0, 4).map((node, index) => ({
@@ -56,33 +59,53 @@ async function loadConfig() {
 }
 
 async function loadRouteData() {
+  const loadVersion = ++routeLoadVersion;
+  const requestedRoute = state.route;
+  const requestedSessionId = state.selection.sessionId;
   state.loading = true;
   state.toast = { tone: "loading", text: "Loading runtime projection" };
   render();
   try {
     const client = runtimeClient();
-    if (state.route === "/chat") {
-      const [messages, debugIndex] = await Promise.all([
-        client.fetchSessionMessages(state.selection.sessionId, state.selection.timelineId),
-        client.fetchDebugIndex(state.selection.sessionId),
+    if (requestedRoute === "/chat") {
+      const [debugIndex, sessions] = await Promise.all([
+        client.fetchDebugIndex(requestedSessionId),
+        fetchWorkspaceSessions(client),
       ]);
-      state.messages = messages.messages ?? [];
+      if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
       state.debugIndex = debugIndex;
-      state.contextItems = await client.fetchSessionContext(state.selection.sessionId);
-      state.selection.timelineId = state.selection.timelineId ?? debugIndex.session?.current_timeline_id ?? DEFAULT_TIMELINE_ID;
-    } else if (state.route === "/debug") {
-      state.debugIndex = await client.fetchDebugIndex(state.selection.sessionId, {
-        traceId: state.selection.traceId,
-        messageId: state.selection.messageId,
-      });
+      updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session);
+      state.selection.timelineId = resolveTimelineId(debugIndex, state.selection.timelineId);
+
+      const [messages, contextItems] = await Promise.all([
+        client.fetchSessionMessages(requestedSessionId, state.selection.timelineId),
+        client.fetchSessionContext(requestedSessionId),
+      ]);
+      if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
+      state.messages = messages.messages ?? [];
+      state.contextItems = contextItems;
+    } else if (requestedRoute === "/debug") {
+      const [debugIndex, sessions] = await Promise.all([
+        client.fetchDebugIndex(requestedSessionId, {
+          traceId: state.selection.traceId,
+          messageId: state.selection.messageId,
+        }),
+        fetchWorkspaceSessions(client),
+      ]);
+      if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
+      state.debugIndex = debugIndex;
+      updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session);
       state.messages = state.debugIndex.messages ?? state.messages;
       state.contextItems = contextFromDebug(state.debugIndex);
     }
     state.toast = { tone: "success", text: "Runtime projection ready" };
   } catch (error) {
+    if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
     state.toast = { tone: "error", text: error.message };
   } finally {
-    state.loading = false;
+    if (loadVersion === routeLoadVersion) {
+      state.loading = false;
+    }
   }
 }
 
@@ -123,25 +146,31 @@ function renderLeftRail() {
     return `<aside class="left-rail collapsed"><button data-action="toggle-left" aria-label="Expand navigation">></button></aside>`;
   }
   const currentSessionId = state.selection.sessionId ?? DEFAULT_SESSION_ID;
+  const sessions = workspaceSessions(currentSessionId);
   const timelines = state.debugIndex?.timelines ?? [demoFixtures.timeline];
   return `
     <aside class="left-rail">
       <div class="rail-head"><h2>Workspace</h2><button data-action="toggle-left" aria-label="Collapse navigation"><</button></div>
       <section>
         <h3>Sessions</h3>
-        <button data-action="select-session" data-session-id="${escapeAttr(currentSessionId)}" data-testid="session-${escapeAttr(currentSessionId)}" aria-pressed="true" class="nav-item selected">
-          <span>${escapeHtml(currentSessionId)}</span><small>${state.config.mockRuntime ? "mock" : "runtime"}</small>
-        </button>
+        ${sessions.map((session) => {
+          const selected = session.id === currentSessionId;
+          return `
+            <button data-action="select-session" data-session-id="${escapeAttr(session.id)}" data-testid="session-${escapeAttr(session.id)}" aria-pressed="${selected}" class="nav-item ${selected ? "selected" : ""}" title="${escapeAttr(session.id)}">
+              <span data-testid="workspace-item-label">${escapeHtml(displayResourceLabel(session))}</span><small>${escapeHtml(session.status ?? (state.config.mockRuntime ? "mock" : "runtime"))}</small>
+            </button>
+          `;
+        }).join("")}
       </section>
       <section>
         <h3>Timelines</h3>
         ${timelines.map((timeline) => `
-          <button data-action="select-timeline" data-timeline-id="${escapeAttr(timeline.id)}" data-testid="timeline-${escapeAttr(timeline.id)}" aria-pressed="${state.selection.timelineId === timeline.id}" class="nav-item ${state.selection.timelineId === timeline.id ? "selected" : ""}">
-            <span>${escapeHtml(timeline.id)}</span><small>${timeline.status ?? "active"}</small>
+          <button data-action="select-timeline" data-timeline-id="${escapeAttr(timeline.id)}" data-testid="timeline-${escapeAttr(timeline.id)}" aria-pressed="${state.selection.timelineId === timeline.id}" class="nav-item ${state.selection.timelineId === timeline.id ? "selected" : ""}" title="${escapeAttr(timeline.id)}">
+            <span data-testid="workspace-item-label">${escapeHtml(displayResourceLabel(timeline))}</span><small>${escapeHtml(timeline.status ?? "active")}</small>
           </button>
         `).join("")}
       </section>
-      <button class="secondary full" data-action="create-session">New Session</button>
+      <button class="secondary full" data-action="create-session" ${state.creatingSession ? "disabled" : ""}>${state.creatingSession ? "Creating" : "New Session"}</button>
     </aside>
   `;
 }
@@ -309,11 +338,13 @@ async function handleAction(event) {
     state.toast = { tone: "success", text: `${titleCase(state.templateTab)} section selected` };
     render();
   } else if (action === "select-session") {
-    state.selection.sessionId = target.dataset.sessionId;
     state.selection.messageId = null;
     state.selection.traceId = null;
-    await loadRouteData();
-    render();
+    const sessionId = target.dataset.sessionId;
+    const timelineId = timelineIdForSession(sessionId);
+    const query = new URLSearchParams({ sessionId });
+    if (timelineId) query.set("timelineId", timelineId);
+    await navigate(`${state.route}?${query}`);
   } else if (action === "select-timeline") {
     state.selection.timelineId = target.dataset.timelineId;
     state.toast = { tone: "success", text: `Timeline ${state.selection.timelineId} selected` };
@@ -337,16 +368,22 @@ async function handleAction(event) {
     await loadRouteData();
     render();
   } else if (action === "create-session") {
+    if (state.creatingSession) return;
+    state.creatingSession = true;
     state.toast = { tone: "loading", text: "Creating session" };
     render();
     try {
       const session = await runtimeClient().createSession();
+      updateWorkspaceSessions([session]);
       const timelineId = session.current_timeline_id ?? session.currentTimelineId ?? DEFAULT_TIMELINE_ID;
       await navigate(`/chat?sessionId=${encodeURIComponent(session.id)}&timelineId=${encodeURIComponent(timelineId)}`);
       state.toast = { tone: "success", text: "Session created" };
       render();
     } catch (error) {
       state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.creatingSession = false;
       render();
     }
   } else if (action === "add-workflow-node") {
@@ -462,6 +499,7 @@ function runtimeClient() {
 
 function realClient() {
   return {
+    fetchSessions: () => getJson("/api/sessions"),
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
     createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
     postSessionMessage: (sessionId, content, timelineId) => postJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content), timeline_id: timelineId }),
@@ -484,6 +522,9 @@ function realClient() {
 function mockClient() {
   const contextItems = demoFixtures.context.map(clone);
   return {
+    async fetchSessions() {
+      return { sessions: state.sessions.map(clone) };
+    },
     async fetchSessionMessages() {
       return { messages: demoFixtures.messages.map(clone), next_cursor: null };
     },
@@ -543,6 +584,75 @@ function selectedTrace() {
 
 function contextFromDebug(debugIndex) {
   return debugIndex?.context?.items ?? [];
+}
+
+function isCurrentRouteLoad(loadVersion, route, sessionId) {
+  return loadVersion === routeLoadVersion && state.route === route && state.selection.sessionId === sessionId;
+}
+
+async function fetchWorkspaceSessions(client) {
+  if (typeof client.fetchSessions !== "function") {
+    return null;
+  }
+  return client.fetchSessions();
+}
+
+function updateWorkspaceSessions(sessions, currentSession = null) {
+  const byId = new Map();
+  for (const session of state.sessions) {
+    if (session?.id) byId.set(session.id, session);
+  }
+  for (const session of sessions) {
+    if (session?.id) byId.set(session.id, session);
+  }
+  if (currentSession?.id) {
+    byId.set(currentSession.id, currentSession);
+  }
+  state.sessions = [...byId.values()];
+}
+
+function workspaceSessions(currentSessionId) {
+  const sessions = state.sessions.filter((session) => session?.id);
+  if (sessions.some((session) => session.id === currentSessionId)) {
+    return sessions;
+  }
+  return [
+    ...sessions,
+    {
+      id: currentSessionId,
+      agent_template_id: "research-agent",
+      workspace_id: "studio",
+      current_timeline_id: state.selection.timelineId,
+      status: state.config.mockRuntime ? "mock" : "runtime",
+    },
+  ];
+}
+
+function timelineIdForSession(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  return session?.current_timeline_id ?? session?.currentTimelineId ?? null;
+}
+
+function resolveTimelineId(debugIndex, requestedTimelineId) {
+  const timelines = debugIndex?.timelines ?? [];
+  if (requestedTimelineId && timelines.some((timeline) => timeline.id === requestedTimelineId)) {
+    return requestedTimelineId;
+  }
+  return debugIndex?.session?.current_timeline_id ?? debugIndex?.session?.currentTimelineId ?? timelines[0]?.id ?? DEFAULT_TIMELINE_ID;
+}
+
+function displayResourceLabel(resource) {
+  return resource.title ?? resource.name ?? resource.displayName ?? compactResourceId(resource.id);
+}
+
+function compactResourceId(id) {
+  const value = String(id ?? "");
+  if (value.length <= 22) return value;
+  const separator = value.indexOf("_");
+  if (separator > 0 && separator < value.length - 1) {
+    return `${value.slice(0, separator + 1)}${value.slice(separator + 1, separator + 9)}`;
+  }
+  return value.slice(0, 18);
 }
 
 function applyUrlSelection() {
@@ -638,7 +748,8 @@ function styleTag() {
     .trace-pill { background: var(--accent-soft); border-color: #b9cdfa; color: #1d4ed8; }
     .composer { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; }
     textarea { resize: none; min-height: 42px; max-height: 140px; border: 0; outline: 0; background: transparent; padding: 8px; }
-    .nav-item { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 8px; text-align: left; margin-bottom: 8px; }
+    .nav-item { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; margin-bottom: 8px; overflow: hidden; }
+    .nav-item span, .nav-item small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item small { color: var(--muted); }
     .selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
     .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
