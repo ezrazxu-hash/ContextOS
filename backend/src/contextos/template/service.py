@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from contextos.runtime.graph.runtime_context import RuntimeContext
+from contextos.runtime.persistence.json_store import JsonRuntimeStore
 from contextos.template.compiler.langgraph_compiler import LangGraphManifestCompiler
 from contextos.template.extension.registry import ExtensionRegistry
 from contextos.template.manifest.parser import parse_manifest
@@ -31,27 +32,36 @@ class TemplateValidationResult:
 
 
 class TemplateService:
-    def __init__(self) -> None:
+    def __init__(self, store: JsonRuntimeStore | None = None) -> None:
+        self._store = store
         self._templates: dict[str, TemplateRecord] = {}
 
     def save(self, manifest_payload: dict[str, Any]) -> TemplateRecord:
         manifest = parse_manifest(manifest_payload)
         record = TemplateRecord(template_id=manifest.template.id, manifest_payload=deepcopy(manifest_payload))
-        self._templates[record.template_id] = record
+        self._save_record(record)
         return record
 
     def update(self, template_id: str, manifest_payload: dict[str, Any]) -> TemplateRecord:
         manifest = parse_manifest(manifest_payload)
         record = TemplateRecord(template_id=template_id, manifest_payload=deepcopy(manifest_payload))
-        self._templates[manifest.template.id] = record
-        if manifest.template.id != template_id and template_id in self._templates:
-            del self._templates[template_id]
+        self._save_record(record)
+        if manifest.template.id != template_id:
+            self._remove_record(template_id)
         return record
 
+    def list(self) -> list[TemplateRecord]:
+        if self._store is not None:
+            records = [self._record_from_dict(record) for record in self._store.list_records("templates")]
+        else:
+            records = list(self._templates.values())
+        return sorted(records, key=lambda record: record.template_id)
+
     def get(self, template_id: str) -> TemplateRecord:
-        if template_id not in self._templates:
+        record = self._get_record(template_id)
+        if record is None:
             raise TemplateNotFound(template_id)
-        return self._templates[template_id]
+        return record
 
     def validate(
         self,
@@ -90,3 +100,25 @@ class TemplateService:
     ) -> dict[str, object]:
         graph = self.compile(template_id, extension_registry, tool_registry, compiler)
         return graph.run(graph_state, runtime_context)
+
+    def _save_record(self, record: TemplateRecord) -> None:
+        if self._store is not None:
+            self._store.save_record("templates", record.template_id, record.to_dict())
+        else:
+            self._templates[record.template_id] = record
+
+    def _get_record(self, template_id: str) -> TemplateRecord | None:
+        if self._store is not None:
+            record = self._store.get_record("templates", template_id)
+            return self._record_from_dict(record) if record is not None else None
+        return self._templates.get(template_id)
+
+    def _remove_record(self, template_id: str) -> None:
+        if self._store is not None:
+            self._store.remove_record("templates", template_id)
+        else:
+            self._templates.pop(template_id, None)
+
+    @staticmethod
+    def _record_from_dict(record: dict[str, Any]) -> TemplateRecord:
+        return TemplateRecord(template_id=str(record["id"]), manifest_payload=deepcopy(record["manifest"]))

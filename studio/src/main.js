@@ -15,6 +15,7 @@ const state = {
   creatingSession: false,
   deletingSessionId: null,
   openSessionMenuId: null,
+  sessionMenuPosition: null,
   toast: null,
   leftCollapsed: false,
   rightCollapsed: false,
@@ -27,6 +28,13 @@ const state = {
     ...node,
     position: { x: 60 + index * 140, y: 80 + (index % 2) * 110 },
   })),
+  workflowEdges: demoTemplateManifest.graph.edges.map(clone),
+  workflowTemplates: [],
+  workflowSelectedTemplateId: demoTemplateManifest.template.id,
+  workflowName: demoTemplateManifest.template.name,
+  workflowDirty: false,
+  workflowSaving: false,
+  workflowDrag: null,
   workflowSelectedNodeId: "planner",
   templateTab: "basic",
   sending: false,
@@ -100,6 +108,16 @@ async function loadRouteData() {
       updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session, { replace: true });
       state.messages = state.debugIndex.messages ?? state.messages;
       state.contextItems = contextFromDebug(state.debugIndex);
+    } else if (requestedRoute === "/workflow") {
+      const templates = await client.fetchTemplates();
+      if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
+      state.workflowTemplates = templates.templates ?? [];
+      const templateId = workflowIdFromUrl() ?? state.workflowSelectedTemplateId;
+      if (templateId && state.workflowTemplates.some((template) => template.id === templateId)) {
+        const template = await client.fetchTemplate(templateId);
+        if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
+        loadWorkflowManifest(template.manifest, template.id);
+      }
     }
     state.toast = { tone: "success", text: "Runtime projection ready" };
   } catch (error) {
@@ -121,6 +139,7 @@ function render() {
         <main class="main-pane" data-testid="main-pane">${renderMainPane()}</main>
         ${renderRightRail()}
       </div>
+      ${renderSessionMenuOverlay()}
       ${renderToast()}
     </div>
     ${styleTag()}
@@ -162,13 +181,12 @@ function renderLeftRail() {
           const deleting = state.deletingSessionId === session.id;
           const menuOpen = state.openSessionMenuId === session.id;
           return `
-            <div class="session-row">
+            <div class="session-row ${menuOpen ? "menu-open" : ""}">
               <button data-action="select-session" data-session-id="${escapeAttr(session.id)}" data-testid="session-${escapeAttr(session.id)}" aria-pressed="${selected}" class="nav-item ${selected ? "selected" : ""}" title="${escapeAttr(session.id)}">
                 <span data-testid="workspace-item-label">${escapeHtml(label)}</span><small>${escapeHtml(session.status ?? (state.config.mockRuntime ? "mock" : "runtime"))}</small>
               </button>
               <div class="session-menu-host">
-                <button data-action="toggle-session-menu" data-menu-session-id="${escapeAttr(session.id)}" class="session-menu-trigger" aria-label="Session actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Session actions" ${deleting ? "disabled" : ""}>⋮</button>
-                ${menuOpen ? `<div class="session-menu" data-testid="session-menu-${escapeAttr(session.id)}" role="menu"><button data-action="delete-session" data-delete-session-id="${escapeAttr(session.id)}" role="menuitem">Delete</button></div>` : ""}
+                <button data-action="toggle-session-menu" data-menu-session-id="${escapeAttr(session.id)}" class="session-menu-trigger" aria-label="Session actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Session actions" ${deleting ? "disabled" : ""}>...</button>
               </div>
             </div>
           `;
@@ -253,13 +271,25 @@ function renderWorkflow() {
   return `
     <section class="workflow-page">
       <div class="page-head">
-        <div><h1 data-testid="main-title">Workflow Builder</h1><p>Local manifest draft. Runtime save/validate API is not implemented in this HTTP host.</p></div>
-        <div class="actions"><button class="secondary" data-action="add-workflow-node">Add Agent</button><button class="secondary" data-action="not-implemented">Validate</button><button data-action="not-implemented" data-testid="workflow-save">Save</button></div>
+        <div><h1 data-testid="main-title">Workflow Builder</h1><p>Workflow manifests from Runtime.</p></div>
+        <div class="actions"><button class="secondary" data-action="add-workflow-node">Add Agent</button><button data-action="save-workflow" data-testid="workflow-save" ${state.workflowSaving ? "disabled" : ""}>${state.workflowSaving ? "Saving" : "Save"}</button></div>
       </div>
       <div class="workflow-surface" data-testid="workflow-workbench">
-        <div class="node-palette"><h2>Node Library</h2>${["agent", "tool", "condition", "context_operator", "output"].map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.replace(/_/g, " ")}</button>`).join("")}</div>
-        <div class="graph-canvas">${state.workflowNodes.map((node) => `<button data-action="select-workflow-node" data-node-id="${escapeAttr(node.id)}" class="graph-node ${state.workflowSelectedNodeId === node.id ? "selected" : ""}" style="left:${node.position.x}px;top:${node.position.y}px">${escapeHtml(node.type)}</button>`).join("")}</div>
-        <div class="node-config"><h2>Node Config</h2>${selected ? `<dl><dt>ID</dt><dd>${escapeHtml(selected.id)}</dd><dt>Type</dt><dd>${escapeHtml(selected.type)}</dd></dl>` : "<p>Select a node.</p>"}<button class="secondary" data-action="not-implemented">Apply Config</button></div>
+        <div class="node-palette">
+          <section>
+            <h2>Workflows</h2>
+            <button data-action="create-workflow" data-testid="workflow-new">+ New Workflow</button>
+            <div data-testid="workflow-list">${state.workflowTemplates.map((template) => `
+              <button data-action="open-workflow" data-workflow-id="${escapeAttr(template.id)}" class="${state.workflowSelectedTemplateId === template.id ? "selected" : ""}" title="${escapeAttr(template.id)}">${escapeHtml(template.name ?? template.id)}</button>
+            `).join("")}</div>
+          </section>
+          <section>
+            <h2>Node Library</h2>
+            ${["agent", "tool", "condition", "context_operator", "output"].map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.replace(/_/g, " ")}</button>`).join("")}
+          </section>
+        </div>
+        <div class="graph-canvas" data-testid="workflow-canvas">${state.workflowNodes.map((node) => `<button data-action="select-workflow-node" data-node-id="${escapeAttr(node.id)}" data-drag-workflow-node-id="${escapeAttr(node.id)}" class="graph-node ${state.workflowSelectedNodeId === node.id ? "selected" : ""}" style="left:${node.position.x}px;top:${node.position.y}px">${escapeHtml(node.type)}</button>`).join("")}</div>
+        <div class="node-config"><h2>Node Config</h2><label>Name<input data-testid="workflow-name" value="${escapeAttr(state.workflowName)}" /></label>${selected ? `<dl><dt>ID</dt><dd>${escapeHtml(selected.id)}</dd><dt>Type</dt><dd>${escapeHtml(selected.type)}</dd></dl>` : "<p>Select a node.</p>"}<button class="secondary" data-action="not-implemented">Apply Config</button></div>
       </div>
     </section>
   `;
@@ -315,8 +345,18 @@ function renderToast() {
   return state.toast ? `<div class="toast ${state.toast.tone}" data-testid="status-toast">${escapeHtml(state.toast.text)}</div>` : "";
 }
 
+function renderSessionMenuOverlay() {
+  if (!state.openSessionMenuId || !state.sessionMenuPosition) return "";
+  return `
+    <div class="session-menu" data-testid="session-menu-${escapeAttr(state.openSessionMenuId)}" role="menu" style="left:${state.sessionMenuPosition.left}px;top:${state.sessionMenuPosition.top}px">
+      <button data-action="delete-session" data-delete-session-id="${escapeAttr(state.openSessionMenuId)}" role="menuitem">Delete</button>
+    </div>
+  `;
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", handleAction));
+  document.querySelectorAll("[data-drag-workflow-node-id]").forEach((element) => element.addEventListener("pointerdown", handleWorkflowNodePointerDown));
   const composer = document.querySelector(".composer");
   composer?.addEventListener("submit", handleChatSubmit);
   const input = document.querySelector("[data-testid='composer-input']");
@@ -329,12 +369,18 @@ function bindEvents() {
   input?.addEventListener("input", () => {
     state.chatDraft = input.value;
   });
+  const workflowName = document.querySelector("[data-testid='workflow-name']");
+  workflowName?.addEventListener("input", () => {
+    state.workflowName = workflowName.value;
+    state.workflowDirty = true;
+  });
 }
 
 function handleDocumentClick(event) {
   if (!state.openSessionMenuId) return;
-  if (event.target.closest?.(".session-menu-host")) return;
+  if (event.target.closest?.(".session-menu-host, .session-menu")) return;
   state.openSessionMenuId = null;
+  state.sessionMenuPosition = null;
   render();
 }
 
@@ -359,6 +405,7 @@ async function handleAction(event) {
     render();
   } else if (action === "select-session") {
     state.openSessionMenuId = null;
+    state.sessionMenuPosition = null;
     state.selection.messageId = null;
     state.selection.traceId = null;
     const sessionId = target.dataset.sessionId;
@@ -410,7 +457,13 @@ async function handleAction(event) {
   } else if (action === "toggle-session-menu") {
     event.stopPropagation();
     const sessionId = target.dataset.menuSessionId;
-    state.openSessionMenuId = state.openSessionMenuId === sessionId ? null : sessionId;
+    if (state.openSessionMenuId === sessionId) {
+      state.openSessionMenuId = null;
+      state.sessionMenuPosition = null;
+    } else {
+      state.openSessionMenuId = sessionId;
+      state.sessionMenuPosition = sessionMenuPosition(target.getBoundingClientRect());
+    }
     render();
   } else if (action === "delete-session") {
     event.stopPropagation();
@@ -419,6 +472,7 @@ async function handleAction(event) {
     const session = state.sessions.find((item) => item.id === sessionId);
     const label = displayResourceLabel(session ?? { id: sessionId });
     state.openSessionMenuId = null;
+    state.sessionMenuPosition = null;
     if (!window.confirm(`Delete session ${label}?`)) {
       render();
       return;
@@ -458,6 +512,13 @@ async function handleAction(event) {
   } else if (action === "add-workflow-node") {
     addWorkflowNode(target.dataset.nodeType ?? "agent");
     render();
+  } else if (action === "create-workflow") {
+    createWorkflowDraft();
+    render();
+  } else if (action === "open-workflow") {
+    await openWorkflow(target.dataset.workflowId);
+  } else if (action === "save-workflow") {
+    await saveWorkflow();
   } else if (action === "select-workflow-node") {
     state.workflowSelectedNodeId = target.dataset.nodeId;
     render();
@@ -465,6 +526,44 @@ async function handleAction(event) {
     state.toast = { tone: "warning", text: "Not implemented in the current HTTP Runtime" };
     render();
   }
+}
+
+function handleWorkflowNodePointerDown(event) {
+  if (event.button !== 0) return;
+  const nodeId = event.currentTarget.dataset.dragWorkflowNodeId;
+  const node = state.workflowNodes.find((item) => item.id === nodeId);
+  const canvas = event.currentTarget.closest(".graph-canvas");
+  if (!node || !canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  state.workflowSelectedNodeId = node.id;
+  state.workflowDrag = {
+    nodeId: node.id,
+    offsetX: event.clientX - rect.left - node.position.x,
+    offsetY: event.clientY - rect.top - node.position.y,
+  };
+  event.preventDefault();
+  document.addEventListener("pointermove", handleWorkflowNodePointerMove);
+  document.addEventListener("pointerup", handleWorkflowNodePointerUp, { once: true });
+  render();
+}
+
+function handleWorkflowNodePointerMove(event) {
+  if (!state.workflowDrag) return;
+  const canvas = document.querySelector(".graph-canvas");
+  const node = state.workflowNodes.find((item) => item.id === state.workflowDrag.nodeId);
+  if (!canvas || !node) return;
+  const rect = canvas.getBoundingClientRect();
+  node.position = {
+    x: Math.max(0, Math.round(event.clientX - rect.left - state.workflowDrag.offsetX)),
+    y: Math.max(0, Math.round(event.clientY - rect.top - state.workflowDrag.offsetY)),
+  };
+  state.workflowDirty = true;
+  render();
+}
+
+function handleWorkflowNodePointerUp() {
+  state.workflowDrag = null;
+  document.removeEventListener("pointermove", handleWorkflowNodePointerMove);
 }
 
 async function handleChatSubmit(event) {
@@ -560,11 +659,117 @@ async function navigate(path) {
   render();
 }
 
+function createWorkflowDraft() {
+  const id = `workflow_${Date.now()}`;
+  state.workflowSelectedTemplateId = id;
+  state.workflowName = "New Workflow";
+  state.workflowNodes = [];
+  state.workflowEdges = [];
+  state.workflowSelectedNodeId = null;
+  state.workflowDirty = true;
+}
+
+async function openWorkflow(templateId) {
+  if (!templateId) return;
+  try {
+    const template = await runtimeClient().fetchTemplate(templateId);
+    loadWorkflowManifest(template.manifest, template.id);
+    history.pushState({}, "", `/workflow?templateId=${encodeURIComponent(templateId)}`);
+    state.toast = { tone: "success", text: "Workflow loaded" };
+  } catch (error) {
+    state.toast = { tone: "error", text: error.message };
+  }
+  render();
+}
+
+async function saveWorkflow() {
+  if (state.workflowSaving) return;
+  state.workflowSaving = true;
+  state.toast = { tone: "loading", text: "Saving workflow" };
+  render();
+  try {
+    const saved = await runtimeClient().saveTemplate(serializeWorkflowManifest());
+    updateWorkflowTemplates(saved);
+    loadWorkflowManifest(saved.manifest, saved.id);
+    state.toast = { tone: "success", text: "Workflow saved" };
+  } catch (error) {
+    state.toast = { tone: "error", text: error.message };
+  } finally {
+    state.workflowSaving = false;
+    render();
+  }
+}
+
 function addWorkflowNode(type) {
   const id = `${type}-${state.workflowNodes.length + 1}`.replace(/_/g, "-");
+  const firstNode = state.workflowNodes.length === 0;
   state.workflowNodes.push({ id, type, config: {}, position: { x: 80 + (state.workflowNodes.length % 4) * 150, y: 80 + Math.floor(state.workflowNodes.length / 4) * 120 } });
+  if (firstNode) {
+    state.workflowEdges = [{ from: "START", to: id }, { from: id, to: "END" }];
+  }
   state.workflowSelectedNodeId = id;
+  state.workflowDirty = true;
   state.toast = { tone: "success", text: `${titleCase(type.replace(/_/g, " "))} node added` };
+}
+
+function serializeWorkflowManifest() {
+  return {
+    template: {
+      id: state.workflowSelectedTemplateId || `workflow_${Date.now()}`,
+      name: state.workflowName.trim() || "Untitled Workflow",
+      version: "1.0.0",
+    },
+    graph: {
+      state_schema: "default_chat_state",
+      nodes: state.workflowNodes.map((node) => ({
+        id: node.id,
+        type: node.type,
+        config: { ...(node.config ?? {}) },
+        position: { ...(node.position ?? { x: 0, y: 0 }) },
+      })),
+      edges: state.workflowEdges.map(clone),
+    },
+    context: clone(demoTemplateManifest.context),
+    checkpoint: clone(demoTemplateManifest.checkpoint),
+    ui: clone(demoTemplateManifest.ui),
+  };
+}
+
+function loadWorkflowManifest(manifest, templateId = null) {
+  state.workflowSelectedTemplateId = templateId ?? manifest.template.id;
+  state.workflowName = manifest.template.name;
+  state.workflowNodes = (manifest.graph?.nodes ?? []).map((node, index) => ({
+    ...node,
+    config: { ...(node.config ?? {}) },
+    position: node.position ? { ...node.position } : defaultWorkflowPosition(index),
+  }));
+  state.workflowEdges = (manifest.graph?.edges ?? []).map(clone);
+  state.workflowSelectedNodeId = state.workflowNodes[0]?.id ?? null;
+  state.workflowDirty = false;
+}
+
+function updateWorkflowTemplates(template) {
+  const summary = workflowTemplateSummary(template);
+  const byId = new Map(state.workflowTemplates.map((item) => [item.id, item]));
+  byId.set(summary.id, summary);
+  state.workflowTemplates = [...byId.values()];
+}
+
+function workflowTemplateSummary(template) {
+  const manifest = template.manifest ?? template;
+  return {
+    id: template.id ?? manifest.template.id,
+    name: manifest.template.name,
+    version: manifest.template.version,
+  };
+}
+
+function defaultWorkflowPosition(index) {
+  return { x: 60 + index * 140, y: 80 + (index % 2) * 110 };
+}
+
+function workflowIdFromUrl() {
+  return new URLSearchParams(window.location.search).get("templateId");
 }
 
 function runtimeClient() {
@@ -574,6 +779,9 @@ function runtimeClient() {
 function realClient() {
   return {
     fetchSessions: () => getJson("/api/sessions"),
+    fetchTemplates: () => getJson("/api/templates"),
+    fetchTemplate: (templateId) => getJson(`/api/templates/${encodeURIComponent(templateId)}`),
+    saveTemplate: (manifest) => postJson("/api/templates", manifest),
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
     createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
     deleteSession: (sessionId) => deleteJson(`/api/sessions/${encodeURIComponent(sessionId)}`),
@@ -599,6 +807,16 @@ function mockClient() {
   return {
     async fetchSessions() {
       return { sessions: state.sessions.map(clone) };
+    },
+    async fetchTemplates() {
+      return { templates: state.workflowTemplates.length ? state.workflowTemplates.map(clone) : [workflowTemplateSummary({ id: demoTemplateManifest.template.id, manifest: demoTemplateManifest })] };
+    },
+    async fetchTemplate(templateId) {
+      if (templateId === state.workflowSelectedTemplateId) return { id: templateId, manifest: serializeWorkflowManifest() };
+      return { id: demoTemplateManifest.template.id, manifest: clone(demoTemplateManifest) };
+    },
+    async saveTemplate(manifest) {
+      return { id: manifest.template.id, manifest: clone(manifest) };
     },
     async fetchSessionMessages() {
       return { messages: demoFixtures.messages.map(clone), next_cursor: null };
@@ -730,6 +948,17 @@ function nextSessionAfterDelete(sessions, deletedSessionId) {
   return remaining[Math.min(deletedIndex, remaining.length - 1)];
 }
 
+function sessionMenuPosition(rect) {
+  const width = 112;
+  const rightSideLeft = rect.right + 4;
+  return {
+    left: rightSideLeft + width <= window.innerWidth - 8
+      ? rightSideLeft
+      : Math.max(8, rect.left - width - 4),
+    top: Math.max(8, rect.top),
+  };
+}
+
 function resolveTimelineId(debugIndex, requestedTimelineId) {
   const timelines = debugIndex?.timelines ?? [];
   if (requestedTimelineId && timelines.some((timeline) => timeline.id === requestedTimelineId)) {
@@ -845,13 +1074,14 @@ function styleTag() {
     .trace-pill { background: var(--accent-soft); border-color: #b9cdfa; color: #1d4ed8; }
     .composer { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; }
     textarea { resize: none; min-height: 42px; max-height: 140px; border: 0; outline: 0; background: transparent; padding: 8px; }
-    .session-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: start; margin-bottom: 8px; overflow: visible; }
+    .session-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; align-items: stretch; margin-bottom: 8px; overflow: visible; }
     .nav-item { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; margin-bottom: 8px; overflow: hidden; }
     .session-row .nav-item { margin-bottom: 0; }
-    .session-menu-host { min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-    .session-menu-trigger { width: 34px; min-height: 34px; padding: 6px 0; font-size: 18px; line-height: 1; color: var(--muted); }
-    .session-menu { z-index: 20; min-width: 104px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
-    .session-menu button { width: 100%; border: 0; padding: 8px 10px; text-align: left; color: var(--error); background: transparent; }
+    .session-menu-host { min-width: 0; display: flex; align-items: stretch; }
+    .session-menu-trigger { width: 34px; min-height: 34px; padding: 6px 0; font-size: 13px; line-height: 1; color: var(--muted); visibility: hidden; }
+    .session-row:hover .session-menu-trigger, .session-row.menu-open .session-menu-trigger { visibility: visible; }
+    .session-menu { position: fixed; z-index: 50; min-width: 112px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
+    .session-menu button { width: 100%; border: 0; padding: 7px 10px; text-align: left; color: var(--error); background: transparent; }
     .session-menu button:hover { background: #fff1f0; }
     .nav-item span, .nav-item small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item small { color: var(--muted); }
@@ -864,7 +1094,8 @@ function styleTag() {
     .node-palette, .node-config, .template-fields, .debug-grid section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
     .node-palette button { width: 100%; margin-bottom: 8px; text-align: left; }
     .graph-canvas { position: relative; min-height: 0; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(#e8edf3 1px, transparent 1px), linear-gradient(90deg, #e8edf3 1px, transparent 1px), #fff; background-size: 28px 28px; overflow: auto; }
-    .graph-node { position: absolute; min-width: 112px; height: 56px; background: #fff; }
+    .graph-node { position: absolute; min-width: 112px; height: 56px; background: #fff; cursor: grab; user-select: none; touch-action: none; }
+    .graph-node:active { cursor: grabbing; }
     .template-layout { display: flex; gap: 14px; min-height: 0; }
     .template-fields { flex: 1; display: grid; align-content: start; gap: 12px; }
     label { display: grid; gap: 6px; color: var(--muted); }

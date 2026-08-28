@@ -56,12 +56,67 @@ test("Studio app has working navigation chat send selection and disabled action 
     await page.getByTestId("nav-workflow").click();
     await expect(page.getByTestId("main-title")).toHaveText("Workflow Builder");
     await page.getByTestId("workflow-save").click();
-    await expect(page.getByTestId("status-toast")).toContainText("Not implemented");
+    await expect(page.getByTestId("status-toast")).toContainText("Workflow saved");
 
     await page.getByTestId("nav-debug").click();
     await expect(page.getByTestId("main-title")).toHaveText("Debug Inspector");
     await page.getByTestId("toggle-right-panel").click();
     await expect(page.getByTestId("right-panel")).toHaveAttribute("data-collapsed", "true");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Workflow page lists saves reloads and preserves dragged node positions", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await expect(page.getByTestId("main-title")).toHaveText("Workflow Builder");
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("workflow-name").fill("My Workflow A");
+    await page.getByRole("button", { name: "agent", exact: true }).click();
+    await page.getByRole("button", { name: "tool", exact: true }).click();
+
+    const node = page.locator(".graph-node", { hasText: "agent" }).first();
+    const otherNode = page.locator(".graph-node", { hasText: "tool" }).first();
+    const before = await node.boundingBox();
+    const otherBefore = await otherNode.boundingBox();
+    await node.hover();
+    await page.mouse.down();
+    await page.mouse.move((before?.x ?? 0) + 180, (before?.y ?? 0) + 90, { steps: 8 });
+    await page.mouse.up();
+    const after = await node.boundingBox();
+    const otherAfter = await otherNode.boundingBox();
+
+    expect(after?.x).toBeGreaterThan((before?.x ?? 0) + 80);
+    expect(after?.y).toBeGreaterThan((before?.y ?? 0) + 40);
+    expect(otherAfter?.x).toBe(otherBefore?.x);
+    expect(otherAfter?.y).toBe(otherBefore?.y);
+
+    await page.getByTestId("workflow-save").click();
+    await expect(page.getByTestId("status-toast")).toContainText("Workflow saved");
+    await expect(page.getByTestId("workflow-list")).toContainText("My Workflow A");
+
+    const templates = await (await page.request.get(`${studio.url}/api/templates`)).json();
+    const saved = templates.templates.find((template) => template.name === "My Workflow A");
+    expect(saved).toBeTruthy();
+    const loaded = await (await page.request.get(`${studio.url}/api/templates/${saved.id}`)).json();
+    expect(loaded.manifest.graph.nodes[0].position.x).toBeGreaterThan(120);
+    expect(loaded.manifest.graph.nodes[0].position.y).toBeGreaterThan(80);
+
+    await page.reload();
+    await expect(page.getByTestId("workflow-list")).toContainText("My Workflow A");
+    await page.getByRole("button", { name: /My Workflow A/ }).click();
+    const reopened = page.locator(".graph-node", { hasText: "agent" });
+    await expect(reopened).toBeVisible();
+    const reopenedBox = await reopened.boundingBox();
+    expect(reopenedBox?.x).toBeCloseTo(after?.x ?? 0, 1);
+    expect(reopenedBox?.y).toBeCloseTo(after?.y ?? 0, 1);
   } finally {
     await studio.close();
     await backend.close();

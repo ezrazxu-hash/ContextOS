@@ -48,7 +48,7 @@ test("New Session adds the created session to Workspace and keeps long ids compa
     await expect(createdSession).toHaveAttribute("title", sessionId);
     await expect(createdSession.locator("[data-testid='workspace-item-label']")).not.toHaveText(sessionId);
     await expect(createdSession.locator("[data-testid='workspace-item-label']")).toContainText(sessionId.slice(0, "session_".length + 8));
-    await expect(page.locator(`[data-action='toggle-session-menu'][data-menu-session-id='${sessionId}']`)).toHaveText("⋮");
+    await expect(page.locator(`[data-action='toggle-session-menu'][data-menu-session-id='${sessionId}']`)).toHaveText("...");
     await expect(page.locator(`[data-action='toggle-session-menu'][data-menu-session-id='${sessionId}']`)).toHaveAttribute("aria-expanded", "false");
 
     const createdTimeline = page.locator(`[data-timeline-id='${timelineId}']`);
@@ -359,17 +359,40 @@ test("Session overflow menu opens closes and allows only one menu at a time", as
     const sessionB = await createSession(page);
     const sessionC = await createSession(page);
 
+    const leftRail = page.locator(".left-rail");
+    const sessionBButton = page.locator(`[data-session-id='${sessionB}']`);
+    const sessionCButton = page.locator(`[data-session-id='${sessionC}']`);
     const menuB = page.locator(`[data-action='toggle-session-menu'][data-menu-session-id='${sessionB}']`);
     const menuC = page.locator(`[data-action='toggle-session-menu'][data-menu-session-id='${sessionC}']`);
+    await expect(menuB).toBeHidden();
+    const beforeRailBox = await leftRail.boundingBox();
+    const beforeSessionBox = await sessionBButton.boundingBox();
+    const beforeSessionCTop = (await sessionCButton.boundingBox())?.y;
+
+    await sessionBButton.hover();
+    await expect(menuB).toBeVisible();
     await menuB.click();
     await expect(menuB).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator(`[data-testid='session-menu-${sessionB}']`)).toBeVisible();
+    const floatingMenuB = page.locator(`[data-testid='session-menu-${sessionB}']`);
+    await expect(floatingMenuB).toBeVisible();
     await expect(page.locator(`[data-action='delete-session'][data-delete-session-id='${sessionB}']`)).toHaveText("Delete");
+    const afterRailBox = await leftRail.boundingBox();
+    const afterSessionBox = await sessionBButton.boundingBox();
+    const afterSessionCTop = (await sessionCButton.boundingBox())?.y;
+    const menuBox = await floatingMenuB.boundingBox();
+    expect(afterRailBox?.width).toBe(beforeRailBox?.width);
+    expect(afterSessionBox?.height).toBe(beforeSessionBox?.height);
+    expect(afterSessionCTop).toBe(beforeSessionCTop);
+    expect(menuBox?.width).toBeLessThanOrEqual(140);
+    expect(menuBox?.height).toBeLessThanOrEqual(48);
 
     await page.getByTestId("main-title").click();
     await expect(page.locator(`[data-testid='session-menu-${sessionB}']`)).toHaveCount(0);
+    await expect(menuB).toBeHidden();
 
+    await sessionBButton.hover();
     await menuB.click();
+    await sessionCButton.hover();
     await menuC.click();
     await expect(page.locator(`[data-testid='session-menu-${sessionB}']`)).toHaveCount(0);
     await expect(page.locator(`[data-testid='session-menu-${sessionC}']`)).toBeVisible();
@@ -607,6 +630,7 @@ async function acceptNextConfirm(page) {
 }
 
 async function openSessionMenu(page, sessionId) {
+  await page.locator(`[data-session-id='${sessionId}']`).hover();
   await page.locator(`[data-action='toggle-session-menu'][data-menu-session-id='${sessionId}']`).click();
   await expect(page.locator(`[data-testid='session-menu-${sessionId}']`)).toBeVisible();
 }

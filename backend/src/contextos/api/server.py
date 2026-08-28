@@ -15,6 +15,7 @@ from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
 from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, post_session, post_session_message, remove_session
+from contextos.api.routes.templates import get_template, list_templates, post_template, post_template_compile, post_template_run, post_template_validate, put_template
 from contextos.api.routes.timelines import list_session_timelines
 from contextos.provider.base.chat_client import ChatCompletionClient
 from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
@@ -37,6 +38,9 @@ from contextos.runtime.timeline.repository import InMemoryTimelineRepository
 from contextos.runtime.timeline.service import TimelineService
 from contextos.runtime.trace.collector import TraceCollector
 from contextos.runtime.trace.repository import InMemoryTraceRepository
+from contextos.template.extension.registry import ExtensionRegistry
+from contextos.template.service import TemplateService
+from contextos.tool.registry.registry import ToolRegistry
 
 
 @dataclass
@@ -47,6 +51,7 @@ class RuntimeServices:
     message_service: MessageService
     conversation_group_repository: InMemoryConversationGroupRepository
     trace_repository: InMemoryTraceRepository
+    template_service: TemplateService
     llm_client: ChatCompletionClient | None = None
 
     @property
@@ -90,6 +95,14 @@ class RuntimeServices:
     @property
     def trace_collector(self) -> TraceCollector:
         return TraceCollector(self.trace_repository)
+
+    @property
+    def extension_registry(self) -> ExtensionRegistry:
+        return ExtensionRegistry()
+
+    @property
+    def tool_registry(self) -> ToolRegistry:
+        return ToolRegistry()
 
     @property
     def debug_projection(self) -> DebugProjection:
@@ -166,6 +179,7 @@ def create_demo_services(
     message_service = MessageService(InMemoryMessageRepository(store))
     conversation_group_repository = InMemoryConversationGroupRepository(store)
     trace_repository = InMemoryTraceRepository()
+    template_service = TemplateService(store)
     services = RuntimeServices(
         session_repository,
         timeline_repository,
@@ -173,6 +187,7 @@ def create_demo_services(
         message_service,
         conversation_group_repository,
         trace_repository,
+        template_service,
         llm_client=llm_client or create_deepseek_client_from_env(),
     )
 
@@ -281,6 +296,14 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 self._send_route_response(list_sessions(services.session_service))
                 return
 
+            if len(segments) == 2 and segments == ["api", "templates"]:
+                self._send_route_response(list_templates(services.template_service))
+                return
+
+            if len(segments) == 3 and segments[:2] == ["api", "templates"]:
+                self._send_route_response(get_template(segments[2], services.template_service))
+                return
+
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
                 self._send_route_response(get_session(segments[2], services.session_service))
                 return
@@ -355,6 +378,44 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 self._send_route_response(response)
                 return
 
+            if len(segments) == 2 and segments == ["api", "templates"]:
+                self._send_route_response(post_template(payload, services.template_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "templates"] and segments[3] == "validate":
+                self._send_route_response(
+                    post_template_validate(
+                        segments[2],
+                        services.template_service,
+                        extension_registry=services.extension_registry,
+                        tool_registry=services.tool_registry,
+                    )
+                )
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "templates"] and segments[3] == "compile":
+                self._send_route_response(
+                    post_template_compile(
+                        segments[2],
+                        services.template_service,
+                        extension_registry=services.extension_registry,
+                        tool_registry=services.tool_registry,
+                    )
+                )
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "templates"] and segments[3] == "run":
+                self._send_route_response(
+                    post_template_run(
+                        segments[2],
+                        payload,
+                        services.template_service,
+                        extension_registry=services.extension_registry,
+                        tool_registry=services.tool_registry,
+                    )
+                )
+                return
+
             if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "messages":
                 session = services.session_repository.get(segments[2])
                 if session is None:
@@ -375,6 +436,17 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                         default_timeline_id=timeline.id,
                     )
                 )
+                return
+
+            self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
+
+        def do_PUT(self) -> None:
+            parsed = urlparse(self.path)
+            segments = [segment for segment in parsed.path.split("/") if segment]
+            payload = self._read_json_body()
+
+            if len(segments) == 3 and segments[:2] == ["api", "templates"]:
+                self._send_route_response(put_template(segments[2], payload, services.template_service))
                 return
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})

@@ -51,11 +51,12 @@ def _parse_graph(payload: dict[str, Any]) -> GraphSpec:
 
 def _parse_node(payload: dict[str, Any], index: int) -> NodeSpec:
     path = f"graph.nodes[{index}]"
-    _reject_unknown(payload, {"id", "type", "config", "extension"}, path)
+    _reject_unknown(payload, {"id", "type", "config", "position", "extension"}, path)
     return NodeSpec(
         id=str(_required(payload, "id", path)),
         type=str(_required(payload, "type", path)),
         config=dict(payload.get("config", {})),
+        position=dict(payload["position"]) if payload.get("position") is not None else None,
         extension=str(payload["extension"]) if payload.get("extension") is not None else None,
     )
 

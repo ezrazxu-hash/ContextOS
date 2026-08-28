@@ -14,6 +14,7 @@ class NodeSpec:
     id: str
     type: str
     config: dict[str, Any] = field(default_factory=dict)
+    position: dict[str, Any] | None = None
     extension: str | None = None
 
 

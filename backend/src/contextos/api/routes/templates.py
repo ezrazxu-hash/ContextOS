@@ -12,6 +12,10 @@ def post_template(payload: dict[str, object], template_service: TemplateService)
     return {"status": 201, "body": record.to_dict()}
 
 
+def list_templates(template_service: TemplateService) -> dict[str, object]:
+    return {"status": 200, "body": {"templates": [_template_summary(record) for record in template_service.list()]}}
+
+
 def get_template(template_id: str, template_service: TemplateService) -> dict[str, object]:
     try:
         return {"status": 200, "body": template_service.get(template_id).to_dict()}
@@ -98,4 +102,13 @@ def _not_found(template_id: str) -> dict[str, object]:
                 "status": 404,
             }
         },
+    }
+
+
+def _template_summary(record) -> dict[str, object]:
+    template = record.manifest_payload["template"]
+    return {
+        "id": record.template_id,
+        "name": template["name"],
+        "version": template["version"],
     }

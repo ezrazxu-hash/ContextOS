@@ -183,6 +183,44 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(response["status"], 404)
         self.assertEqual(response["body"]["error"]["code"], "session.not_found")
 
+    def test_host_persists_lists_and_runs_workflow_templates(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            payload = workflow_payload(
+                template_id="workflow-http",
+                name="HTTP Workflow",
+                output="hello workflow",
+                position={"x": 240, "y": 180},
+            )
+            host = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            host.start()
+            try:
+                created = post_json(f"{host.url}/api/templates", payload)
+                listed = get_json(f"{host.url}/api/templates")
+                loaded = get_json(f"{host.url}/api/templates/workflow-http")
+                run = post_json(
+                    f"{host.url}/api/templates/workflow-http/run",
+                    {"graph_state": {}, "session_id": "session-1", "timeline_id": "timeline-1", "trace_id": "trace-1"},
+                )
+            finally:
+                host.stop()
+
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            restarted.start()
+            try:
+                reloaded_list = get_json(f"{restarted.url}/api/templates")
+            finally:
+                restarted.stop()
+
+        self.assertEqual(created["id"], "workflow-http")
+        self.assertIn("workflow-http", [item["id"] for item in listed["templates"]])
+        self.assertEqual(loaded["manifest"]["graph"]["nodes"][0]["position"], {"x": 240, "y": 180})
+        self.assertEqual(run["graph_state"]["answer"], "hello workflow")
+        self.assertEqual(run["graph_state"]["visited_nodes"], ["agent"])
+        self.assertIn("workflow-http", [item["id"] for item in reloaded_list["templates"]])
+
     def test_deleted_demo_session_is_not_reseeded_after_restart(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -459,6 +497,31 @@ def sse_token_text(sse: str) -> str:
         if event_type == "token" and data is not None:
             parts.append(str(data["content"]))
     return "".join(parts)
+
+
+def workflow_payload(template_id: str, name: str, output: str, position: dict[str, int]) -> dict[str, object]:
+    return {
+        "template": {"id": template_id, "name": name, "version": "1.0.0"},
+        "graph": {
+            "state_schema": "default_chat_state",
+            "nodes": [
+                {
+                    "id": "agent",
+                    "type": "agent",
+                    "config": {"output_key": "answer", "output": output},
+                    "position": position,
+                }
+            ],
+            "edges": [{"from": "START", "to": "agent"}, {"from": "agent", "to": "END"}],
+        },
+        "context": {
+            "policy": "balanced",
+            "budget": {"high_watermark": 0.8, "target_watermark": 0.65},
+            "restore": {"mode": "auto", "max_tokens_per_restore": 12000, "max_restore_per_turn": 3},
+        },
+        "checkpoint": {"enabled": True},
+        "ui": {"editable_messages": True, "expose_context_panel": True},
+    }
 
 
 class RecordingLlmClient:
