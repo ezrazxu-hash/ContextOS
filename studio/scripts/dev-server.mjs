@@ -51,12 +51,18 @@ server.listen(port, () => {
 
 async function proxyHttp(request, response, baseUrl, path, options = {}) {
   const target = new URL(path, ensureTrailingSlash(baseUrl));
-  const upstream = await fetch(target, {
-    method: request.method,
-    headers: forwardedHeaders(request),
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request,
-    duplex: request.method === "GET" || request.method === "HEAD" ? undefined : "half",
-  });
+  let upstream;
+  try {
+    upstream = await fetch(target, {
+      method: request.method,
+      headers: forwardedHeaders(request),
+      body: request.method === "GET" || request.method === "HEAD" ? undefined : request,
+      duplex: request.method === "GET" || request.method === "HEAD" ? undefined : "half",
+    });
+  } catch (error) {
+    sendProxyUnavailable(response, target, error, options);
+    return;
+  }
   const headers = responseHeaders(upstream.headers, options);
   response.writeHead(upstream.status, headers);
   if (!upstream.body) {
@@ -67,6 +73,25 @@ async function proxyHttp(request, response, baseUrl, path, options = {}) {
     response.write(chunk);
   }
   response.end();
+}
+
+function sendProxyUnavailable(response, target, error, options) {
+  const payload = {
+    error: "runtime_proxy_unavailable",
+    message: `Runtime request failed for ${target.href}`,
+    cause: error?.cause?.code ?? error?.code ?? error?.message ?? "unknown",
+  };
+  if (options.sse) {
+    response.writeHead(502, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+    });
+    response.end(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
+    return;
+  }
+  response.writeHead(502, { "content-type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(payload));
 }
 
 async function sendStatic(response, relativePath) {

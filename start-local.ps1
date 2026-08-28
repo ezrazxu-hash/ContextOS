@@ -2,10 +2,11 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = $PSScriptRoot
 $BackendPort = 18000
 $StudioPort = 5173
-$BackendLog = Join-Path $RepoRoot "backend-runtime.log"
-$BackendErr = Join-Path $RepoRoot "backend-runtime.err.log"
-$StudioLog = Join-Path $RepoRoot "studio-dev.log"
-$StudioErr = Join-Path $RepoRoot "studio-dev.err.log"
+$LogDir = Join-Path $RepoRoot "logs"
+$BackendLog = Join-Path $LogDir "backend-runtime.log"
+$BackendErr = Join-Path $LogDir "backend-runtime.err.log"
+$StudioLog = Join-Path $LogDir "studio-dev.log"
+$StudioErr = Join-Path $LogDir "studio-dev.err.log"
 $BackendEnv = Join-Path $RepoRoot "backend/.env"
 
 function Get-ListeningPids([int[]]$Ports) {
@@ -56,6 +57,8 @@ function Import-DotEnv([string]$Path) {
 
 Stop-Ports @($BackendPort, $StudioPort)
 
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+
 Import-DotEnv $BackendEnv
 $env:PYTHONPATH = "backend/src"
 $backend = Start-Process `
@@ -90,4 +93,4 @@ Wait-HttpOk "http://127.0.0.1:$StudioPort/__contextos/config.json"
 
 Write-Output "Backend: http://127.0.0.1:$BackendPort PID $($backend.Id)"
 Write-Output "Studio:  http://localhost:$StudioPort PID $($studio.Id)"
-Write-Output "Logs:    backend-runtime.log, backend-runtime.err.log, studio-dev.log, studio-dev.err.log"
+Write-Output "Logs:    $LogDir"

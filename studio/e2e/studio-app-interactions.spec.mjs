@@ -123,6 +123,58 @@ test("Workflow page lists saves reloads and preserves dragged node positions", a
   }
 });
 
+test("Message edit textarea accepts user assistant and Chinese drafts", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+
+    const userCard = page.locator(".message-card.user").first();
+    const originalUserText = (await userCard.locator("p").innerText()).trim();
+    await startEditing(page, userCard);
+    const userEditor = page.locator("[data-message-edit-input]").first();
+    await userEditor.click();
+    await expect(userEditor).toBeFocused();
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.keyboard.type("User edit middle text", { delay: 5 });
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Backspace");
+    await expect(userEditor).toHaveValue("User edit middle txt");
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(userCard.locator("p")).toHaveText(originalUserText);
+
+    await startEditing(page, userCard);
+    const chineseEditor = page.locator("[data-message-edit-input]").first();
+    await chineseEditor.click();
+    await expect(chineseEditor).toBeFocused();
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await chineseEditor.dispatchEvent("compositionstart");
+    await page.keyboard.type("这是一段测试文字", { delay: 5 });
+    await chineseEditor.dispatchEvent("compositionend");
+    await expect(chineseEditor).toHaveValue("这是一段测试文字");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(userCard.locator("p")).toHaveText("这是一段测试文字");
+
+    const assistantCard = page.locator(".message-card.assistant").first();
+    await startEditing(page, assistantCard);
+    const assistantEditor = page.locator("[data-message-edit-input]").first();
+    await assistantEditor.click();
+    await expect(assistantEditor).toBeFocused();
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.keyboard.type("Assistant edited response", { delay: 5 });
+    await expect(assistantEditor).toHaveValue("Assistant edited response");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(assistantCard.locator("p")).toHaveText("Assistant edited response");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
 async function startBackend(port) {
   const stateDir = await mkdtemp(join(tmpdir(), "contextos-studio-app-"));
   const storagePath = join(stateDir, "runtime-state.json");
@@ -141,6 +193,13 @@ async function startBackend(port) {
       await rm(stateDir, { recursive: true, force: true });
     },
   };
+}
+
+async function startEditing(page, card) {
+  await card.hover();
+  await card.locator(".message-menu-trigger").click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  await expect(card.locator("[data-message-edit-input]")).toBeVisible();
 }
 
 async function startStudio(port, backendPort) {

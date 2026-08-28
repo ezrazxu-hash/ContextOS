@@ -402,6 +402,9 @@ function bindEvents() {
     state.chatDraft = input.value;
   });
   document.querySelectorAll("[data-message-edit-input]").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
     element.addEventListener("input", () => {
       if (state.editingMessageId === element.dataset.messageEditInput) {
         state.editingMessageDraft = element.value;

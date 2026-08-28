@@ -59,6 +59,22 @@ test("UI09-T02-TC02: API proxy preserves Runtime trace headers on errors", async
   }
 });
 
+test("UI09-T02-TC06: unavailable Runtime returns 502 without stopping dev server", async () => {
+  const studio = await startStudio({ apiBaseUrl: "http://127.0.0.1:1", sseBaseUrl: "http://127.0.0.1:1" });
+  try {
+    const response = await fetch(`${studio.url}/api/health`);
+    const body = await response.json();
+    const config = await fetch(`${studio.url}/__contextos/config.json`);
+
+    assert.equal(response.status, 502);
+    assert.equal(body.error, "runtime_proxy_unavailable");
+    assert.match(body.message, /127\.0\.0\.1:1|localhost:1/);
+    assert.equal(config.status, 200);
+  } finally {
+    await studio.close();
+  }
+});
+
 test("UI09-T02-TC03: disabled WS endpoint does not affect REST and SSE proxies", async () => {
   const runtime = await startRuntime((request, response) => {
     if (request.url === "/api/health") {
