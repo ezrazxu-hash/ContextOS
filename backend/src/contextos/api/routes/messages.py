@@ -37,6 +37,7 @@ def patch_message(
         operator=request.operator,
         reason=request.reason,
     )
+    message = message_service.update_message_content(message_id, request.new_content, revision.id)
     issues = EditImpactAnalyzer().analyze_message_tool_result_conflicts(
         request.new_content,
         [
@@ -57,7 +58,23 @@ def patch_message(
         "status": 200,
         "body": {
             "revision_id": revision.id,
+            "message": message.to_dict(),
             "impact": impact.to_dict(),
+        },
+    }
+
+
+def soft_delete_message(message_id: str, message_service: MessageService) -> dict[str, object]:
+    try:
+        deleted = message_service.soft_delete_message(message_id)
+    except MessageNotFound:
+        return _not_found(message_id)
+
+    return {
+        "status": 200,
+        "body": {
+            "message_ids": [message.id for message in deleted],
+            "message": deleted[0].to_dict() if deleted else None,
         },
     }
 

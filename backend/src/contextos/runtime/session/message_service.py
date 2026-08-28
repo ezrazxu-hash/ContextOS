@@ -1,7 +1,10 @@
 from uuid import uuid4
+from dataclasses import replace
+from datetime import datetime
 
 from contextos.runtime.session.message import MessageRole, MessageStatus, SessionMessage
 from contextos.runtime.persistence.json_store import JsonRuntimeStore
+from contextos.runtime.session.model import utc_now
 
 
 class MessageNotFound(Exception):
@@ -104,7 +107,7 @@ class MessageService:
         messages = [
             message
             for message in self._repository.list_by_session(session_id)
-            if after_cursor is None or message.cursor > after_cursor
+            if not message.is_deleted and (after_cursor is None or message.cursor > after_cursor)
         ]
         if timeline_id is not None:
             messages = [message for message in messages if message.timeline_id in (None, timeline_id)]
@@ -121,10 +124,54 @@ class MessageService:
     def remove_session_messages(self, session_id: str) -> int:
         return self._repository.remove_by_session(session_id)
 
+    def update_message_content(self, message_id: str, content: str, revision_id: str | None = None) -> SessionMessage:
+        message = self.get_message(message_id)
+        updated = replace(
+            message,
+            content=content,
+            revision_id=revision_id or message.revision_id,
+            user_modified=True,
+        )
+        return self._repository.save(updated)
+
+    def soft_delete_message(self, message_id: str) -> list[SessionMessage]:
+        target = self.get_message(message_id)
+        deleted_at = utc_now()
+        affected = self._messages_for_delete(target)
+        deleted: list[SessionMessage] = []
+        for message in affected:
+            updated = replace(message, is_deleted=True, deleted_at=message.deleted_at or deleted_at)
+            deleted.append(self._repository.save(updated))
+        return deleted
+
+    def _messages_for_delete(self, target: SessionMessage) -> list[SessionMessage]:
+        messages = [
+            message
+            for message in self._repository.list_by_session(target.session_id)
+            if _same_timeline_or_global(target, message)
+        ]
+        related_group_ids = {target.group_id, *target.context_group_ids} - {None}
+        if related_group_ids:
+            related = [
+                message
+                for message in messages
+                if message.group_id in related_group_ids or related_group_ids.intersection(message.context_group_ids)
+            ]
+            return related or [target]
+
+        related_tool_ids = set(target.tool_call_ids) | set(target.tool_result_ids)
+        if related_tool_ids:
+            related = [
+                message
+                for message in messages
+                if related_tool_ids.intersection(message.tool_call_ids) or related_tool_ids.intersection(message.tool_result_ids)
+            ]
+            return related or [target]
+
+        return [target]
+
 
 def _message_from_dict(record: dict[str, object]) -> SessionMessage:
-    from datetime import datetime
-
     return SessionMessage(
         id=str(record["id"]),
         session_id=str(record["session_id"]),
@@ -140,5 +187,13 @@ def _message_from_dict(record: dict[str, object]) -> SessionMessage:
         trace_id=str(record["trace_id"]) if record.get("trace_id") is not None else None,
         tool_call_ids=[str(item) for item in record.get("tool_call_ids", [])],
         tool_result_ids=[str(item) for item in record.get("tool_result_ids", [])],
+        revision_id=str(record["revision_id"]) if record.get("revision_id") is not None else None,
+        user_modified=bool(record.get("user_modified", False)),
+        is_deleted=bool(record.get("is_deleted", False)),
+        deleted_at=datetime.fromisoformat(str(record["deleted_at"])) if record.get("deleted_at") is not None else None,
         created_at=datetime.fromisoformat(str(record["created_at"])),
     )
+
+
+def _same_timeline_or_global(target: SessionMessage, message: SessionMessage) -> bool:
+    return target.timeline_id is None or message.timeline_id in (None, target.timeline_id)

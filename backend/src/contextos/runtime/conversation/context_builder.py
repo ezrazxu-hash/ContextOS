@@ -21,6 +21,8 @@ class ConversationContextBuilder:
                     message = self._message_service.get_message(message_id)
                 except MessageNotFound:
                     continue
+                if message.is_deleted:
+                    continue
                 if message.role not in (MessageRole.USER, MessageRole.ASSISTANT):
                     continue
                 if not message.content:

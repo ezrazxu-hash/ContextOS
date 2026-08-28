@@ -16,6 +16,11 @@ const state = {
   deletingSessionId: null,
   openSessionMenuId: null,
   sessionMenuPosition: null,
+  openMessageMenuId: null,
+  messageMenuPosition: null,
+  editingMessageId: null,
+  editingMessageDraft: "",
+  messageMutationId: null,
   toast: null,
   leftCollapsed: false,
   rightCollapsed: false,
@@ -140,6 +145,7 @@ function render() {
         ${renderRightRail()}
       </div>
       ${renderSessionMenuOverlay()}
+      ${renderMessageMenuOverlay()}
       ${renderToast()}
     </div>
     ${styleTag()}
@@ -235,7 +241,7 @@ function renderChat() {
         <div><h1 data-testid="main-title">Chat Workbench</h1><p>Session ${escapeHtml(state.selection.sessionId ?? "none")} / ${escapeHtml(state.selection.timelineId ?? "timeline")}</p></div>
         <button class="secondary" data-action="refresh-route" ${state.loading ? "disabled" : ""}>Refresh</button>
       </div>
-      <div class="messages" data-testid="message-list">${state.messages.map(renderMessage).join("")}</div>
+      <div class="messages" data-testid="message-list">${state.messages.filter((message) => !isDeletedMessage(message)).map(renderMessage).join("")}</div>
       <form class="composer" data-action="send-chat">
         <textarea data-testid="composer-input" placeholder="Message the agent. Enter sends, Shift+Enter adds a line." rows="1" ${state.sending || !hasSession ? "disabled" : ""}>${escapeHtml(state.chatDraft)}</textarea>
         <button data-testid="send-message" type="submit" ${state.sending || !hasSession ? "disabled" : ""}>${state.sending ? "Sending" : "Send"}</button>
@@ -246,16 +252,32 @@ function renderChat() {
 
 function renderMessage(message) {
   const selected = state.selection.messageId === message.id;
+  const editing = state.editingMessageId === message.id;
   const role = message.role ?? "assistant";
   const traceId = message.trace_id ?? message.traceId;
+  const menuOpen = state.openMessageMenuId === message.id;
+  const userModified = Boolean(message.user_modified ?? message.userModified ?? message.revision_id ?? message.revisionId);
   return `
-    <article class="message-card ${role} ${selected ? "selected" : ""}" data-action="select-message" data-message-id="${escapeAttr(message.id)}" data-testid="message-${escapeAttr(message.id)}" tabindex="0">
-      <header><strong>${role === "assistant" ? "Assistant" : role === "user" ? "User" : titleCase(role)}</strong><span>${message.status ?? "completed"}</span></header>
-      <p>${escapeHtml(message.content ?? "")}</p>
+    <article class="message-card ${role} ${selected ? "selected" : ""} ${menuOpen ? "menu-open" : ""}" data-action="select-message" data-message-id="${escapeAttr(message.id)}" data-testid="message-${escapeAttr(message.id)}" tabindex="0">
+      <button class="message-menu-trigger" data-action="toggle-message-menu" data-menu-message-id="${escapeAttr(message.id)}" aria-label="Message actions for ${escapeAttr(message.id)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Message actions" ${state.messageMutationId === message.id ? "disabled" : ""}>...</button>
+      <header><strong>${role === "assistant" ? "Assistant" : role === "user" ? "User" : titleCase(role)}</strong><span>${userModified ? "User Modified" : (message.status ?? "completed")}</span></header>
+      ${editing ? renderMessageEditor(message) : `<p>${escapeHtml(message.content ?? "")}</p>`}
       ${message.error ? `<p class="message-error">${escapeHtml(message.error)}</p>` : ""}
-      ${renderToolRelations(message)}
-      ${traceId ? `<button class="trace-pill" data-action="open-trace" data-trace-id="${escapeAttr(traceId)}" type="button">Trace ${escapeHtml(traceId)}</button>` : ""}
+      ${editing ? "" : renderToolRelations(message)}
+      ${!editing && traceId ? `<button class="trace-pill" data-action="open-trace" data-trace-id="${escapeAttr(traceId)}" type="button">Trace ${escapeHtml(traceId)}</button>` : ""}
     </article>
+  `;
+}
+
+function renderMessageEditor(message) {
+  return `
+    <div class="message-edit">
+      <textarea data-message-edit-input="${escapeAttr(message.id)}" aria-label="Edit message content" rows="4">${escapeHtml(state.editingMessageDraft)}</textarea>
+      <div class="message-edit-actions">
+        <button class="secondary" data-action="cancel-message-edit" data-edit-message-id="${escapeAttr(message.id)}" type="button">Cancel</button>
+        <button data-action="save-message-edit" data-edit-message-id="${escapeAttr(message.id)}" type="button" ${state.messageMutationId === message.id ? "disabled" : ""}>${state.messageMutationId === message.id ? "Saving" : "Save"}</button>
+      </div>
+    </div>
   `;
 }
 
@@ -354,6 +376,16 @@ function renderSessionMenuOverlay() {
   `;
 }
 
+function renderMessageMenuOverlay() {
+  if (!state.openMessageMenuId || !state.messageMenuPosition) return "";
+  return `
+    <div class="message-menu" data-testid="message-menu-${escapeAttr(state.openMessageMenuId)}" role="menu" style="left:${state.messageMenuPosition.left}px;top:${state.messageMenuPosition.top}px">
+      <button data-action="start-message-edit" data-edit-message-id="${escapeAttr(state.openMessageMenuId)}" role="menuitem">Edit</button>
+      <button data-action="delete-message" data-delete-message-id="${escapeAttr(state.openMessageMenuId)}" class="danger" role="menuitem">Delete</button>
+    </div>
+  `;
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", handleAction));
   document.querySelectorAll("[data-drag-workflow-node-id]").forEach((element) => element.addEventListener("pointerdown", handleWorkflowNodePointerDown));
@@ -369,6 +401,20 @@ function bindEvents() {
   input?.addEventListener("input", () => {
     state.chatDraft = input.value;
   });
+  document.querySelectorAll("[data-message-edit-input]").forEach((element) => {
+    element.addEventListener("input", () => {
+      if (state.editingMessageId === element.dataset.messageEditInput) {
+        state.editingMessageDraft = element.value;
+      }
+    });
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        state.editingMessageId = null;
+        state.editingMessageDraft = "";
+        render();
+      }
+    });
+  });
   const workflowName = document.querySelector("[data-testid='workflow-name']");
   workflowName?.addEventListener("input", () => {
     state.workflowName = workflowName.value;
@@ -377,11 +423,18 @@ function bindEvents() {
 }
 
 function handleDocumentClick(event) {
-  if (!state.openSessionMenuId) return;
-  if (event.target.closest?.(".session-menu-host, .session-menu")) return;
-  state.openSessionMenuId = null;
-  state.sessionMenuPosition = null;
-  render();
+  let changed = false;
+  if (state.openSessionMenuId && !event.target.closest?.(".session-menu-host, .session-menu")) {
+    state.openSessionMenuId = null;
+    state.sessionMenuPosition = null;
+    changed = true;
+  }
+  if (state.openMessageMenuId && !event.target.closest?.(".message-menu-trigger, .message-menu")) {
+    state.openMessageMenuId = null;
+    state.messageMenuPosition = null;
+    changed = true;
+  }
+  if (changed) render();
 }
 
 async function handleAction(event) {
@@ -507,6 +560,92 @@ async function handleAction(event) {
       render();
     } finally {
       state.deletingSessionId = null;
+      render();
+    }
+  } else if (action === "toggle-message-menu") {
+    event.stopPropagation();
+    const messageId = target.dataset.menuMessageId;
+    state.openSessionMenuId = null;
+    state.sessionMenuPosition = null;
+    if (state.openMessageMenuId === messageId) {
+      state.openMessageMenuId = null;
+      state.messageMenuPosition = null;
+    } else {
+      state.openMessageMenuId = messageId;
+      state.messageMenuPosition = sessionMenuPosition(target.getBoundingClientRect(), 124);
+    }
+    render();
+  } else if (action === "start-message-edit") {
+    event.stopPropagation();
+    const messageId = target.dataset.editMessageId;
+    const message = state.messages.find((item) => item.id === messageId);
+    state.openMessageMenuId = null;
+    state.messageMenuPosition = null;
+    if (message) {
+      state.editingMessageId = message.id;
+      state.editingMessageDraft = message.content ?? "";
+      state.selection.messageId = message.id;
+    }
+    render();
+  } else if (action === "cancel-message-edit") {
+    event.stopPropagation();
+    state.editingMessageId = null;
+    state.editingMessageDraft = "";
+    render();
+  } else if (action === "save-message-edit") {
+    event.stopPropagation();
+    const messageId = target.dataset.editMessageId;
+    if (!messageId || state.messageMutationId) return;
+    state.messageMutationId = messageId;
+    state.toast = { tone: "loading", text: "Saving message" };
+    render();
+    try {
+      const response = await runtimeClient().patchMessage(messageId, state.editingMessageDraft);
+      updateMessage(response.message ?? {
+        ...state.messages.find((message) => message.id === messageId),
+        content: state.editingMessageDraft,
+        revision_id: response.revision_id,
+        user_modified: true,
+      });
+      state.editingMessageId = null;
+      state.editingMessageDraft = "";
+      state.toast = { tone: "success", text: "Message saved" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.messageMutationId = null;
+      render();
+    }
+  } else if (action === "delete-message") {
+    event.stopPropagation();
+    const messageId = target.dataset.deleteMessageId;
+    if (!messageId || state.messageMutationId) return;
+    state.openMessageMenuId = null;
+    state.messageMenuPosition = null;
+    if (!window.confirm("Delete this message from the chat view?")) {
+      render();
+      return;
+    }
+    state.messageMutationId = messageId;
+    state.toast = { tone: "loading", text: "Deleting message" };
+    render();
+    try {
+      const response = await runtimeClient().deleteMessage(messageId);
+      const deletedIds = new Set(response.message_ids ?? response.messageIds ?? [messageId]);
+      state.messages = state.messages.filter((message) => !deletedIds.has(message.id));
+      if (deletedIds.has(state.selection.messageId)) {
+        state.selection.messageId = null;
+        state.selection.traceId = null;
+      }
+      state.toast = { tone: "success", text: "Message deleted" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.messageMutationId = null;
       render();
     }
   } else if (action === "add-workflow-node") {
@@ -785,6 +924,8 @@ function realClient() {
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
     createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
     deleteSession: (sessionId) => deleteJson(`/api/sessions/${encodeURIComponent(sessionId)}`),
+    patchMessage: (messageId, content) => patchJson(`/api/messages/${encodeURIComponent(messageId)}`, { new_content: content }),
+    deleteMessage: (messageId) => deleteJson(`/api/messages/${encodeURIComponent(messageId)}`),
     postSessionMessage: (sessionId, content, timelineId) => postJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content), timeline_id: timelineId }),
     fetchDebugIndex(sessionId, params = {}) {
       const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value)).toString();
@@ -819,13 +960,27 @@ function mockClient() {
       return { id: manifest.template.id, manifest: clone(manifest) };
     },
     async fetchSessionMessages() {
-      return { messages: demoFixtures.messages.map(clone), next_cursor: null };
+      const messages = state.messages.length ? state.messages : demoFixtures.messages;
+      return { messages: messages.filter((message) => !isDeletedMessage(message)).map(clone), next_cursor: null };
     },
     async createSession() {
       return { ...clone(demoFixtures.session), id: `local-session-${Date.now()}`, current_timeline_id: demoFixtures.timeline.id };
     },
     async deleteSession() {
       return {};
+    },
+    async patchMessage(messageId, content) {
+      const message = state.messages.find((item) => item.id === messageId) ?? demoFixtures.messages.find((item) => item.id === messageId);
+      const updated = { ...clone(message), content, revision_id: `local-revision-${Date.now()}`, user_modified: true };
+      return { revision_id: updated.revision_id, message: updated, impact: { triggered: true, requires_replay: false, checks: [] } };
+    },
+    async deleteMessage(messageId) {
+      const message = state.messages.find((item) => item.id === messageId) ?? demoFixtures.messages.find((item) => item.id === messageId);
+      if (message) {
+        message.is_deleted = true;
+        message.deleted_at = new Date().toISOString();
+      }
+      return { message_ids: [messageId], message };
     },
     async postSessionMessage(sessionId, content) {
       return { id: `local-user-${Date.now()}`, session_id: sessionId, role: "user", content, status: "completed", token_count: tokenEstimate(content), context_group_ids: [], checkpoint_id: null, trace_id: null, tool_call_ids: [], tool_result_ids: [] };
@@ -858,6 +1013,13 @@ async function postJson(path, payload) {
   return body;
 }
 
+async function patchJson(path, payload) {
+  const response = await fetch(path, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.error?.message ?? `Runtime request failed with ${response.status}`);
+  return body;
+}
+
 async function deleteJson(path) {
   const response = await fetch(path, { method: "DELETE" });
   const body = await response.json().catch(() => null);
@@ -876,6 +1038,14 @@ async function* streamSse(path) {
 
 function selectedMessage() {
   return state.messages.find((message) => message.id === state.selection.messageId) ?? null;
+}
+
+function updateMessage(updatedMessage) {
+  state.messages = state.messages.map((message) => (message.id === updatedMessage.id ? updatedMessage : message));
+}
+
+function isDeletedMessage(message) {
+  return Boolean(message?.is_deleted ?? message?.isDeleted);
 }
 
 function selectedTrace() {
@@ -948,8 +1118,7 @@ function nextSessionAfterDelete(sessions, deletedSessionId) {
   return remaining[Math.min(deletedIndex, remaining.length - 1)];
 }
 
-function sessionMenuPosition(rect) {
-  const width = 112;
+function sessionMenuPosition(rect, width = 112) {
   const rightSideLeft = rect.right + 4;
   return {
     left: rightSideLeft + width <= window.innerWidth - 8
@@ -1060,12 +1229,22 @@ function styleTag() {
     .page-head { flex: 0 0 auto; }
     .page-head p { color: var(--muted); margin: 0; }
     .messages { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 4px 16px; }
-    .message-card { width: min(820px, 92%); border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 13px 14px; cursor: pointer; }
+    .message-card { position: relative; width: min(820px, 92%); border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 13px 44px 13px 14px; cursor: pointer; }
     .message-card.user { align-self: flex-end; border-color: #c2d7cd; background: #f3fbf7; }
     .message-card.assistant { align-self: flex-start; border-color: #bfd0ec; background: #f8fbff; }
     .message-card.selected { outline: 2px solid var(--accent); }
     .message-card header { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); margin-bottom: 8px; }
     .message-card p { margin-bottom: 10px; white-space: pre-wrap; }
+    .message-menu-trigger { position: absolute; top: 8px; right: 8px; width: 30px; min-height: 30px; padding: 4px 0; font-size: 13px; line-height: 1; color: var(--muted); visibility: hidden; }
+    .message-card:hover .message-menu-trigger, .message-card:focus-within .message-menu-trigger, .message-card.menu-open .message-menu-trigger { visibility: visible; }
+    .message-menu { position: fixed; z-index: 55; min-width: 124px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
+    .message-menu button { width: 100%; border: 0; padding: 7px 10px; text-align: left; background: transparent; }
+    .message-menu button:hover { background: var(--accent-soft); }
+    .message-menu button.danger { color: var(--error); }
+    .message-menu button.danger:hover { background: #fff1f0; }
+    .message-edit { display: grid; gap: 8px; }
+    .message-edit textarea { width: 100%; min-height: 104px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; }
+    .message-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
     .message-error { color: var(--error); font-size: 13px; }
     .tool-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
     .tool-call, .tool-result, .trace-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: 12px; }

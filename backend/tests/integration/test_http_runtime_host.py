@@ -53,6 +53,47 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(created["content"], "Run the Studio interaction smoke.")
         self.assertIn("Run the Studio interaction smoke.", [message["content"] for message in messages["messages"]])
 
+    def test_host_persists_message_edit_and_soft_delete_across_restart(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            host = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            host.start()
+            try:
+                session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+                timeline_id = session["current_timeline_id"]
+                editable = post_json(
+                    f"{host.url}/api/sessions/{session['id']}/messages",
+                    {"role": "assistant", "content": "before edit", "token_count": 2, "timeline_id": timeline_id},
+                )
+                doomed = post_json(
+                    f"{host.url}/api/sessions/{session['id']}/messages",
+                    {"role": "user", "content": "hide me later", "token_count": 3, "timeline_id": timeline_id},
+                )
+                patched = patch_json(f"{host.url}/api/messages/{editable['id']}", {"new_content": "after edit"})
+                deleted = delete_json(f"{host.url}/api/messages/{doomed['id']}")
+            finally:
+                host.stop()
+
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            restarted.start()
+            try:
+                messages = get_json(f"{restarted.url}/api/sessions/{session['id']}/messages?timelineId={timeline_id}")
+            finally:
+                restarted.stop()
+
+            self.assertEqual(patched["message"]["content"], "after edit")
+            self.assertEqual(deleted["message_ids"], [doomed["id"]])
+            self.assertIn("after edit", [message["content"] for message in messages["messages"]])
+            self.assertNotIn("hide me later", [message["content"] for message in messages["messages"]])
+
+            persisted = json.loads(storage_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["messages"][editable["id"]]["content"], "after edit")
+            self.assertEqual(persisted["messages"][doomed["id"]]["content"], "hide me later")
+            self.assertEqual(persisted["messages"][doomed["id"]]["is_deleted"], True)
+            self.assertIsNotNone(persisted["messages"][doomed["id"]]["deleted_at"])
+
     def test_host_accepts_utf8_bom_json_message_post_over_http(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -428,6 +469,17 @@ def get_text(url: str) -> str:
 
 def post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
     return post_raw_json(url, json.dumps(payload).encode("utf-8"))
+
+
+def patch_json(url: str, payload: dict[str, object]) -> dict[str, object]:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def post_raw_json(url: str, payload: bytes) -> dict[str, object]:

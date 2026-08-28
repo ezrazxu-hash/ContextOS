@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from contextos.api.env import load_backend_env
 from contextos.api.routes.debug import get_debug_index
+from contextos.api.routes.messages import patch_message, soft_delete_message
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
 from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, post_session, post_session_message, remove_session
@@ -29,6 +30,7 @@ from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
 from contextos.runtime.debug.projection import DebugProjection
 from contextos.runtime.persistence.json_store import JsonRuntimeStore
 from contextos.runtime.session.message_service import InMemoryMessageRepository, MessageService
+from contextos.runtime.session.message_revision_service import MessageRevisionService
 from contextos.runtime.session.model import Session, SessionStatus
 from contextos.runtime.session.repository import InMemorySessionRepository
 from contextos.runtime.session.service import SessionService
@@ -49,6 +51,7 @@ class RuntimeServices:
     timeline_repository: InMemoryTimelineRepository
     checkpoint_store: InMemoryCheckpointStore
     message_service: MessageService
+    message_revision_service: MessageRevisionService
     conversation_group_repository: InMemoryConversationGroupRepository
     trace_repository: InMemoryTraceRepository
     template_service: TemplateService
@@ -177,6 +180,7 @@ def create_demo_services(
     timeline_repository = InMemoryTimelineRepository(store)
     checkpoint_store = InMemoryCheckpointStore(store)
     message_service = MessageService(InMemoryMessageRepository(store))
+    message_revision_service = MessageRevisionService()
     conversation_group_repository = InMemoryConversationGroupRepository(store)
     trace_repository = InMemoryTraceRepository()
     template_service = TemplateService(store)
@@ -185,6 +189,7 @@ def create_demo_services(
         timeline_repository,
         checkpoint_store,
         message_service,
+        message_revision_service,
         conversation_group_repository,
         trace_repository,
         template_service,
@@ -451,9 +456,31 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
 
+        def do_PATCH(self) -> None:
+            parsed = urlparse(self.path)
+            segments = [segment for segment in parsed.path.split("/") if segment]
+            payload = self._read_json_body()
+
+            if len(segments) == 3 and segments[:2] == ["api", "messages"]:
+                self._send_route_response(
+                    patch_message(
+                        segments[2],
+                        payload,
+                        services.message_service,
+                        services.message_revision_service,
+                    )
+                )
+                return
+
+            self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
+
         def do_DELETE(self) -> None:
             parsed = urlparse(self.path)
             segments = [segment for segment in parsed.path.split("/") if segment]
+
+            if len(segments) == 3 and segments[:2] == ["api", "messages"]:
+                self._send_route_response(soft_delete_message(segments[2], services.message_service))
+                return
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
                 self._send_route_response(

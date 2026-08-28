@@ -30,6 +30,10 @@ class SessionMessage:
     trace_id: str | None = None
     tool_call_ids: list[str] = field(default_factory=list)
     tool_result_ids: list[str] = field(default_factory=list)
+    revision_id: str | None = None
+    user_modified: bool = False
+    is_deleted: bool = False
+    deleted_at: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, object]:
@@ -48,5 +52,9 @@ class SessionMessage:
             "trace_id": self.trace_id,
             "tool_call_ids": list(self.tool_call_ids),
             "tool_result_ids": list(self.tool_result_ids),
+            "revision_id": self.revision_id,
+            "user_modified": self.user_modified,
+            "is_deleted": self.is_deleted,
+            "deleted_at": self.deleted_at.isoformat() if self.deleted_at is not None else None,
             "created_at": self.created_at.isoformat(),
         }
