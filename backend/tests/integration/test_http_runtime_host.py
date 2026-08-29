@@ -288,6 +288,58 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(session_after["current_timeline_id"], parent_timeline_id)
         self.assertEqual([timeline["id"] for timeline in timelines], [parent_timeline_id, child_timeline_id])
 
+    def test_host_delete_timeline_hides_it_keeps_child_and_preserves_own_records(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            session_id = str(session["id"])
+            parent_timeline_id = str(session["current_timeline_id"])
+            message = post_json(
+                f"{host.url}/api/sessions/{session_id}/messages",
+                {"role": "user", "content": "parent message", "token_count": 2, "timeline_id": parent_timeline_id},
+            )
+            semantic_edit = patch_json(f"{host.url}/api/messages/{message['id']}", {"new_content": "child message", "semantic": True})
+            child_timeline_id = str(semantic_edit["timeline"]["id"])
+
+            deleted = delete_json(f"{host.url}/api/timelines/{parent_timeline_id}")
+            timelines = get_json(f"{host.url}/api/sessions/{session_id}/timelines")
+            session_after = get_json(f"{host.url}/api/sessions/{session_id}")
+            child_messages = get_json(f"{host.url}/api/sessions/{session_id}/messages?timelineId={child_timeline_id}")
+            parent_messages = get_json(f"{host.url}/api/sessions/{session_id}/messages?timelineId={parent_timeline_id}")
+        finally:
+            host.stop()
+
+        self.assertEqual(deleted["timeline"]["id"], parent_timeline_id)
+        self.assertEqual(deleted["timeline"]["status"], "deleted")
+        self.assertEqual(deleted["current_timeline_id"], child_timeline_id)
+        self.assertEqual(session_after["current_timeline_id"], child_timeline_id)
+        self.assertEqual([timeline["id"] for timeline in timelines], [child_timeline_id])
+        self.assertEqual([message["content"] for message in child_messages["messages"]], ["child message"])
+        self.assertEqual([message["content"] for message in parent_messages["messages"]], ["parent message"])
+
+    def test_host_delete_only_timeline_clears_active_timeline(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            session_id = str(session["id"])
+            timeline_id = str(session["current_timeline_id"])
+
+            deleted = delete_json(f"{host.url}/api/timelines/{timeline_id}")
+            session_after = get_json(f"{host.url}/api/sessions/{session_id}")
+            timelines = get_json(f"{host.url}/api/sessions/{session_id}/timelines")
+        finally:
+            host.stop()
+
+        self.assertEqual(deleted["current_timeline_id"], None)
+        self.assertEqual(session_after["current_timeline_id"], None)
+        self.assertEqual(timelines, [])
+
     def test_host_delete_missing_session_returns_not_found(self) -> None:
         from contextos.api.server import create_http_runtime_host
 

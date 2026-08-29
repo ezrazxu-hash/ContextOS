@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+﻿import { expect, test } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -160,12 +160,13 @@ test("Message edit textarea accepts user assistant and Chinese drafts", async ({
     await chineseEditor.click();
     await expect(chineseEditor).toBeFocused();
     await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    const chineseDraft = "\u8fd9\u662f\u4e00\u6bb5\u6d4b\u8bd5\u6587\u5b57";
     await chineseEditor.dispatchEvent("compositionstart");
-    await page.keyboard.type("这是一段测试文字", { delay: 5 });
+    await page.keyboard.type(chineseDraft, { delay: 5 });
     await chineseEditor.dispatchEvent("compositionend");
-    await expect(chineseEditor).toHaveValue("这是一段测试文字");
+    await expect(chineseEditor).toHaveValue(chineseDraft);
     await page.getByRole("button", { name: "Save" }).click();
-    await expect(userCard.locator("p")).toHaveText("这是一段测试文字");
+    await expect(userCard.locator("p")).toHaveText(chineseDraft);
 
     const assistantCard = page.locator(".message-card.assistant").first();
     await startEditing(page, assistantCard);
@@ -222,6 +223,97 @@ test("Editing a user message forks timeline and streams a new assistant reply", 
   }
 });
 
+test("Timeline delete menu removes the current timeline and activates the adjacent timeline", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    const childTimelineId = await forkUserTimeline(page, "Hello, please reply with OK");
+    page.once("dialog", (dialog) => dialog.accept());
+    const deleteResponse = page.waitForResponse((response) => {
+      return response.request().method() === "DELETE" && response.url().includes(`/api/timelines/${childTimelineId}`) && response.status() === 200;
+    });
+
+    await openTimelineMenu(page, childTimelineId);
+    await page.locator(`[data-delete-timeline-id="${childTimelineId}"]`).click();
+    await deleteResponse;
+
+    await expect(page.getByTestId("status-toast")).toContainText("Timeline deleted");
+    await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveCount(0);
+    await expect(page.getByTestId("timeline-demo-timeline")).toHaveAttribute("data-current", "true");
+    await page.reload();
+    await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveCount(0);
+    await expect(page.getByTestId("timeline-demo-timeline")).toHaveAttribute("data-current", "true");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Timeline delete menu hides a parent timeline without breaking the current child", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    const childTimelineId = await forkUserTimeline(page, "Hello, please reply with OK");
+    page.once("dialog", (dialog) => dialog.accept());
+    const deleteResponse = page.waitForResponse((response) => {
+      return response.request().method() === "DELETE" && response.url().includes("/api/timelines/demo-timeline") && response.status() === 200;
+    });
+
+    await openTimelineMenu(page, "demo-timeline");
+    await page.locator('[data-delete-timeline-id="demo-timeline"]').click();
+    await deleteResponse;
+
+    await expect(page.getByTestId("status-toast")).toContainText("Timeline deleted");
+    await expect(page.getByTestId("timeline-demo-timeline")).toHaveCount(0);
+    await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveAttribute("data-current", "true");
+    await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("timeline-demo-timeline")).toHaveCount(0);
+    await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveAttribute("data-current", "true");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Timeline delete failure keeps the list current marker and messages unchanged", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    const childTimelineId = await forkUserTimeline(page, "Hello, please reply with OK");
+    await page.route(`**/api/timelines/${childTimelineId}`, (route) => {
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { message: "delete failed" } }),
+      });
+    });
+    page.once("dialog", (dialog) => dialog.accept());
+
+    await openTimelineMenu(page, childTimelineId);
+    await page.locator(`[data-delete-timeline-id="${childTimelineId}"]`).click();
+
+    await expect(page.getByTestId("status-toast")).toContainText("delete failed");
+    await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveAttribute("data-current", "true");
+    await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
 async function startBackend(port) {
   const stateDir = await mkdtemp(join(tmpdir(), "contextos-studio-app-"));
   const storagePath = join(stateDir, "runtime-state.json");
@@ -247,6 +339,36 @@ async function startEditing(page, card) {
   await card.locator(".message-menu-trigger").click();
   await page.getByRole("menuitem", { name: "Edit" }).click();
   await expect(card.locator("[data-message-edit-input]")).toBeVisible();
+}
+
+async function forkUserTimeline(page, content) {
+  const userCard = page.locator(".message-card.user").first();
+  await startEditing(page, userCard);
+  const editor = page.locator("[data-message-edit-input]").first();
+  await editor.click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await editor.fill(content);
+
+  const patchResponse = page.waitForResponse((response) => {
+    return response.request().method() === "PATCH" && response.url().includes("/api/messages/") && response.status() === 200;
+  });
+  const streamResponse = page.waitForResponse((response) => {
+    return response.url().includes("/sse/sessions/demo-session/chat") && response.status() === 200;
+  });
+  await page.getByRole("button", { name: "Save" }).click();
+
+  const patchBody = await (await patchResponse).json();
+  const childTimelineId = patchBody.timeline.id;
+  await streamResponse;
+  await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveAttribute("data-current", "true");
+  await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
+  return childTimelineId;
+}
+
+async function openTimelineMenu(page, timelineId) {
+  await page.locator(`[data-testid="timeline-${timelineId}"]`).hover();
+  await page.locator(`[data-menu-timeline-id="${timelineId}"]`).click();
+  await expect(page.getByTestId(`timeline-menu-${timelineId}`)).toBeVisible();
 }
 
 async function startStudio(port, backendPort) {

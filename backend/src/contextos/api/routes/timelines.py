@@ -37,3 +37,20 @@ def activate_timeline(timeline_id: str, service: TimelineService, request_id: st
         "body": timeline.to_dict(),
     }
 
+
+def remove_timeline(timeline_id: str, service: TimelineService, request_id: str = "req-timeline-delete") -> dict[str, object]:
+    try:
+        result = service.delete_timeline(timeline_id)
+    except TimelineNotFound:
+        return {
+            "status": 404,
+            "body": ApiError("timeline.not_found", "Timeline not found", request_id, 404).to_rest_payload(),
+        }
+    return {
+        "status": 200,
+        "body": {
+            "timeline": result.timeline.to_dict(),
+            "current_timeline_id": result.current_timeline_id,
+        },
+    }
+

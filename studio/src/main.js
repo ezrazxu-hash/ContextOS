@@ -14,8 +14,11 @@ const state = {
   loading: false,
   creatingSession: false,
   deletingSessionId: null,
+  deletingTimelineId: null,
   openSessionMenuId: null,
   sessionMenuPosition: null,
+  openTimelineMenuId: null,
+  timelineMenuPosition: null,
   openMessageMenuId: null,
   messageMenuPosition: null,
   editingMessageId: null,
@@ -93,13 +96,18 @@ async function loadRouteData() {
       updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session, { replace: true });
       state.selection.timelineId = resolveTimelineId(debugIndex, state.selection.timelineId);
 
-      const [messages, contextItems] = await Promise.all([
-        client.fetchSessionMessages(requestedSessionId, state.selection.timelineId),
-        client.fetchSessionContext(requestedSessionId, state.selection.timelineId),
-      ]);
-      if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
-      state.messages = messages.messages ?? [];
-      state.contextItems = contextItems;
+      if (!state.selection.timelineId) {
+        state.messages = [];
+        state.contextItems = [];
+      } else {
+        const [messages, contextItems] = await Promise.all([
+          client.fetchSessionMessages(requestedSessionId, state.selection.timelineId),
+          client.fetchSessionContext(requestedSessionId, state.selection.timelineId),
+        ]);
+        if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
+        state.messages = messages.messages ?? [];
+        state.contextItems = contextItems;
+      }
     } else if (requestedRoute === "/debug") {
       const [debugIndex, sessions] = await Promise.all([
         client.fetchDebugIndex(requestedSessionId, {
@@ -145,6 +153,7 @@ function render() {
         ${renderRightRail()}
       </div>
       ${renderSessionMenuOverlay()}
+      ${renderTimelineMenuOverlay()}
       ${renderMessageMenuOverlay()}
       ${renderToast()}
     </div>
@@ -204,10 +213,18 @@ function renderLeftRail() {
         ${timelines.map((timeline) => {
           const selected = state.selection.timelineId === timeline.id;
           const current = activeTimelineId === timeline.id;
+          const deleting = state.deletingTimelineId === timeline.id;
+          const menuOpen = state.openTimelineMenuId === timeline.id;
+          const label = displayResourceLabel(timeline);
           return `
-            <button data-action="select-timeline" data-timeline-id="${escapeAttr(timeline.id)}" data-testid="timeline-${escapeAttr(timeline.id)}" data-current="${current}" aria-pressed="${selected}" class="nav-item ${selected ? "selected" : ""} ${current ? "current" : ""}" title="${escapeAttr(timeline.id)}">
-              <span data-testid="workspace-item-label">${escapeHtml(displayResourceLabel(timeline))}</span><small>${current ? "Current" : escapeHtml(timeline.status ?? "active")}</small>
-            </button>
+            <div class="session-row ${menuOpen ? "menu-open" : ""}">
+              <button data-action="select-timeline" data-timeline-id="${escapeAttr(timeline.id)}" data-testid="timeline-${escapeAttr(timeline.id)}" data-current="${current}" aria-pressed="${selected}" class="nav-item ${selected ? "selected" : ""} ${current ? "current" : ""}" title="${escapeAttr(timeline.id)}">
+                <span data-testid="workspace-item-label">${escapeHtml(label)}</span><small>${current ? "Current" : escapeHtml(timeline.status ?? "active")}</small>
+              </button>
+              <div class="session-menu-host">
+                <button data-action="toggle-timeline-menu" data-menu-timeline-id="${escapeAttr(timeline.id)}" class="session-menu-trigger" aria-label="Timeline actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Timeline actions" ${deleting ? "disabled" : ""}>...</button>
+              </div>
+            </div>
           `;
         }).join("")}
       </section>
@@ -239,7 +256,7 @@ function renderMainPane() {
 }
 
 function renderChat() {
-  const hasSession = Boolean(state.selection.sessionId);
+  const canChat = Boolean(state.selection.sessionId && state.selection.timelineId);
   return `
     <section class="chat-workbench" data-testid="chat-workbench">
       <div class="page-head">
@@ -248,8 +265,8 @@ function renderChat() {
       </div>
       <div class="messages" data-testid="message-list">${state.messages.filter((message) => !isDeletedMessage(message)).map(renderMessage).join("")}</div>
       <form class="composer" data-action="send-chat">
-        <textarea data-testid="composer-input" placeholder="Message the agent. Enter sends, Shift+Enter adds a line." rows="1" ${state.sending || !hasSession ? "disabled" : ""}>${escapeHtml(state.chatDraft)}</textarea>
-        <button data-testid="send-message" type="submit" ${state.sending || !hasSession ? "disabled" : ""}>${state.sending ? "Sending" : "Send"}</button>
+        <textarea data-testid="composer-input" placeholder="Message the agent. Enter sends, Shift+Enter adds a line." rows="1" ${state.sending || !canChat ? "disabled" : ""}>${escapeHtml(state.chatDraft)}</textarea>
+        <button data-testid="send-message" type="submit" ${state.sending || !canChat ? "disabled" : ""}>${state.sending ? "Sending" : "Send"}</button>
       </form>
     </section>
   `;
@@ -381,6 +398,15 @@ function renderSessionMenuOverlay() {
   `;
 }
 
+function renderTimelineMenuOverlay() {
+  if (!state.openTimelineMenuId || !state.timelineMenuPosition) return "";
+  return `
+    <div class="session-menu" data-testid="timeline-menu-${escapeAttr(state.openTimelineMenuId)}" role="menu" style="left:${state.timelineMenuPosition.left}px;top:${state.timelineMenuPosition.top}px">
+      <button data-action="delete-timeline" data-delete-timeline-id="${escapeAttr(state.openTimelineMenuId)}" role="menuitem">Delete</button>
+    </div>
+  `;
+}
+
 function renderMessageMenuOverlay() {
   if (!state.openMessageMenuId || !state.messageMenuPosition) return "";
   return `
@@ -437,6 +463,11 @@ function handleDocumentClick(event) {
     state.sessionMenuPosition = null;
     changed = true;
   }
+  if (state.openTimelineMenuId && !event.target.closest?.(".session-menu-host, .session-menu")) {
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
+    changed = true;
+  }
   if (state.openMessageMenuId && !event.target.closest?.(".message-menu-trigger, .message-menu")) {
     state.openMessageMenuId = null;
     state.messageMenuPosition = null;
@@ -467,6 +498,8 @@ async function handleAction(event) {
   } else if (action === "select-session") {
     state.openSessionMenuId = null;
     state.sessionMenuPosition = null;
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
     state.selection.messageId = null;
     state.selection.traceId = null;
     const sessionId = target.dataset.sessionId;
@@ -477,6 +510,8 @@ async function handleAction(event) {
   } else if (action === "select-timeline") {
     const timelineId = target.dataset.timelineId;
     if (!timelineId || !state.selection.sessionId) return;
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
     state.selection.messageId = null;
     state.selection.traceId = null;
     const client = runtimeClient();
@@ -533,12 +568,31 @@ async function handleAction(event) {
   } else if (action === "toggle-session-menu") {
     event.stopPropagation();
     const sessionId = target.dataset.menuSessionId;
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
+    state.openMessageMenuId = null;
+    state.messageMenuPosition = null;
     if (state.openSessionMenuId === sessionId) {
       state.openSessionMenuId = null;
       state.sessionMenuPosition = null;
     } else {
       state.openSessionMenuId = sessionId;
       state.sessionMenuPosition = sessionMenuPosition(target.getBoundingClientRect());
+    }
+    render();
+  } else if (action === "toggle-timeline-menu") {
+    event.stopPropagation();
+    const timelineId = target.dataset.menuTimelineId;
+    state.openSessionMenuId = null;
+    state.sessionMenuPosition = null;
+    state.openMessageMenuId = null;
+    state.messageMenuPosition = null;
+    if (state.openTimelineMenuId === timelineId) {
+      state.openTimelineMenuId = null;
+      state.timelineMenuPosition = null;
+    } else {
+      state.openTimelineMenuId = timelineId;
+      state.timelineMenuPosition = sessionMenuPosition(target.getBoundingClientRect());
     }
     render();
   } else if (action === "delete-session") {
@@ -585,11 +639,57 @@ async function handleAction(event) {
       state.deletingSessionId = null;
       render();
     }
+  } else if (action === "delete-timeline") {
+    event.stopPropagation();
+    const timelineId = target.dataset.deleteTimelineId;
+    if (!timelineId || state.deletingTimelineId) return;
+    const timeline = (state.debugIndex?.timelines ?? []).find((item) => item.id === timelineId);
+    const label = displayResourceLabel(timeline ?? { id: timelineId });
+    const sessionId = state.selection.sessionId;
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
+    if (!window.confirm(`Delete timeline ${label}?`)) {
+      render();
+      return;
+    }
+    state.deletingTimelineId = timelineId;
+    state.toast = { tone: "loading", text: "Deleting timeline" };
+    render();
+    try {
+      const response = await runtimeClient().deleteTimeline(timelineId);
+      const nextTimelineId = response.current_timeline_id ?? response.currentTimelineId ?? null;
+      state.selection.messageId = null;
+      state.selection.traceId = null;
+      if (sessionId) {
+        const query = new URLSearchParams({ sessionId });
+        if (nextTimelineId) {
+          query.set("timelineId", nextTimelineId);
+          await navigate(`/chat?${query}`);
+        } else {
+          state.selection.timelineId = null;
+          state.messages = [];
+          state.contextItems = [];
+          state.debugIndex = null;
+          history.pushState({}, "", `/chat?${query}`);
+          await loadRouteData();
+        }
+      }
+      state.toast = { tone: "success", text: "Timeline deleted" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.deletingTimelineId = null;
+      render();
+    }
   } else if (action === "toggle-message-menu") {
     event.stopPropagation();
     const messageId = target.dataset.menuMessageId;
     state.openSessionMenuId = null;
     state.sessionMenuPosition = null;
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
     if (state.openMessageMenuId === messageId) {
       state.openMessageMenuId = null;
       state.messageMenuPosition = null;
@@ -750,6 +850,11 @@ async function handleChatSubmit(event) {
   event.preventDefault();
   if (!state.selection.sessionId) {
     state.toast = { tone: "warning", text: "Select or create a session first" };
+    render();
+    return;
+  }
+  if (!state.selection.timelineId) {
+    state.toast = { tone: "warning", text: "Create or select a timeline first" };
     render();
     return;
   }
@@ -969,6 +1074,7 @@ function realClient() {
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
     createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
     deleteSession: (sessionId) => deleteJson(`/api/sessions/${encodeURIComponent(sessionId)}`),
+    deleteTimeline: (timelineId) => deleteJson(`/api/timelines/${encodeURIComponent(timelineId)}`),
     patchMessage: (messageId, content, options = {}) => patchJson(`/api/messages/${encodeURIComponent(messageId)}`, { new_content: content, semantic: Boolean(options.semantic) }),
     deleteMessage: (messageId) => deleteJson(`/api/messages/${encodeURIComponent(messageId)}`),
     activateTimeline: (timelineId) => postJson(`/api/timelines/${encodeURIComponent(timelineId)}/activate`, {}),
@@ -1014,6 +1120,9 @@ function mockClient() {
     },
     async deleteSession() {
       return {};
+    },
+    async deleteTimeline(timelineId) {
+      return { timeline: { ...clone(demoFixtures.timeline), id: timelineId, status: "deleted" }, current_timeline_id: null };
     },
     async patchMessage(messageId, content, options = {}) {
       const message = state.messages.find((item) => item.id === messageId) ?? demoFixtures.messages.find((item) => item.id === messageId);
@@ -1119,11 +1228,11 @@ function contextFromDebug(debugIndex) {
 }
 
 async function refreshCurrentContext(client = runtimeClient()) {
-  if (!state.selection.sessionId) {
+  if (!state.selection.sessionId || !state.selection.timelineId) {
     state.contextItems = [];
     return;
   }
-  state.contextItems = await client.fetchSessionContext(state.selection.sessionId, state.selection.timelineId ?? DEFAULT_TIMELINE_ID);
+  state.contextItems = await client.fetchSessionContext(state.selection.sessionId, state.selection.timelineId);
 }
 
 function isCurrentRouteLoad(loadVersion, route, sessionId) {
@@ -1212,7 +1321,7 @@ function resolveTimelineId(debugIndex, requestedTimelineId) {
   if (requestedTimelineId && timelines.some((timeline) => timeline.id === requestedTimelineId)) {
     return requestedTimelineId;
   }
-  return debugIndex?.session?.current_timeline_id ?? debugIndex?.session?.currentTimelineId ?? timelines[0]?.id ?? DEFAULT_TIMELINE_ID;
+  return debugIndex?.session?.current_timeline_id ?? debugIndex?.session?.currentTimelineId ?? timelines[0]?.id ?? null;
 }
 
 function displayResourceLabel(resource) {

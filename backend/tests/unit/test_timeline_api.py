@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import sys
 import unittest
 
@@ -65,6 +65,75 @@ class TimelineApiTests(unittest.TestCase):
         self.assertEqual(parent_response["body"]["id"], parent.id)
         self.assertEqual(parent_response["body"]["parent_timeline_id"], None)
         self.assertEqual([timeline["id"] for timeline in listed["body"]], [parent.id, child.id])
+
+    def test_delete_non_current_timeline_hides_it_and_keeps_current(self) -> None:
+        from contextos.api.routes.timelines import remove_timeline, list_session_timelines
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        current = timeline_service.create_initial_timeline(session.id)
+        deleted = timeline_service.fork_timeline(current.id, "checkpoint-1", "message-1")
+        kept = timeline_service.fork_timeline(current.id, "checkpoint-2", "message-2")
+
+        response = remove_timeline(deleted.id, timeline_service)
+        listed = list_session_timelines(session.id, timeline_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(response["body"]["current_timeline_id"], current.id)
+        self.assertEqual(session_service.get_session(session.id).current_timeline_id, current.id)
+        self.assertEqual([timeline["id"] for timeline in listed["body"]], [current.id, kept.id])
+
+    def test_delete_current_timeline_selects_adjacent_timeline(self) -> None:
+        from contextos.api.routes.timelines import remove_timeline, list_session_timelines
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        first = timeline_service.create_initial_timeline(session.id)
+        current = timeline_service.fork_timeline(first.id, "checkpoint-1", "message-1")
+        next_timeline = timeline_service.fork_timeline(first.id, "checkpoint-2", "message-2")
+        timeline_service.activate_timeline(current.id)
+
+        response = remove_timeline(current.id, timeline_service)
+        listed = list_session_timelines(session.id, timeline_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(response["body"]["current_timeline_id"], next_timeline.id)
+        self.assertEqual(session_service.get_session(session.id).current_timeline_id, next_timeline.id)
+        self.assertEqual([timeline["id"] for timeline in listed["body"]], [first.id, next_timeline.id])
+
+    def test_delete_only_timeline_clears_session_current_pointer(self) -> None:
+        from contextos.api.routes.timelines import remove_timeline, list_session_timelines
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        only = timeline_service.create_initial_timeline(session.id)
+
+        response = remove_timeline(only.id, timeline_service)
+        listed = list_session_timelines(session.id, timeline_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertIsNone(response["body"]["current_timeline_id"])
+        self.assertIsNone(session_service.get_session(session.id).current_timeline_id)
+        self.assertEqual(listed["body"], [])
+
+    def test_delete_parent_timeline_keeps_child_readable(self) -> None:
+        from contextos.api.routes.timelines import remove_timeline, get_timeline, list_session_timelines
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        parent = timeline_service.create_initial_timeline(session.id)
+        child = timeline_service.fork_timeline(parent.id, "checkpoint-1", "message-1")
+        timeline_service.activate_timeline(child.id)
+
+        response = remove_timeline(parent.id, timeline_service)
+        child_response = get_timeline(child.id, timeline_service)
+        listed = list_session_timelines(session.id, timeline_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(session_service.get_session(session.id).current_timeline_id, child.id)
+        self.assertEqual(child_response["status"], 200)
+        self.assertEqual(child_response["body"]["parent_timeline_id"], parent.id)
+        self.assertEqual([timeline["id"] for timeline in listed["body"]], [child.id])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from contextos.runtime.session.repository import InMemorySessionRepository
@@ -8,6 +8,12 @@ from contextos.runtime.timeline.repository import InMemoryTimelineRepository
 
 class TimelineNotFound(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class DeleteTimelineResult:
+    timeline: Timeline
+    current_timeline_id: str | None
 
 
 class TimelineService:
@@ -45,8 +51,27 @@ class TimelineService:
 
     def activate_timeline(self, timeline_id: str) -> Timeline:
         timeline = self.get_timeline(timeline_id)
+        if timeline.status is TimelineStatus.DELETED:
+            raise TimelineNotFound(timeline_id)
         self._point_session_to_timeline(timeline.session_id, timeline.id)
         return timeline
+
+    def delete_timeline(self, timeline_id: str) -> DeleteTimelineResult:
+        timeline = self.get_timeline(timeline_id)
+        if timeline.status is TimelineStatus.DELETED:
+            raise TimelineNotFound(timeline_id)
+
+        active_timelines = self.list_timelines(timeline.session_id)
+        replacement = _replacement_timeline(active_timelines, timeline.id)
+        deleted = self._repository.save(replace(timeline, status=TimelineStatus.DELETED))
+
+        session = self._session_repository.get(timeline.session_id)
+        current_timeline_id = session.current_timeline_id if session is not None else None
+        if current_timeline_id == timeline.id:
+            current_timeline_id = replacement.id if replacement is not None else None
+            self._point_session_to_timeline(timeline.session_id, current_timeline_id)
+
+        return DeleteTimelineResult(timeline=deleted, current_timeline_id=current_timeline_id)
 
     def _save_timeline(
         self,
@@ -66,8 +91,16 @@ class TimelineService:
         )
         return self._repository.save(timeline)
 
-    def _point_session_to_timeline(self, session_id: str, timeline_id: str) -> None:
+    def _point_session_to_timeline(self, session_id: str, timeline_id: str | None) -> None:
         session = self._session_repository.get(session_id)
         if session is not None:
             self._session_repository.save(replace(session, current_timeline_id=timeline_id))
+
+
+def _replacement_timeline(timelines: list[Timeline], deleted_timeline_id: str) -> Timeline | None:
+    remaining = [timeline for timeline in timelines if timeline.id != deleted_timeline_id]
+    if not remaining:
+        return None
+    deleted_index = next((index for index, timeline in enumerate(timelines) if timeline.id == deleted_timeline_id), 0)
+    return remaining[min(deleted_index, len(remaining) - 1)]
 

@@ -5,6 +5,7 @@ from enum import Enum
 
 class TimelineStatus(Enum):
     ACTIVE = "active"
+    DELETED = "deleted"
 
 
 @dataclass(frozen=True)

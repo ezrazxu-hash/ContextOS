@@ -24,11 +24,13 @@ class InMemoryTimelineRepository:
 
     def list_by_session(self, session_id: str) -> list[Timeline]:
         if self._store is not None:
-            return sorted(
+            timelines = sorted(
                 [_timeline_from_dict(record) for record in self._store.list_records("timelines") if record.get("session_id") == session_id],
                 key=lambda timeline: timeline.created_at,
             )
-        return [timeline for timeline in self._timelines.values() if timeline.session_id == session_id]
+        else:
+            timelines = [timeline for timeline in self._timelines.values() if timeline.session_id == session_id]
+        return [timeline for timeline in timelines if timeline.status is not TimelineStatus.DELETED]
 
     def remove_by_session(self, session_id: str) -> int:
         if self._store is not None:
