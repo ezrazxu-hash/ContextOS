@@ -455,6 +455,44 @@ class HttpRuntimeHostTests(unittest.TestCase):
             ],
         )
 
+    def test_session_context_projects_persisted_groups_and_excludes_deleted_group_after_restart(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingStreamingLlmClient(["A1", "A2"]), storage_path=storage_path)
+            host.start()
+            try:
+                session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+                session_id = str(session["id"])
+                timeline_id = str(session["current_timeline_id"])
+                first = post_json(
+                    f"{host.url}/api/sessions/{session_id}/messages",
+                    {"role": "user", "content": "first turn", "token_count": 2, "timeline_id": timeline_id},
+                )
+                get_text(f"{host.url}/sse/sessions/{session_id}/chat?timelineId={timeline_id}")
+                second = post_json(
+                    f"{host.url}/api/sessions/{session_id}/messages",
+                    {"role": "user", "content": "second turn", "token_count": 2, "timeline_id": timeline_id},
+                )
+                get_text(f"{host.url}/sse/sessions/{session_id}/chat?timelineId={timeline_id}")
+                delete_json(f"{host.url}/api/messages/{first['id']}")
+            finally:
+                host.stop()
+
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            restarted.start()
+            try:
+                context = get_json(f"{restarted.url}/api/sessions/{session_id}/context?timelineId={timeline_id}")
+                messages = get_json(f"{restarted.url}/api/sessions/{session_id}/messages?timelineId={timeline_id}")
+            finally:
+                restarted.stop()
+
+        self.assertEqual([item["group_id"] for item in context["items"]], [second["group_id"]])
+        self.assertEqual(context["items"][0]["source_ids"], [second["id"], messages["messages"][-1]["id"]])
+        self.assertIn("second turn", context["items"][0]["effective_content"])
+        self.assertNotIn("first turn", context["items"][0]["effective_content"])
+
 
 def get_json(url: str) -> dict[str, object]:
     with urlopen(url, timeout=5) as response:

@@ -37,12 +37,18 @@ test("Studio app has working navigation chat send selection and disabled action 
     });
 
     await page.getByTestId("composer-input").fill("Hello, please reply with OK");
+    const contextRefresh = page.waitForResponse((response) => {
+      return response.url().includes("/api/sessions/demo-session/context?timelineId=demo-timeline") && response.status() === 200;
+    });
     await page.getByTestId("send-message").click();
 
     const request = await postRequest;
     expect(request.postDataJSON()).toMatchObject({ role: "user", content: "Hello, please reply with OK" });
     await streamResponse;
-    await expect(page.getByText("Hello, please reply with OK")).toBeVisible();
+    const contextResponse = await contextRefresh;
+    const context = await contextResponse.json();
+    expect(context.items.some((item) => item.effective_content.includes("Hello, please reply with OK"))).toBe(true);
+    await expect(page.locator(".message-card.user").getByText("Hello, please reply with OK", { exact: true })).toBeVisible();
     await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
     await expect(page.getByTestId("status-toast")).toContainText("Sent");
 
@@ -52,6 +58,8 @@ test("Studio app has working navigation chat send selection and disabled action 
     await page.locator(".message-card.assistant", { hasText: "OK" }).click();
     await expect(page.getByTestId("right-panel-title")).toHaveText("Impact");
     await expect(page.getByTestId("impact-anchor")).toContainText("message_");
+    await page.getByRole("tab", { name: "Context" }).click();
+    await expect(page.locator(".context-item", { hasText: "Hello, please reply with OK" })).toBeVisible();
 
     await page.getByTestId("nav-workflow").click();
     await expect(page.getByTestId("main-title")).toHaveText("Workflow Builder");

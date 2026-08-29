@@ -96,6 +96,27 @@ class SessionMessageMutationTests(unittest.TestCase):
         self.assertEqual(service.get_message("message-tool-call").is_deleted, True)
         self.assertEqual(service.get_message("message-tool-result").is_deleted, True)
 
+    def test_soft_delete_marks_conversation_group_deleted(self) -> None:
+        from contextos.api.routes.messages import soft_delete_message
+        from contextos.runtime.conversation.model import ConversationGroupState
+        from contextos.runtime.conversation.repository import InMemoryConversationGroupRepository
+        from contextos.runtime.conversation.service import ConversationGroupService
+        from contextos.runtime.session.message_service import MessageService
+
+        message_service = MessageService()
+        group_repository = InMemoryConversationGroupRepository()
+        group_service = ConversationGroupService(group_repository)
+        group = group_service.start_turn("session-1", "timeline-1", "message-user", group_id="group-1")
+        message_service.create_message("session-1", "user", "delete turn", timeline_id="timeline-1", group_id=group.id, message_id="message-user")
+        message_service.create_message("session-1", "assistant", "delete response", timeline_id="timeline-1", group_id=group.id, message_id="message-assistant")
+        group_service.append_message(group.id, "message-assistant")
+
+        response = soft_delete_message("message-user", message_service, group_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(sorted(response["body"]["message_ids"]), ["message-assistant", "message-user"])
+        self.assertEqual(group_repository.get(group.id).state, ConversationGroupState.DELETED)
+
 
 if __name__ == "__main__":
     unittest.main()

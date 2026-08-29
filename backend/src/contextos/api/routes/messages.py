@@ -3,6 +3,8 @@ from typing import Callable
 from contextos.api.contracts.message_edit import ImpactSummary, parse_message_edit_request
 from contextos.api.errors import ApiError
 from contextos.provider.base.ir import ToolResult
+from contextos.runtime.conversation.model import ConversationGroupState
+from contextos.runtime.conversation.service import ConversationGroupNotFound, ConversationGroupService
 from contextos.runtime.session.message_revision_service import MessageRevisionService
 from contextos.runtime.session.message_service import MessageNotFound, MessageService
 from contextos.tool.risk.impact_analyzer import EditImpactAnalyzer
@@ -64,11 +66,22 @@ def patch_message(
     }
 
 
-def soft_delete_message(message_id: str, message_service: MessageService) -> dict[str, object]:
+def soft_delete_message(
+    message_id: str,
+    message_service: MessageService,
+    conversation_group_service: ConversationGroupService | None = None,
+) -> dict[str, object]:
     try:
         deleted = message_service.soft_delete_message(message_id)
     except MessageNotFound:
         return _not_found(message_id)
+
+    if conversation_group_service is not None:
+        for group_id in {message.group_id for message in deleted if message.group_id}:
+            try:
+                conversation_group_service.set_state(group_id, ConversationGroupState.DELETED)
+            except ConversationGroupNotFound:
+                continue
 
     return {
         "status": 200,

@@ -323,7 +323,15 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "context":
-                self._send_json(200, {"items": []})
+                session = services.session_repository.get(segments[2])
+                if session is None:
+                    self._send_json(404, {"error": {"code": "session.not_found", "message": "Session not found"}})
+                    return
+                timeline_id = _first(query, "timelineId") or _first(query, "timeline_id") or session.current_timeline_id
+                if timeline_id is None:
+                    self._send_json(200, {"items": []})
+                    return
+                self._send_json(200, {"items": services.conversation_context_builder.build_context_items(segments[2], timeline_id)})
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "runtime-snapshot":
@@ -479,7 +487,7 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
             segments = [segment for segment in parsed.path.split("/") if segment]
 
             if len(segments) == 3 and segments[:2] == ["api", "messages"]:
-                self._send_route_response(soft_delete_message(segments[2], services.message_service))
+                self._send_route_response(soft_delete_message(segments[2], services.message_service, services.conversation_group_service))
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:

@@ -95,7 +95,7 @@ async function loadRouteData() {
 
       const [messages, contextItems] = await Promise.all([
         client.fetchSessionMessages(requestedSessionId, state.selection.timelineId),
-        client.fetchSessionContext(requestedSessionId),
+        client.fetchSessionContext(requestedSessionId, state.selection.timelineId),
       ]);
       if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
       state.messages = messages.messages ?? [];
@@ -470,9 +470,13 @@ async function handleAction(event) {
     if (timelineId) query.set("timelineId", timelineId);
     await navigate(`${state.route}?${query}`);
   } else if (action === "select-timeline") {
-    state.selection.timelineId = target.dataset.timelineId;
-    state.toast = { tone: "success", text: `Timeline ${state.selection.timelineId} selected` };
-    render();
+    const timelineId = target.dataset.timelineId;
+    if (!timelineId || !state.selection.sessionId) return;
+    state.selection.messageId = null;
+    state.selection.traceId = null;
+    const query = new URLSearchParams({ sessionId: state.selection.sessionId, timelineId });
+    state.toast = { tone: "success", text: `Timeline ${timelineId} selected` };
+    await navigate(`${state.route}?${query}`);
   } else if (action === "select-message") {
     state.selection.messageId = target.dataset.messageId;
     const message = selectedMessage();
@@ -635,13 +639,15 @@ async function handleAction(event) {
     state.toast = { tone: "loading", text: "Deleting message" };
     render();
     try {
-      const response = await runtimeClient().deleteMessage(messageId);
+      const client = runtimeClient();
+      const response = await client.deleteMessage(messageId);
       const deletedIds = new Set(response.message_ids ?? response.messageIds ?? [messageId]);
       state.messages = state.messages.filter((message) => !deletedIds.has(message.id));
       if (deletedIds.has(state.selection.messageId)) {
         state.selection.messageId = null;
         state.selection.traceId = null;
       }
+      await refreshCurrentContext(client);
       state.toast = { tone: "success", text: "Message deleted" };
       render();
     } catch (error) {
@@ -729,6 +735,7 @@ async function handleChatSubmit(event) {
     state.messages.push(created);
     render();
     await streamAssistantReply(client);
+    await refreshCurrentContext(client);
     state.toast = { tone: "success", text: "Sent" };
   } catch (error) {
     state.chatDraft = content;
@@ -754,9 +761,10 @@ function applyToken(data) {
   const id = data.message_id;
   let message = state.messages.find((item) => item.id === id);
   if (!message) {
-    message = { id, role: data.role ?? "assistant", content: "", status: "streaming", checkpoint_id: null, trace_id: data.trace_id ?? "trace-send-report-email", context_group_ids: [], tool_call_ids: [], tool_result_ids: [] };
+    message = { id, role: data.role ?? "assistant", content: "", status: "streaming", checkpoint_id: null, trace_id: data.trace_id ?? "trace-send-report-email", context_group_ids: data.group_id ? [data.group_id] : [], tool_call_ids: [], tool_result_ids: [] };
     state.messages.push(message);
   }
+  attachContextGroup(message, data.group_id);
   message.content += data.content ?? "";
 }
 
@@ -775,6 +783,7 @@ function completeStreamMessage(data) {
     message.status = "completed";
     message.checkpoint_id = data.checkpoint_id ?? message.checkpoint_id;
     message.trace_id = data.trace_id ?? message.trace_id ?? "trace-chat-response";
+    attachContextGroup(message, data.group_id);
   }
 }
 
@@ -934,9 +943,9 @@ function realClient() {
       const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value)).toString();
       return getJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}${query ? `?${query}` : ""}`);
     },
-    async fetchSessionContext(sessionId) {
+    async fetchSessionContext(sessionId, timelineId) {
       try {
-        const body = await getJson(`/api/sessions/${encodeURIComponent(sessionId)}/context`);
+        const body = await getJson(`/api/sessions/${encodeURIComponent(sessionId)}/context${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`);
         return body.items ?? body;
       } catch {
         return contextFromDebug(state.debugIndex);
@@ -1047,6 +1056,12 @@ function updateMessage(updatedMessage) {
   state.messages = state.messages.map((message) => (message.id === updatedMessage.id ? updatedMessage : message));
 }
 
+function attachContextGroup(message, groupId) {
+  if (!groupId) return;
+  if (!Array.isArray(message.context_group_ids)) message.context_group_ids = [];
+  if (!message.context_group_ids.includes(groupId)) message.context_group_ids.push(groupId);
+}
+
 function isDeletedMessage(message) {
   return Boolean(message?.is_deleted ?? message?.isDeleted);
 }
@@ -1060,6 +1075,14 @@ function selectedTrace() {
 
 function contextFromDebug(debugIndex) {
   return debugIndex?.context?.items ?? [];
+}
+
+async function refreshCurrentContext(client = runtimeClient()) {
+  if (!state.selection.sessionId) {
+    state.contextItems = [];
+    return;
+  }
+  state.contextItems = await client.fetchSessionContext(state.selection.sessionId, state.selection.timelineId ?? DEFAULT_TIMELINE_ID);
 }
 
 function isCurrentRouteLoad(loadVersion, route, sessionId) {
