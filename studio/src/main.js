@@ -176,6 +176,7 @@ function renderLeftRail() {
   const currentSessionId = state.selection.sessionId;
   const sessions = workspaceSessions(currentSessionId);
   const timelines = currentSessionId ? state.debugIndex?.timelines ?? [demoFixtures.timeline] : [];
+  const activeTimelineId = activeTimelineIdForSession(currentSessionId);
   return `
     <aside class="left-rail">
       <div class="rail-head"><h2>Workspace</h2><button data-action="toggle-left" aria-label="Collapse navigation"><</button></div>
@@ -200,11 +201,15 @@ function renderLeftRail() {
       </section>
       <section>
         <h3>Timelines</h3>
-        ${timelines.map((timeline) => `
-          <button data-action="select-timeline" data-timeline-id="${escapeAttr(timeline.id)}" data-testid="timeline-${escapeAttr(timeline.id)}" aria-pressed="${state.selection.timelineId === timeline.id}" class="nav-item ${state.selection.timelineId === timeline.id ? "selected" : ""}" title="${escapeAttr(timeline.id)}">
-            <span data-testid="workspace-item-label">${escapeHtml(displayResourceLabel(timeline))}</span><small>${escapeHtml(timeline.status ?? "active")}</small>
-          </button>
-        `).join("")}
+        ${timelines.map((timeline) => {
+          const selected = state.selection.timelineId === timeline.id;
+          const current = activeTimelineId === timeline.id;
+          return `
+            <button data-action="select-timeline" data-timeline-id="${escapeAttr(timeline.id)}" data-testid="timeline-${escapeAttr(timeline.id)}" data-current="${current}" aria-pressed="${selected}" class="nav-item ${selected ? "selected" : ""} ${current ? "current" : ""}" title="${escapeAttr(timeline.id)}">
+              <span data-testid="workspace-item-label">${escapeHtml(displayResourceLabel(timeline))}</span><small>${current ? "Current" : escapeHtml(timeline.status ?? "active")}</small>
+            </button>
+          `;
+        }).join("")}
       </section>
       <button class="secondary full" data-action="create-session" ${state.creatingSession ? "disabled" : ""}>${state.creatingSession ? "Creating" : "New Session"}</button>
     </aside>
@@ -474,9 +479,19 @@ async function handleAction(event) {
     if (!timelineId || !state.selection.sessionId) return;
     state.selection.messageId = null;
     state.selection.traceId = null;
-    const query = new URLSearchParams({ sessionId: state.selection.sessionId, timelineId });
-    state.toast = { tone: "success", text: `Timeline ${timelineId} selected` };
-    await navigate(`${state.route}?${query}`);
+    const client = runtimeClient();
+    state.toast = { tone: "loading", text: `Activating timeline ${timelineId}` };
+    render();
+    try {
+      await client.activateTimeline(timelineId);
+      const query = new URLSearchParams({ sessionId: state.selection.sessionId, timelineId });
+      await navigate(`${state.route}?${query}`);
+      state.toast = { tone: "success", text: `Timeline ${timelineId} selected` };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    }
   } else if (action === "select-message") {
     state.selection.messageId = target.dataset.messageId;
     const message = selectedMessage();
@@ -508,6 +523,7 @@ async function handleAction(event) {
       state.toast = { tone: "success", text: "Session created" };
       render();
     } catch (error) {
+      markStreamingMessageFailed(error);
       state.toast = { tone: "error", text: error.message };
       render();
     } finally {
@@ -607,15 +623,30 @@ async function handleAction(event) {
     state.toast = { tone: "loading", text: "Saving message" };
     render();
     try {
-      const response = await runtimeClient().patchMessage(messageId, state.editingMessageDraft);
-      updateMessage(response.message ?? {
-        ...state.messages.find((message) => message.id === messageId),
-        content: state.editingMessageDraft,
-        revision_id: response.revision_id,
-        user_modified: true,
+      const client = runtimeClient();
+      const originalMessage = state.messages.find((message) => message.id === messageId);
+      const draft = state.editingMessageDraft;
+      const response = await client.patchMessage(messageId, draft, {
+        semantic: shouldForkForMessageEdit(originalMessage),
       });
       state.editingMessageId = null;
       state.editingMessageDraft = "";
+      if (response.timeline?.id && state.selection.sessionId) {
+        state.selection.messageId = response.message?.id ?? null;
+        await navigate(`/chat?sessionId=${encodeURIComponent(state.selection.sessionId)}&timelineId=${encodeURIComponent(response.timeline.id)}`);
+        state.sending = true;
+        state.toast = { tone: "loading", text: "Regenerating assistant reply" };
+        render();
+        await streamAssistantReply(client);
+        await refreshCurrentContext(client);
+      } else {
+        updateMessage(response.message ?? {
+          ...originalMessage,
+          content: draft,
+          revision_id: response.revision_id,
+          user_modified: true,
+        });
+      }
       state.toast = { tone: "success", text: "Message saved" };
       render();
     } catch (error) {
@@ -623,6 +654,7 @@ async function handleAction(event) {
       render();
     } finally {
       state.messageMutationId = null;
+      state.sending = false;
       render();
     }
   } else if (action === "delete-message") {
@@ -753,6 +785,7 @@ async function streamAssistantReply(client) {
     if (event.type === "done") completeStreamMessage(event.data);
     if (event.type === "tool_call") attachTool(event.data, "tool_call_ids");
     if (event.type === "tool_result") attachTool(event.data, "tool_result_ids");
+    if (event.type === "error") throw new Error(event.data?.message ?? "Runtime stream failed");
     render();
   }
 }
@@ -936,8 +969,9 @@ function realClient() {
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
     createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
     deleteSession: (sessionId) => deleteJson(`/api/sessions/${encodeURIComponent(sessionId)}`),
-    patchMessage: (messageId, content) => patchJson(`/api/messages/${encodeURIComponent(messageId)}`, { new_content: content }),
+    patchMessage: (messageId, content, options = {}) => patchJson(`/api/messages/${encodeURIComponent(messageId)}`, { new_content: content, semantic: Boolean(options.semantic) }),
     deleteMessage: (messageId) => deleteJson(`/api/messages/${encodeURIComponent(messageId)}`),
+    activateTimeline: (timelineId) => postJson(`/api/timelines/${encodeURIComponent(timelineId)}/activate`, {}),
     postSessionMessage: (sessionId, content, timelineId) => postJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, { role: "user", content, token_count: tokenEstimate(content), timeline_id: timelineId }),
     fetchDebugIndex(sessionId, params = {}) {
       const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value)).toString();
@@ -981,9 +1015,13 @@ function mockClient() {
     async deleteSession() {
       return {};
     },
-    async patchMessage(messageId, content) {
+    async patchMessage(messageId, content, options = {}) {
       const message = state.messages.find((item) => item.id === messageId) ?? demoFixtures.messages.find((item) => item.id === messageId);
       const updated = { ...clone(message), content, revision_id: `local-revision-${Date.now()}`, user_modified: true };
+      if (options.semantic) {
+        const timeline = { ...clone(demoFixtures.timeline), id: `local-timeline-${Date.now()}`, parent_timeline_id: message?.timeline_id ?? demoFixtures.timeline.id, fork_message_id: messageId };
+        return { revision_id: updated.revision_id, message: updated, timeline, impact: { triggered: true, requires_replay: false, checks: [] } };
+      }
       return { revision_id: updated.revision_id, message: updated, impact: { triggered: true, requires_replay: false, checks: [] } };
     },
     async deleteMessage(messageId) {
@@ -1002,6 +1040,9 @@ function mockClient() {
     },
     async fetchSessionContext() {
       return contextItems.map(clone);
+    },
+    async activateTimeline(timelineId) {
+      return { ...clone(demoFixtures.timeline), id: timelineId };
     },
     async *streamChatEvents() {
       yield { type: "token", data: { message_id: "message-stream", role: "assistant", content: "Report" } };
@@ -1135,6 +1176,18 @@ function workspaceSessions(currentSessionId) {
 function timelineIdForSession(sessionId) {
   const session = state.sessions.find((item) => item.id === sessionId);
   return session?.current_timeline_id ?? session?.currentTimelineId ?? null;
+}
+
+function activeTimelineIdForSession(sessionId) {
+  const debugSession = state.debugIndex?.session;
+  if (debugSession?.id === sessionId) {
+    return debugSession.current_timeline_id ?? debugSession.currentTimelineId ?? null;
+  }
+  return timelineIdForSession(sessionId);
+}
+
+function shouldForkForMessageEdit(message) {
+  return (message?.role ?? "").toLowerCase() === "user";
 }
 
 function nextSessionAfterDelete(sessions, deletedSessionId) {
@@ -1290,6 +1343,7 @@ function styleTag() {
     .session-menu button:hover { background: #fff1f0; }
     .nav-item span, .nav-item small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item small { color: var(--muted); }
+    .nav-item.current small { color: var(--success); font-weight: 700; }
     .selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
     .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
     .tabs.vertical { flex-direction: column; width: 180px; }

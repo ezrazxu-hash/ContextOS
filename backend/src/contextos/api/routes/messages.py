@@ -27,6 +27,9 @@ def patch_message(
     message_service: MessageService,
     revision_service: MessageRevisionService,
     tool_runner: Callable[[str], object] | None = None,
+    *,
+    timeline_service: TimelineService | None = None,
+    conversation_group_service: ConversationGroupService | None = None,
 ) -> dict[str, object]:
     del tool_runner
     try:
@@ -41,23 +44,39 @@ def patch_message(
         operator=request.operator,
         reason=request.reason,
     )
+    semantic_edit = bool(payload.get("semantic", False))
+    if semantic_edit and timeline_service is not None and conversation_group_service is not None and message.timeline_id is not None:
+        timeline = timeline_service.fork_timeline(
+            parent_timeline_id=message.timeline_id,
+            fork_checkpoint_id=message.checkpoint_id or "",
+            fork_message_id=message.id,
+        )
+        timeline_service.activate_timeline(timeline.id)
+        working_context_messages = fork_timeline_context(
+            parent_timeline_id=message.timeline_id,
+            child_timeline_id=timeline.id,
+            edited_message=message,
+            edited_content=request.new_content,
+            message_service=message_service,
+            conversation_group_service=conversation_group_service,
+            include_edited_message=True,
+            revision_id=revision.id,
+        )
+        child_message = _message_with_revision(message.session_id, timeline.id, revision.id, message_service)
+        impact = _impact_summary(message_id, revision.id, request.new_content, payload)
+        return {
+            "status": 200,
+            "body": {
+                "revision_id": revision.id,
+                "message": (child_message or message).to_dict(),
+                "timeline": timeline.to_dict(),
+                "working_context_messages": working_context_messages,
+                "impact": impact.to_dict(),
+            },
+        }
+
     message = message_service.update_message_content(message_id, request.new_content, revision.id)
-    issues = EditImpactAnalyzer().analyze_message_tool_result_conflicts(
-        request.new_content,
-        [
-            ToolResult(call_id=str(item["call_id"]), content=item.get("content"))
-            for item in payload.get("tool_results", [])
-            if isinstance(item, dict)
-        ],
-    )
-    impact = ImpactSummary(
-        message_id=message_id,
-        revision_id=revision.id,
-        triggered=True,
-        requires_replay=False,
-        checks=IMPACT_CHECKS,
-        issues=[issue.to_dict() for issue in issues],
-    )
+    impact = _impact_summary(message_id, revision.id, request.new_content, payload)
     return {
         "status": 200,
         "body": {
@@ -66,6 +85,33 @@ def patch_message(
             "impact": impact.to_dict(),
         },
     }
+
+
+def _impact_summary(message_id: str, revision_id: str, content: str, payload: dict[str, object]) -> ImpactSummary:
+    issues = EditImpactAnalyzer().analyze_message_tool_result_conflicts(
+        content,
+        [
+            ToolResult(call_id=str(item["call_id"]), content=item.get("content"))
+            for item in payload.get("tool_results", [])
+            if isinstance(item, dict)
+        ],
+    )
+    return ImpactSummary(
+        message_id=message_id,
+        revision_id=revision_id,
+        triggered=True,
+        requires_replay=False,
+        checks=IMPACT_CHECKS,
+        issues=[issue.to_dict() for issue in issues],
+    )
+
+
+def _message_with_revision(session_id: str, timeline_id: str, revision_id: str, message_service: MessageService):
+    messages, _ = message_service.list_messages(session_id, limit=10000, timeline_id=timeline_id)
+    for message in reversed(messages):
+        if message.revision_id == revision_id:
+            return message
+    return None
 
 
 def soft_delete_message(

@@ -262,6 +262,32 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertIn("A2", [message["content"] for message in parent_messages["messages"]])
         self.assertEqual([message["content"] for message in child_messages["messages"]], ["keep turn", "A1"])
 
+    def test_host_activate_timeline_updates_session_current_pointer(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            session_id = str(session["id"])
+            parent_timeline_id = str(session["current_timeline_id"])
+            message = post_json(
+                f"{host.url}/api/sessions/{session_id}/messages",
+                {"role": "user", "content": "fork me", "token_count": 2, "timeline_id": parent_timeline_id},
+            )
+            semantic_edit = patch_json(f"{host.url}/api/messages/{message['id']}", {"new_content": "forked content", "semantic": True})
+            child_timeline_id = str(semantic_edit["timeline"]["id"])
+
+            activated = post_json(f"{host.url}/api/timelines/{parent_timeline_id}/activate", {})
+            session_after = get_json(f"{host.url}/api/sessions/{session_id}")
+            timelines = get_json(f"{host.url}/api/sessions/{session_id}/timelines")
+        finally:
+            host.stop()
+
+        self.assertEqual(activated["id"], parent_timeline_id)
+        self.assertEqual(session_after["current_timeline_id"], parent_timeline_id)
+        self.assertEqual([timeline["id"] for timeline in timelines], [parent_timeline_id, child_timeline_id])
+
     def test_host_delete_missing_session_returns_not_found(self) -> None:
         from contextos.api.server import create_http_runtime_host
 

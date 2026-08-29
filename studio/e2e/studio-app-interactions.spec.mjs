@@ -183,6 +183,45 @@ test("Message edit textarea accepts user assistant and Chinese drafts", async ({
   }
 });
 
+test("Editing a user message forks timeline and streams a new assistant reply", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    const userCard = page.locator(".message-card.user").first();
+    await startEditing(page, userCard);
+    const editor = page.locator("[data-message-edit-input]").first();
+    await editor.click();
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await editor.fill("Hello, please reply with OK");
+
+    const patchResponse = page.waitForResponse((response) => {
+      return response.request().method() === "PATCH" && response.url().includes("/api/messages/") && response.status() === 200;
+    });
+    const streamResponse = page.waitForResponse((response) => {
+      return response.url().includes("/sse/sessions/demo-session/chat") && response.status() === 200;
+    }, { timeout: 5000 });
+    await page.getByRole("button", { name: "Save" }).click();
+
+    const patchBody = await (await patchResponse).json();
+    const childTimelineId = patchBody.timeline.id;
+    const stream = await streamResponse;
+
+    expect(stream.url()).toContain(`timelineId=${childTimelineId}`);
+    await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveAttribute("data-current", "true");
+    await expect(page.locator(".message-card.user").getByText("Hello, please reply with OK", { exact: true })).toBeVisible();
+    await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
+    const childMessages = await (await page.request.get(`${studio.url}/api/sessions/demo-session/messages?timelineId=${childTimelineId}`)).json();
+    expect(childMessages.messages.map((message) => message.content)).toContain("OK");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
 async function startBackend(port) {
   const stateDir = await mkdtemp(join(tmpdir(), "contextos-studio-app-"));
   const storagePath = join(stateDir, "runtime-state.json");
