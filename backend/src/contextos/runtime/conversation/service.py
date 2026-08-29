@@ -40,6 +40,27 @@ class ConversationGroupService:
             return group
         return self._repository.save(replace(group, message_ids=[*group.message_ids, message_id], updated_at=_utc_now()))
 
+    def create_group(
+        self,
+        session_id: str,
+        timeline_id: str,
+        message_ids: list[str],
+        *,
+        state: ConversationGroupState = ConversationGroupState.ACTIVE,
+        summary: str | None = None,
+        group_id: str | None = None,
+    ) -> ConversationGroup:
+        group = ConversationGroup(
+            id=group_id or f"group_{uuid4().hex}",
+            session_id=session_id,
+            timeline_id=timeline_id,
+            cursor=self._repository.next_cursor(session_id, timeline_id),
+            state=state,
+            message_ids=list(message_ids),
+            summary=summary,
+        )
+        return self._repository.save(group)
+
     def set_state(self, group_id: str, state: ConversationGroupState) -> ConversationGroup:
         group = self._require_group(group_id)
         return self._repository.save(replace(group, state=state, updated_at=_utc_now()))

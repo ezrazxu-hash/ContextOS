@@ -15,9 +15,9 @@ from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.messages import patch_message, soft_delete_message
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
-from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, post_session, post_session_message, remove_session
+from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, patch_session, post_session, post_session_message, remove_session
 from contextos.api.routes.templates import get_template, list_templates, post_template, post_template_compile, post_template_run, post_template_validate, put_template
-from contextos.api.routes.timelines import list_session_timelines
+from contextos.api.routes.timelines import activate_timeline, list_session_timelines
 from contextos.provider.base.chat_client import ChatCompletionClient
 from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
 from contextos.runtime.conversation.context_builder import ConversationContextBuilder
@@ -451,6 +451,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 )
                 return
 
+            if len(segments) == 4 and segments[:2] == ["api", "timelines"] and segments[3] == "activate":
+                self._send_route_response(activate_timeline(segments[2], services.timeline_service))
+                return
+
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
 
         def do_PUT(self) -> None:
@@ -476,18 +480,35 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                         payload,
                         services.message_service,
                         services.message_revision_service,
+                        timeline_service=services.timeline_service,
+                        conversation_group_service=services.conversation_group_service,
                     )
                 )
+                return
+
+            if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
+                self._send_route_response(patch_session(segments[2], payload, services.session_service))
                 return
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
 
         def do_DELETE(self) -> None:
             parsed = urlparse(self.path)
+            query = parse_qs(parsed.query)
             segments = [segment for segment in parsed.path.split("/") if segment]
 
             if len(segments) == 3 and segments[:2] == ["api", "messages"]:
-                self._send_route_response(soft_delete_message(segments[2], services.message_service, services.conversation_group_service))
+                mode = _first(query, "mode")
+                semantic_delete = mode == "semantic" or (_first(query, "semantic") or "").lower() in ("1", "true", "yes")
+                self._send_route_response(
+                    soft_delete_message(
+                        segments[2],
+                        services.message_service,
+                        services.conversation_group_service,
+                        timeline_service=services.timeline_service,
+                        semantic_delete=semantic_delete,
+                    )
+                )
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:

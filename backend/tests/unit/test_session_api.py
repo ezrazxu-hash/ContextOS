@@ -58,6 +58,25 @@ class SessionApiTests(unittest.TestCase):
         self.assertEqual(response["body"]["workspace_id"], None)
         self.assertNotIn("tenant", response["body"])
 
+    def test_session_title_update_does_not_create_timeline(self) -> None:
+        from contextos.api.routes.sessions import patch_session
+        from contextos.runtime.session.repository import InMemorySessionRepository
+        from contextos.runtime.session.service import SessionService
+        from contextos.runtime.timeline.repository import InMemoryTimelineRepository
+        from contextos.runtime.timeline.service import TimelineService
+
+        session_repository = InMemorySessionRepository()
+        session_service = SessionService(session_repository)
+        timeline_service = TimelineService(InMemoryTimelineRepository(), session_repository)
+        session = session_service.create_session("research-agent")
+        timeline_service.create_initial_timeline(session.id)
+
+        response = patch_session(session.id, {"title": "Renamed session"}, session_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(response["body"]["title"], "Renamed session")
+        self.assertEqual(len(timeline_service.list_timelines(session.id)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

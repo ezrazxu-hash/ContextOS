@@ -10,9 +10,12 @@ from uuid import uuid4
 
 def post_session(payload: dict[str, object], service: SessionService, request_id: str = "req-session-create") -> dict[str, object]:
     workspace_id = payload.get("workspace_id")
+    metadata = payload.get("metadata")
     session = service.create_session(
         agent_template_id=str(payload["agent_template_id"]),
         workspace_id=str(workspace_id) if workspace_id is not None else None,
+        title=str(payload["title"]) if payload.get("title") is not None else None,
+        metadata=dict(metadata) if isinstance(metadata, dict) else None,
     )
     return {
         "status": 201,
@@ -32,6 +35,30 @@ def list_sessions(service: SessionService) -> dict[str, object]:
 def get_session(session_id: str, service: SessionService, request_id: str = "req-session-get") -> dict[str, object]:
     try:
         session = service.get_session(session_id)
+    except SessionNotFound:
+        return {
+            "status": 404,
+            "body": ApiError(
+                code="session.not_found",
+                message="Session not found",
+                request_id=request_id,
+                status=404,
+            ).to_rest_payload(),
+        }
+    return {
+        "status": 200,
+        "body": session.to_dict(),
+    }
+
+
+def patch_session(session_id: str, payload: dict[str, object], service: SessionService, request_id: str = "req-session-patch") -> dict[str, object]:
+    try:
+        metadata = payload.get("metadata")
+        session = service.update_session_metadata(
+            session_id,
+            title=str(payload["title"]) if payload.get("title") is not None else None,
+            metadata=dict(metadata) if isinstance(metadata, dict) else None,
+        )
     except SessionNotFound:
         return {
             "status": 404,

@@ -37,6 +37,7 @@ class InMemorySessionRepository:
 
 
 def _session_from_dict(record: dict[str, object]) -> Session:
+    metadata = record.get("metadata")
     return Session(
         id=str(record["id"]),
         workspace_id=str(record["workspace_id"]) if record.get("workspace_id") is not None else None,
@@ -44,4 +45,6 @@ def _session_from_dict(record: dict[str, object]) -> Session:
         current_timeline_id=str(record["current_timeline_id"]) if record.get("current_timeline_id") is not None else None,
         created_at=datetime.fromisoformat(str(record["created_at"])),
         status=SessionStatus(str(record["status"])),
+        title=str(record["title"]) if record.get("title") is not None else None,
+        metadata=dict(metadata) if isinstance(metadata, dict) else {},
     )

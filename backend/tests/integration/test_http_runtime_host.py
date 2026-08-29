@@ -148,6 +148,22 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertIn(second["id"], session_ids)
         self.assertEqual(len(session_ids), len(set(session_ids)))
 
+    def test_host_updates_session_title_without_creating_timeline(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            before = get_json(f"{host.url}/api/sessions/{session['id']}/timelines")
+            patched = patch_json(f"{host.url}/api/sessions/{session['id']}", {"title": "Renamed session"})
+            after = get_json(f"{host.url}/api/sessions/{session['id']}/timelines")
+        finally:
+            host.stop()
+
+        self.assertEqual(patched["title"], "Renamed session")
+        self.assertEqual(len(after), len(before))
+
     def test_host_restores_all_empty_sessions_from_runtime_state(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -210,6 +226,41 @@ class HttpRuntimeHostTests(unittest.TestCase):
             self.assertFalse(any(record.get("session_id") == doomed["id"] for record in persisted["messages"].values()))
             self.assertFalse(any(record.get("session_id") == doomed["id"] for record in persisted["conversation_groups"].values()))
             self.assertFalse(any(record.get("session_id") == doomed["id"] for record in persisted["checkpoints"].values()))
+
+    def test_host_semantic_message_delete_forks_and_preserves_original_timeline(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingStreamingLlmClient(["A1", "A2"]))
+        host.start()
+        try:
+            session = post_json(f"{host.url}/api/sessions", {"agent_template_id": "research-agent"})
+            session_id = str(session["id"])
+            parent_timeline_id = str(session["current_timeline_id"])
+            first = post_json(
+                f"{host.url}/api/sessions/{session_id}/messages",
+                {"role": "user", "content": "keep turn", "token_count": 2, "timeline_id": parent_timeline_id},
+            )
+            get_text(f"{host.url}/sse/sessions/{session_id}/chat?timelineId={parent_timeline_id}")
+            second = post_json(
+                f"{host.url}/api/sessions/{session_id}/messages",
+                {"role": "user", "content": "remove turn", "token_count": 2, "timeline_id": parent_timeline_id},
+            )
+            get_text(f"{host.url}/sse/sessions/{session_id}/chat?timelineId={parent_timeline_id}")
+
+            deleted = delete_json(f"{host.url}/api/messages/{second['id']}?mode=semantic")
+            child_timeline_id = deleted["timeline"]["id"]
+            parent_messages = get_json(f"{host.url}/api/sessions/{session_id}/messages?timelineId={parent_timeline_id}")
+            child_messages = get_json(f"{host.url}/api/sessions/{session_id}/messages?timelineId={child_timeline_id}")
+            active_session = get_json(f"{host.url}/api/sessions/{session_id}")
+        finally:
+            host.stop()
+
+        self.assertNotEqual(child_timeline_id, parent_timeline_id)
+        self.assertEqual(active_session["current_timeline_id"], child_timeline_id)
+        self.assertIn("keep turn", [message["content"] for message in deleted["working_context_messages"]])
+        self.assertIn("remove turn", [message["content"] for message in parent_messages["messages"]])
+        self.assertIn("A2", [message["content"] for message in parent_messages["messages"]])
+        self.assertEqual([message["content"] for message in child_messages["messages"]], ["keep turn", "A1"])
 
     def test_host_delete_missing_session_returns_not_found(self) -> None:
         from contextos.api.server import create_http_runtime_host

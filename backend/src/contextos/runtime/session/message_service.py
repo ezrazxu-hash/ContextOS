@@ -134,6 +134,36 @@ class MessageService:
         )
         return self._repository.save(updated)
 
+    def copy_message_to_timeline(
+        self,
+        message: SessionMessage,
+        timeline_id: str,
+        *,
+        content: str | None = None,
+        group_id: str | None = None,
+        context_group_ids: list[str] | None = None,
+        revision_id: str | None = None,
+    ) -> SessionMessage:
+        copied = SessionMessage(
+            id=f"message_{uuid4().hex}",
+            session_id=message.session_id,
+            cursor=self._repository.next_cursor(message.session_id),
+            role=message.role,
+            content=message.content if content is None else content,
+            status=message.status,
+            token_count=message.token_count,
+            timeline_id=timeline_id,
+            group_id=group_id,
+            context_group_ids=context_group_ids if context_group_ids is not None else list(message.context_group_ids),
+            checkpoint_id=message.checkpoint_id,
+            trace_id=message.trace_id,
+            tool_call_ids=list(message.tool_call_ids),
+            tool_result_ids=list(message.tool_result_ids),
+            revision_id=revision_id if revision_id is not None else message.revision_id,
+            user_modified=message.user_modified or revision_id is not None,
+        )
+        return self._repository.save(copied)
+
     def soft_delete_message(self, message_id: str) -> list[SessionMessage]:
         target = self.get_message(message_id)
         deleted_at = utc_now()

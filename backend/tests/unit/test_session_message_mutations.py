@@ -117,6 +117,57 @@ class SessionMessageMutationTests(unittest.TestCase):
         self.assertEqual(sorted(response["body"]["message_ids"]), ["message-assistant", "message-user"])
         self.assertEqual(group_repository.get(group.id).state, ConversationGroupState.DELETED)
 
+    def test_semantic_delete_group_forks_without_mutating_original_timeline(self) -> None:
+        from contextos.api.routes.messages import soft_delete_message
+        from contextos.runtime.conversation.context_builder import ConversationContextBuilder
+        from contextos.runtime.conversation.repository import InMemoryConversationGroupRepository
+        from contextos.runtime.conversation.service import ConversationGroupService
+        from contextos.runtime.session.message_service import MessageService
+        from contextos.runtime.session.repository import InMemorySessionRepository
+        from contextos.runtime.session.service import SessionService
+        from contextos.runtime.timeline.repository import InMemoryTimelineRepository
+        from contextos.runtime.timeline.service import TimelineService
+
+        session_repository = InMemorySessionRepository()
+        session_service = SessionService(session_repository)
+        timeline_service = TimelineService(InMemoryTimelineRepository(), session_repository)
+        message_service = MessageService()
+        group_repository = InMemoryConversationGroupRepository()
+        group_service = ConversationGroupService(group_repository)
+        session = session_service.create_session("agent")
+        parent = timeline_service.create_initial_timeline(session.id)
+
+        group1 = group_service.start_turn(session.id, parent.id, "message-user-1", group_id="group-1")
+        message_service.create_message(session.id, "user", "keep user", timeline_id=parent.id, group_id=group1.id, context_group_ids=[group1.id], message_id="message-user-1")
+        message_service.create_message(session.id, "assistant", "keep assistant", timeline_id=parent.id, group_id=group1.id, context_group_ids=[group1.id], message_id="message-assistant-1")
+        group_service.append_message(group1.id, "message-assistant-1")
+
+        group2 = group_service.start_turn(session.id, parent.id, "message-user-2", group_id="group-2")
+        target = message_service.create_message(session.id, "user", "remove this turn", timeline_id=parent.id, group_id=group2.id, context_group_ids=[group2.id], message_id="message-user-2")
+        message_service.create_message(session.id, "assistant", "old future answer", timeline_id=parent.id, group_id=group2.id, context_group_ids=[group2.id], message_id="message-assistant-2")
+        group_service.append_message(group2.id, "message-assistant-2")
+
+        response = soft_delete_message(
+            target.id,
+            message_service,
+            group_service,
+            timeline_service=timeline_service,
+            semantic_delete=True,
+        )
+
+        child_id = response["body"]["timeline"]["id"]
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(len(timeline_service.list_timelines(session.id)), 2)
+        self.assertEqual(session_service.get_session(session.id).current_timeline_id, child_id)
+        self.assertEqual(
+            [message["content"] for message in ConversationContextBuilder(group_repository, message_service).build_llm_messages(session.id, parent.id)],
+            ["keep user", "keep assistant", "remove this turn", "old future answer"],
+        )
+        self.assertEqual(
+            [message["content"] for message in ConversationContextBuilder(group_repository, message_service).build_llm_messages(session.id, child_id)],
+            ["keep user", "keep assistant"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,8 @@ from contextos.runtime.conversation.model import ConversationGroupState
 from contextos.runtime.conversation.service import ConversationGroupNotFound, ConversationGroupService
 from contextos.runtime.session.message_revision_service import MessageRevisionService
 from contextos.runtime.session.message_service import MessageNotFound, MessageService
+from contextos.runtime.timeline.edit_fork_service import fork_timeline_context
+from contextos.runtime.timeline.service import TimelineService
 from contextos.tool.risk.impact_analyzer import EditImpactAnalyzer
 
 
@@ -70,7 +72,41 @@ def soft_delete_message(
     message_id: str,
     message_service: MessageService,
     conversation_group_service: ConversationGroupService | None = None,
+    *,
+    timeline_service: TimelineService | None = None,
+    semantic_delete: bool = False,
 ) -> dict[str, object]:
+    if semantic_delete and timeline_service is not None and conversation_group_service is not None:
+        try:
+            target = message_service.get_message(message_id)
+        except MessageNotFound:
+            return _not_found(message_id)
+        if target.timeline_id is not None:
+            timeline = timeline_service.fork_timeline(
+                parent_timeline_id=target.timeline_id,
+                fork_checkpoint_id=target.checkpoint_id or "",
+                fork_message_id=target.id,
+            )
+            timeline_service.activate_timeline(timeline.id)
+            working_context_messages = fork_timeline_context(
+                parent_timeline_id=target.timeline_id,
+                child_timeline_id=timeline.id,
+                edited_message=target,
+                edited_content=None,
+                message_service=message_service,
+                conversation_group_service=conversation_group_service,
+                include_edited_message=False,
+            )
+            return {
+                "status": 200,
+                "body": {
+                    "message_ids": _semantic_delete_message_ids(target, message_service),
+                    "message": target.to_dict(),
+                    "timeline": timeline.to_dict(),
+                    "working_context_messages": working_context_messages,
+                },
+            }
+
     try:
         deleted = message_service.soft_delete_message(message_id)
     except MessageNotFound:
@@ -90,6 +126,18 @@ def soft_delete_message(
             "message": deleted[0].to_dict() if deleted else None,
         },
     }
+
+
+def _semantic_delete_message_ids(target, message_service: MessageService) -> list[str]:
+    related_group_ids = {target.group_id, *target.context_group_ids} - {None}
+    messages, _ = message_service.list_messages(target.session_id, limit=10000, timeline_id=target.timeline_id)
+    if not related_group_ids:
+        return [target.id]
+    return [
+        message.id
+        for message in messages
+        if message.group_id in related_group_ids or related_group_ids.intersection(message.context_group_ids)
+    ]
 
 
 def get_message_original(message_id: str, revision_service: MessageRevisionService) -> dict[str, object]:
