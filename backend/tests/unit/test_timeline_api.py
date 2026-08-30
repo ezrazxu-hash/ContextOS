@@ -135,6 +135,37 @@ class TimelineApiTests(unittest.TestCase):
         self.assertEqual(child_response["body"]["parent_timeline_id"], parent.id)
         self.assertEqual([timeline["id"] for timeline in listed["body"]], [child.id])
 
+    def test_patch_timeline_title_preserves_identity_parent_and_current(self) -> None:
+        from contextos.api.routes.timelines import patch_timeline
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        parent = timeline_service.create_initial_timeline(session.id)
+        child = timeline_service.fork_timeline(parent.id, "checkpoint-1", "message-1")
+        timeline_service.activate_timeline(child.id)
+
+        response = patch_timeline(child.id, {"title": "  Before Edit  "}, timeline_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(response["body"]["id"], child.id)
+        self.assertEqual(response["body"]["title"], "Before Edit")
+        self.assertEqual(response["body"]["parent_timeline_id"], parent.id)
+        self.assertEqual(response["body"]["fork_checkpoint_id"], "checkpoint-1")
+        self.assertEqual(response["body"]["fork_message_id"], "message-1")
+        self.assertEqual(session_service.get_session(session.id).current_timeline_id, child.id)
+
+    def test_patch_timeline_rejects_blank_title(self) -> None:
+        from contextos.api.routes.timelines import patch_timeline
+
+        session_service, timeline_service = self.create_services()
+        session = session_service.create_session(agent_template_id="research-agent")
+        timeline = timeline_service.create_initial_timeline(session.id)
+
+        response = patch_timeline(timeline.id, {"title": "   "}, timeline_service)
+
+        self.assertEqual(response["status"], 400)
+        self.assertEqual(response["body"]["error"]["code"], "timeline.invalid_title")
+
 
 if __name__ == "__main__":
     unittest.main()

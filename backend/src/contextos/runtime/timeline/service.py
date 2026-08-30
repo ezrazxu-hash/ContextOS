@@ -56,6 +56,12 @@ class TimelineService:
         self._point_session_to_timeline(timeline.session_id, timeline.id)
         return timeline
 
+    def update_timeline_title(self, timeline_id: str, title: str) -> Timeline:
+        timeline = self.get_timeline(timeline_id)
+        if timeline.status is TimelineStatus.DELETED:
+            raise TimelineNotFound(timeline_id)
+        return self._repository.save(replace(timeline, title=title))
+
     def delete_timeline(self, timeline_id: str) -> DeleteTimelineResult:
         timeline = self.get_timeline(timeline_id)
         if timeline.status is TimelineStatus.DELETED:

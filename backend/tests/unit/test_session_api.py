@@ -77,6 +77,23 @@ class SessionApiTests(unittest.TestCase):
         self.assertEqual(response["body"]["title"], "Renamed session")
         self.assertEqual(len(timeline_service.list_timelines(session.id)), 1)
 
+    def test_session_title_update_trims_and_rejects_blank_title(self) -> None:
+        from contextos.api.routes.sessions import patch_session
+        from contextos.runtime.session.repository import InMemorySessionRepository
+        from contextos.runtime.session.service import SessionService
+
+        session_service = SessionService(InMemorySessionRepository())
+        session = session_service.create_session("research-agent", title="Original")
+
+        trimmed = patch_session(session.id, {"title": "  Project Chat  "}, session_service)
+        blank = patch_session(session.id, {"title": "   "}, session_service)
+
+        self.assertEqual(trimmed["status"], 200)
+        self.assertEqual(trimmed["body"]["title"], "Project Chat")
+        self.assertEqual(blank["status"], 400)
+        self.assertEqual(blank["body"]["error"]["code"], "session.invalid_title")
+        self.assertEqual(session_service.get_session(session.id).title, "Project Chat")
+
 
 if __name__ == "__main__":
     unittest.main()

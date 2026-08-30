@@ -52,11 +52,24 @@ def get_session(session_id: str, service: SessionService, request_id: str = "req
 
 
 def patch_session(session_id: str, payload: dict[str, object], service: SessionService, request_id: str = "req-session-patch") -> dict[str, object]:
+    title = payload.get("title")
+    if title is not None:
+        title = str(title).strip()
+        if not title:
+            return {
+                "status": 400,
+                "body": ApiError(
+                    code="session.invalid_title",
+                    message="Session title is required",
+                    request_id=request_id,
+                    status=400,
+                ).to_rest_payload(),
+            }
     try:
         metadata = payload.get("metadata")
         session = service.update_session_metadata(
             session_id,
-            title=str(payload["title"]) if payload.get("title") is not None else None,
+            title=title,
             metadata=dict(metadata) if isinstance(metadata, dict) else None,
         )
     except SessionNotFound:

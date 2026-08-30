@@ -50,4 +50,5 @@ def _timeline_from_dict(record: dict[str, object]) -> Timeline:
         fork_message_id=str(record["fork_message_id"]) if record.get("fork_message_id") is not None else None,
         created_at=datetime.fromisoformat(str(record["created_at"])),
         status=TimelineStatus(str(record["status"])),
+        title=str(record["title"]) if record.get("title") is not None else None,
     )

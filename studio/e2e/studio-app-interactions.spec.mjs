@@ -314,6 +314,194 @@ test("Timeline delete failure keeps the list current marker and messages unchang
   }
 });
 
+test("Session and timeline rename menus update labels without changing active ids", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+
+    await openSessionMenu(page, "demo-session");
+    await expect(page.getByTestId("session-menu-demo-session").getByRole("menuitem")).toHaveText(["Delete", "Rename"]);
+    const sessionPatch = page.waitForResponse((response) => {
+      return response.request().method() === "PATCH" && response.url().includes("/api/sessions/demo-session") && response.status() === 200;
+    });
+    page.once("dialog", (dialog) => dialog.accept("Project Chat"));
+    await page.getByTestId("session-menu-demo-session").getByRole("menuitem", { name: "Rename" }).click();
+    await sessionPatch;
+
+    await expect(page.getByTestId("session-demo-session")).toContainText("Project Chat");
+    await expect(page.getByTestId("session-demo-session")).toHaveAttribute("aria-pressed", "true");
+    expect(new URL(page.url()).searchParams.get("sessionId")).toBe("demo-session");
+
+    await openTimelineMenu(page, "demo-timeline");
+    await expect(page.getByTestId("timeline-menu-demo-timeline").getByRole("menuitem")).toHaveText(["Delete", "Rename"]);
+    const timelinePatch = page.waitForResponse((response) => {
+      return response.request().method() === "PATCH" && response.url().includes("/api/timelines/demo-timeline") && response.status() === 200;
+    });
+    page.once("dialog", (dialog) => dialog.accept("Before Edit"));
+    await page.getByTestId("timeline-menu-demo-timeline").getByRole("menuitem", { name: "Rename" }).click();
+    await timelinePatch;
+
+    await expect(page.getByTestId("timeline-demo-timeline")).toContainText("Before Edit");
+    await expect(page.getByTestId("timeline-demo-timeline")).toHaveAttribute("data-current", "true");
+    expect(new URL(page.url()).searchParams.get("timelineId")).toBe("demo-timeline");
+
+    await page.reload();
+    await expect(page.getByTestId("session-demo-session")).toContainText("Project Chat");
+    await expect(page.getByTestId("timeline-demo-timeline")).toContainText("Before Edit");
+    await expect(page.getByTestId("timeline-demo-timeline")).toHaveAttribute("data-current", "true");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Timeline rename failure keeps the previous label and current marker", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    await page.route("**/api/timelines/demo-timeline", (route) => {
+      if (route.request().method() === "PATCH") {
+        route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "rename failed" } }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+
+    await openTimelineMenu(page, "demo-timeline");
+    page.once("dialog", (dialog) => dialog.accept("Broken Name"));
+    await page.getByTestId("timeline-menu-demo-timeline").getByRole("menuitem", { name: "Rename" }).click();
+
+    await expect(page.getByTestId("status-toast")).toContainText("rename failed");
+    await expect(page.getByTestId("timeline-demo-timeline")).toContainText("demo-timeline");
+    await expect(page.getByTestId("timeline-demo-timeline")).toHaveAttribute("data-current", "true");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Forked timeline rename updates the current timeline label immediately", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    const childTimelineId = await forkUserTimeline(page, "Hello, please reply with OK");
+
+    await openTimelineMenu(page, childTimelineId);
+    const timelinePatch = page.waitForResponse((response) => {
+      return response.request().method() === "PATCH" && response.url().includes(`/api/timelines/${childTimelineId}`) && response.status() === 200;
+    });
+    page.once("dialog", (dialog) => dialog.accept("Branch Before Edit"));
+    await page.getByTestId(`timeline-menu-${childTimelineId}`).getByRole("menuitem", { name: "Rename" }).click();
+
+    const response = await timelinePatch;
+    const body = await response.json();
+    expect(body).toMatchObject({ id: childTimelineId, title: "Branch Before Edit" });
+    await expect(page.getByTestId(`timeline-${childTimelineId}`)).toContainText("Branch Before Edit");
+    await expect(page.getByTestId(`timeline-${childTimelineId}`)).toHaveAttribute("data-current", "true");
+    expect(new URL(page.url()).searchParams.get("timelineId")).toBe(childTimelineId);
+
+    await page.reload();
+    await expect(page.getByTestId(`timeline-${childTimelineId}`)).toContainText("Branch Before Edit");
+    await expect(page.getByTestId(`timeline-${childTimelineId}`)).toHaveAttribute("data-current", "true");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Timeline rename is not overwritten by an older route projection", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    const staleDebugIndex = await (await page.request.get(`${studio.url}/api/debug/sessions/demo-session`)).json();
+    let releaseProjection;
+    const projectionHeld = new Promise((resolve) => {
+      releaseProjection = resolve;
+    });
+    await page.route("**/api/debug/sessions/demo-session**", async (route) => {
+      await projectionHeld;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(staleDebugIndex),
+      });
+    });
+
+    const projectionRequest = page.waitForRequest((request) => {
+      return request.method() === "GET" && request.url().includes("/api/debug/sessions/demo-session");
+    });
+    const projectionResponse = page.waitForResponse((response) => {
+      return response.url().includes("/api/debug/sessions/demo-session") && response.status() === 200;
+    });
+    await page.getByTestId("timeline-demo-timeline").click();
+    await projectionRequest;
+
+    await openTimelineMenu(page, "demo-timeline");
+    const timelinePatch = page.waitForResponse((response) => {
+      return response.request().method() === "PATCH" && response.url().includes("/api/timelines/demo-timeline") && response.status() === 200;
+    });
+    page.once("dialog", (dialog) => dialog.accept("Before Edit"));
+    await page.getByTestId("timeline-menu-demo-timeline").getByRole("menuitem", { name: "Rename" }).click();
+    await timelinePatch;
+
+    await expect(page.getByTestId("timeline-demo-timeline")).toContainText("Before Edit");
+    releaseProjection();
+    await projectionResponse;
+    await expect(page.getByTestId("timeline-demo-timeline")).toContainText("Before Edit");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Blank session rename does not submit a PATCH request", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+  let patchCount = 0;
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    page.on("request", (request) => {
+      if (request.method() === "PATCH" && request.url().includes("/api/sessions/demo-session")) {
+        patchCount += 1;
+      }
+    });
+
+    await openSessionMenu(page, "demo-session");
+    page.once("dialog", (dialog) => dialog.accept("   "));
+    await page.getByTestId("session-menu-demo-session").getByRole("menuitem", { name: "Rename" }).click();
+
+    await expect(page.getByTestId("status-toast")).toContainText("Name is required");
+    expect(patchCount).toBe(0);
+    await expect(page.getByTestId("session-demo-session")).toContainText("demo-session");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
 async function startBackend(port) {
   const stateDir = await mkdtemp(join(tmpdir(), "contextos-studio-app-"));
   const storagePath = join(stateDir, "runtime-state.json");
@@ -369,6 +557,12 @@ async function openTimelineMenu(page, timelineId) {
   await page.locator(`[data-testid="timeline-${timelineId}"]`).hover();
   await page.locator(`[data-menu-timeline-id="${timelineId}"]`).click();
   await expect(page.getByTestId(`timeline-menu-${timelineId}`)).toBeVisible();
+}
+
+async function openSessionMenu(page, sessionId) {
+  await page.locator(`[data-testid="session-${sessionId}"]`).hover();
+  await page.locator(`[data-menu-session-id="${sessionId}"]`).click();
+  await expect(page.getByTestId(`session-menu-${sessionId}`)).toBeVisible();
 }
 
 async function startStudio(port, backendPort) {

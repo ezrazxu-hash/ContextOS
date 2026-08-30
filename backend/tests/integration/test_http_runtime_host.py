@@ -164,6 +164,42 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(patched["title"], "Renamed session")
         self.assertEqual(len(after), len(before))
 
+    def test_host_renames_timeline_and_preserves_identity_after_restart(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            host = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            host.start()
+            try:
+                session = get_json(f"{host.url}/api/sessions/demo-session")
+                parent_timeline_id = str(session["current_timeline_id"])
+                semantic_edit = patch_json(
+                    f"{host.url}/api/messages/demo-user-message",
+                    {"new_content": "Rename child timeline", "semantic": True},
+                )
+                child = semantic_edit["timeline"]
+                patched = patch_json(f"{host.url}/api/timelines/{child['id']}", {"title": "  Before Edit  "})
+                session_after = get_json(f"{host.url}/api/sessions/demo-session")
+            finally:
+                host.stop()
+
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            restarted.start()
+            try:
+                timelines = get_json(f"{restarted.url}/api/sessions/demo-session/timelines")
+            finally:
+                restarted.stop()
+
+        renamed = next(timeline for timeline in timelines if timeline["id"] == child["id"])
+        self.assertEqual(patched["id"], child["id"])
+        self.assertEqual(patched["title"], "Before Edit")
+        self.assertEqual(patched["parent_timeline_id"], parent_timeline_id)
+        self.assertEqual(patched["fork_message_id"], "demo-user-message")
+        self.assertEqual(session_after["current_timeline_id"], child["id"])
+        self.assertEqual(renamed["title"], "Before Edit")
+        self.assertEqual(renamed["parent_timeline_id"], parent_timeline_id)
+
     def test_host_restores_all_empty_sessions_from_runtime_state(self) -> None:
         from contextos.api.server import create_http_runtime_host
 

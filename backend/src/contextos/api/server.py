@@ -17,7 +17,7 @@ from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
 from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, patch_session, post_session, post_session_message, remove_session
 from contextos.api.routes.templates import get_template, list_templates, post_template, post_template_compile, post_template_run, post_template_validate, put_template
-from contextos.api.routes.timelines import activate_timeline, list_session_timelines, remove_timeline
+from contextos.api.routes.timelines import activate_timeline, list_session_timelines, patch_timeline, remove_timeline
 from contextos.provider.base.chat_client import ChatCompletionClient
 from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
 from contextos.runtime.conversation.context_builder import ConversationContextBuilder
@@ -488,6 +488,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
                 self._send_route_response(patch_session(segments[2], payload, services.session_service))
+                return
+
+            if len(segments) == 3 and segments[:2] == ["api", "timelines"]:
+                self._send_route_response(patch_timeline(segments[2], payload, services.timeline_service))
                 return
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})

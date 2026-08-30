@@ -17,6 +17,7 @@ class Timeline:
     fork_message_id: str | None
     created_at: datetime
     status: TimelineStatus
+    title: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -27,6 +28,7 @@ class Timeline:
             "fork_message_id": self.fork_message_id,
             "created_at": self.created_at.isoformat(),
             "status": self.status.value,
+            "title": self.title,
         }
 
 

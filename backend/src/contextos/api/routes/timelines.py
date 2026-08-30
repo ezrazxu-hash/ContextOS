@@ -38,6 +38,26 @@ def activate_timeline(timeline_id: str, service: TimelineService, request_id: st
     }
 
 
+def patch_timeline(timeline_id: str, payload: dict[str, object], service: TimelineService, request_id: str = "req-timeline-patch") -> dict[str, object]:
+    title = str(payload.get("title", "")).strip()
+    if not title:
+        return {
+            "status": 400,
+            "body": ApiError("timeline.invalid_title", "Timeline title is required", request_id, 400).to_rest_payload(),
+        }
+    try:
+        timeline = service.update_timeline_title(timeline_id, title)
+    except TimelineNotFound:
+        return {
+            "status": 404,
+            "body": ApiError("timeline.not_found", "Timeline not found", request_id, 404).to_rest_payload(),
+        }
+    return {
+        "status": 200,
+        "body": timeline.to_dict(),
+    }
+
+
 def remove_timeline(timeline_id: str, service: TimelineService, request_id: str = "req-timeline-delete") -> dict[str, object]:
     try:
         result = service.delete_timeline(timeline_id)

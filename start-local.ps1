@@ -18,6 +18,13 @@ function Get-ListeningPids([int[]]$Ports) {
         Sort-Object -Unique
 }
 
+function Format-Pids([int[]]$Pids) {
+    if ($Pids.Count -eq 0) {
+        return "not listening"
+    }
+    return ($Pids | Sort-Object -Unique) -join ","
+}
+
 function Stop-Ports([int[]]$Ports) {
     $pids = Get-ListeningPids $Ports
     foreach ($processId in $pids) {
@@ -55,42 +62,48 @@ function Import-DotEnv([string]$Path) {
     }
 }
 
+function Quote-ForChildPowerShell([string]$Value) {
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function Start-DetachedPowerShell([string]$Command) {
+    return Start-Process `
+        -FilePath "powershell.exe" `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $Command) `
+        -WorkingDirectory $RepoRoot `
+        -WindowStyle Hidden `
+        -PassThru
+}
+
 Stop-Ports @($BackendPort, $StudioPort)
 
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
 Import-DotEnv $BackendEnv
-$env:PYTHONPATH = "backend/src"
-$backend = Start-Process `
-    -FilePath "python" `
-    -ArgumentList @("-m", "contextos.api", "--host", "127.0.0.1", "--port", "$BackendPort") `
-    -WorkingDirectory $RepoRoot `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput $BackendLog `
-    -RedirectStandardError $BackendErr `
-    -PassThru
-Remove-Item Env:\PYTHONPATH -ErrorAction SilentlyContinue
 
-$env:CONTEXTOS_STUDIO_API_BASE_URL = "http://localhost:$BackendPort"
-$env:CONTEXTOS_STUDIO_SSE_BASE_URL = "http://localhost:$BackendPort"
-$env:CONTEXTOS_STUDIO_WS_BASE_URL = ""
-$env:CONTEXTOS_STUDIO_PORT = "$StudioPort"
-$studio = Start-Process `
-    -FilePath "cmd.exe" `
-    -ArgumentList @("/c", "npm --prefix studio run dev:real") `
-    -WorkingDirectory $RepoRoot `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput $StudioLog `
-    -RedirectStandardError $StudioErr `
-    -PassThru
-Remove-Item Env:\CONTEXTOS_STUDIO_API_BASE_URL -ErrorAction SilentlyContinue
-Remove-Item Env:\CONTEXTOS_STUDIO_SSE_BASE_URL -ErrorAction SilentlyContinue
-Remove-Item Env:\CONTEXTOS_STUDIO_WS_BASE_URL -ErrorAction SilentlyContinue
-Remove-Item Env:\CONTEXTOS_STUDIO_PORT -ErrorAction SilentlyContinue
+$backendCommand = @"
+Set-Location -LiteralPath $(Quote-ForChildPowerShell $RepoRoot)
+`$env:PYTHONPATH = 'backend/src'
+python -m contextos.api --host 127.0.0.1 --port $BackendPort 1> $(Quote-ForChildPowerShell $BackendLog) 2> $(Quote-ForChildPowerShell $BackendErr)
+"@
+$backend = Start-DetachedPowerShell $backendCommand
+
+$studioCommand = @"
+Set-Location -LiteralPath $(Quote-ForChildPowerShell $RepoRoot)
+`$env:CONTEXTOS_STUDIO_API_BASE_URL = 'http://localhost:$BackendPort'
+`$env:CONTEXTOS_STUDIO_SSE_BASE_URL = 'http://localhost:$BackendPort'
+`$env:CONTEXTOS_STUDIO_WS_BASE_URL = ''
+`$env:CONTEXTOS_STUDIO_PORT = '$StudioPort'
+npm --prefix studio run dev:real 1> $(Quote-ForChildPowerShell $StudioLog) 2> $(Quote-ForChildPowerShell $StudioErr)
+"@
+$studio = Start-DetachedPowerShell $studioCommand
 
 Wait-HttpOk "http://127.0.0.1:$BackendPort/health"
 Wait-HttpOk "http://127.0.0.1:$StudioPort/__contextos/config.json"
 
-Write-Output "Backend: http://127.0.0.1:$BackendPort PID $($backend.Id)"
-Write-Output "Studio:  http://localhost:$StudioPort PID $($studio.Id)"
+$BackendPids = Format-Pids (Get-ListeningPids @($BackendPort))
+$StudioPids = Format-Pids (Get-ListeningPids @($StudioPort))
+
+Write-Output "Backend: http://127.0.0.1:$BackendPort PID $BackendPids"
+Write-Output "Studio:  http://localhost:$StudioPort PID $StudioPids"
 Write-Output "Logs:    $LogDir"

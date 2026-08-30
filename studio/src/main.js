@@ -15,6 +15,8 @@ const state = {
   creatingSession: false,
   deletingSessionId: null,
   deletingTimelineId: null,
+  renamingSessionId: null,
+  renamingTimelineId: null,
   openSessionMenuId: null,
   sessionMenuPosition: null,
   openTimelineMenuId: null,
@@ -202,7 +204,7 @@ function renderLeftRail() {
                 <span data-testid="workspace-item-label">${escapeHtml(label)}</span><small>${escapeHtml(session.status ?? (state.config.mockRuntime ? "mock" : "runtime"))}</small>
               </button>
               <div class="session-menu-host">
-                <button data-action="toggle-session-menu" data-menu-session-id="${escapeAttr(session.id)}" class="session-menu-trigger" aria-label="Session actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Session actions" ${deleting ? "disabled" : ""}>...</button>
+                <button data-action="toggle-session-menu" data-menu-session-id="${escapeAttr(session.id)}" class="session-menu-trigger" aria-label="Session actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Session actions" ${deleting || state.renamingSessionId === session.id ? "disabled" : ""}>...</button>
               </div>
             </div>
           `;
@@ -222,7 +224,7 @@ function renderLeftRail() {
                 <span data-testid="workspace-item-label">${escapeHtml(label)}</span><small>${current ? "Current" : escapeHtml(timeline.status ?? "active")}</small>
               </button>
               <div class="session-menu-host">
-                <button data-action="toggle-timeline-menu" data-menu-timeline-id="${escapeAttr(timeline.id)}" class="session-menu-trigger" aria-label="Timeline actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Timeline actions" ${deleting ? "disabled" : ""}>...</button>
+                <button data-action="toggle-timeline-menu" data-menu-timeline-id="${escapeAttr(timeline.id)}" class="session-menu-trigger" aria-label="Timeline actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Timeline actions" ${deleting || state.renamingTimelineId === timeline.id ? "disabled" : ""}>...</button>
               </div>
             </div>
           `;
@@ -393,7 +395,8 @@ function renderSessionMenuOverlay() {
   if (!state.openSessionMenuId || !state.sessionMenuPosition) return "";
   return `
     <div class="session-menu" data-testid="session-menu-${escapeAttr(state.openSessionMenuId)}" role="menu" style="left:${state.sessionMenuPosition.left}px;top:${state.sessionMenuPosition.top}px">
-      <button data-action="delete-session" data-delete-session-id="${escapeAttr(state.openSessionMenuId)}" role="menuitem">Delete</button>
+      <button class="danger" data-action="delete-session" data-delete-session-id="${escapeAttr(state.openSessionMenuId)}" role="menuitem">Delete</button>
+      <button data-action="rename-session" data-rename-session-id="${escapeAttr(state.openSessionMenuId)}" role="menuitem">Rename</button>
     </div>
   `;
 }
@@ -402,7 +405,8 @@ function renderTimelineMenuOverlay() {
   if (!state.openTimelineMenuId || !state.timelineMenuPosition) return "";
   return `
     <div class="session-menu" data-testid="timeline-menu-${escapeAttr(state.openTimelineMenuId)}" role="menu" style="left:${state.timelineMenuPosition.left}px;top:${state.timelineMenuPosition.top}px">
-      <button data-action="delete-timeline" data-delete-timeline-id="${escapeAttr(state.openTimelineMenuId)}" role="menuitem">Delete</button>
+      <button class="danger" data-action="delete-timeline" data-delete-timeline-id="${escapeAttr(state.openTimelineMenuId)}" role="menuitem">Delete</button>
+      <button data-action="rename-timeline" data-rename-timeline-id="${escapeAttr(state.openTimelineMenuId)}" role="menuitem">Rename</button>
     </div>
   `;
 }
@@ -639,6 +643,42 @@ async function handleAction(event) {
       state.deletingSessionId = null;
       render();
     }
+  } else if (action === "rename-session") {
+    event.stopPropagation();
+    const sessionId = target.dataset.renameSessionId;
+    if (!sessionId || state.renamingSessionId) return;
+    const session = state.sessions.find((item) => item.id === sessionId);
+    const label = displayResourceLabel(session ?? { id: sessionId });
+    state.openSessionMenuId = null;
+    state.sessionMenuPosition = null;
+    const title = window.prompt(`Rename session ${label}`, label)?.trim();
+    if (title === undefined) {
+      render();
+      return;
+    }
+    if (!title) {
+      state.toast = { tone: "warning", text: "Name is required" };
+      render();
+      return;
+    }
+    state.renamingSessionId = sessionId;
+    state.toast = { tone: "loading", text: "Renaming session" };
+    render();
+    try {
+      const updated = await runtimeClient().patchSession(sessionId, title);
+      updateWorkspaceSessions([updated]);
+      if (state.debugIndex?.session?.id === sessionId) {
+        state.debugIndex = { ...state.debugIndex, session: updated };
+      }
+      state.toast = { tone: "success", text: "Session renamed" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.renamingSessionId = null;
+      render();
+    }
   } else if (action === "delete-timeline") {
     event.stopPropagation();
     const timelineId = target.dataset.deleteTimelineId;
@@ -681,6 +721,44 @@ async function handleAction(event) {
       render();
     } finally {
       state.deletingTimelineId = null;
+      render();
+    }
+  } else if (action === "rename-timeline") {
+    event.stopPropagation();
+    const timelineId = target.dataset.renameTimelineId;
+    if (!timelineId || state.renamingTimelineId) return;
+    const timeline = (state.debugIndex?.timelines ?? []).find((item) => item.id === timelineId);
+    const label = displayResourceLabel(timeline ?? { id: timelineId });
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
+    const title = window.prompt(`Rename timeline ${label}`, label)?.trim();
+    if (title === undefined) {
+      render();
+      return;
+    }
+    if (!title) {
+      state.toast = { tone: "warning", text: "Name is required" };
+      render();
+      return;
+    }
+    state.renamingTimelineId = timelineId;
+    state.toast = { tone: "loading", text: "Renaming timeline" };
+    render();
+    try {
+      const updated = await runtimeClient().patchTimeline(timelineId, title);
+      if (state.debugIndex?.timelines) {
+        state.debugIndex = {
+          ...state.debugIndex,
+          timelines: state.debugIndex.timelines.map((item) => (item.id === timelineId ? updated : item)),
+        };
+      }
+      state.toast = { tone: "success", text: "Timeline renamed" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.renamingTimelineId = null;
       render();
     }
   } else if (action === "toggle-message-menu") {
@@ -1075,6 +1153,8 @@ function realClient() {
     createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
     deleteSession: (sessionId) => deleteJson(`/api/sessions/${encodeURIComponent(sessionId)}`),
     deleteTimeline: (timelineId) => deleteJson(`/api/timelines/${encodeURIComponent(timelineId)}`),
+    patchSession: (sessionId, title) => patchJson(`/api/sessions/${encodeURIComponent(sessionId)}`, { title }),
+    patchTimeline: (timelineId, title) => patchJson(`/api/timelines/${encodeURIComponent(timelineId)}`, { title }),
     patchMessage: (messageId, content, options = {}) => patchJson(`/api/messages/${encodeURIComponent(messageId)}`, { new_content: content, semantic: Boolean(options.semantic) }),
     deleteMessage: (messageId) => deleteJson(`/api/messages/${encodeURIComponent(messageId)}`),
     activateTimeline: (timelineId) => postJson(`/api/timelines/${encodeURIComponent(timelineId)}/activate`, {}),
@@ -1123,6 +1203,12 @@ function mockClient() {
     },
     async deleteTimeline(timelineId) {
       return { timeline: { ...clone(demoFixtures.timeline), id: timelineId, status: "deleted" }, current_timeline_id: null };
+    },
+    async patchSession(sessionId, title) {
+      return { ...clone(demoFixtures.session), id: sessionId, title };
+    },
+    async patchTimeline(timelineId, title) {
+      return { ...clone(demoFixtures.timeline), id: timelineId, title };
     },
     async patchMessage(messageId, content, options = {}) {
       const message = state.messages.find((item) => item.id === messageId) ?? demoFixtures.messages.find((item) => item.id === messageId);
@@ -1448,8 +1534,10 @@ function styleTag() {
     .session-menu-trigger { width: 34px; min-height: 34px; padding: 6px 0; font-size: 13px; line-height: 1; color: var(--muted); visibility: hidden; }
     .session-row:hover .session-menu-trigger, .session-row.menu-open .session-menu-trigger { visibility: visible; }
     .session-menu { position: fixed; z-index: 50; min-width: 112px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
-    .session-menu button { width: 100%; border: 0; padding: 7px 10px; text-align: left; color: var(--error); background: transparent; }
-    .session-menu button:hover { background: #fff1f0; }
+    .session-menu button { width: 100%; border: 0; padding: 7px 10px; text-align: left; color: var(--text); background: transparent; }
+    .session-menu button:hover { background: var(--accent-soft); }
+    .session-menu button.danger { color: var(--error); }
+    .session-menu button.danger:hover { background: #fff1f0; }
     .nav-item span, .nav-item small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item small { color: var(--muted); }
     .nav-item.current small { color: var(--success); font-weight: 700; }
