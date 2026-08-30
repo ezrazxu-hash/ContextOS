@@ -49,6 +49,8 @@ const state = {
   templateTab: "basic",
   sending: false,
   chatDraft: "",
+  shouldRefocusComposer: false,
+  suppressComposerRefocus: false,
 };
 
 await start();
@@ -63,6 +65,8 @@ async function start() {
     render();
   });
   document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("pointerdown", handleFocusIntentDuringSend, true);
+  document.addEventListener("focusin", handleFocusIntentDuringSend, true);
   await loadRouteData();
   render();
 }
@@ -800,6 +804,7 @@ async function handleAction(event) {
     state.messageMutationId = messageId;
     state.toast = { tone: "loading", text: "Saving message" };
     render();
+    let regenerated = false;
     try {
       const client = runtimeClient();
       const originalMessage = state.messages.find((message) => message.id === messageId);
@@ -813,10 +818,13 @@ async function handleAction(event) {
         state.selection.messageId = response.message?.id ?? null;
         await navigate(`/chat?sessionId=${encodeURIComponent(state.selection.sessionId)}&timelineId=${encodeURIComponent(response.timeline.id)}`);
         state.sending = true;
+        state.shouldRefocusComposer = true;
+        state.suppressComposerRefocus = false;
         state.toast = { tone: "loading", text: "Regenerating assistant reply" };
         render();
         await streamAssistantReply(client);
         await refreshCurrentContext(client);
+        regenerated = true;
       } else {
         updateMessage(response.message ?? {
           ...originalMessage,
@@ -834,6 +842,11 @@ async function handleAction(event) {
       state.messageMutationId = null;
       state.sending = false;
       render();
+      if (regenerated) {
+        refocusComposerAfterAgentTurn();
+      } else if (state.shouldRefocusComposer) {
+        state.shouldRefocusComposer = false;
+      }
     }
   } else if (action === "delete-message") {
     event.stopPropagation();
@@ -942,15 +955,19 @@ async function handleChatSubmit(event) {
   if (!content || state.sending) return;
   const client = runtimeClient();
   state.sending = true;
+  state.shouldRefocusComposer = true;
+  state.suppressComposerRefocus = false;
   state.chatDraft = "";
   state.toast = { tone: "loading", text: "Sending message to Runtime" };
   render();
+  let sent = false;
   try {
     const created = await client.postSessionMessage(state.selection.sessionId, content, state.selection.timelineId ?? DEFAULT_TIMELINE_ID);
     state.messages.push(created);
     render();
     await streamAssistantReply(client);
     await refreshCurrentContext(client);
+    sent = true;
     state.toast = { tone: "success", text: "Sent" };
   } catch (error) {
     state.chatDraft = content;
@@ -959,6 +976,11 @@ async function handleChatSubmit(event) {
   } finally {
     state.sending = false;
     render();
+    if (sent) {
+      refocusComposerAfterAgentTurn();
+    } else {
+      state.shouldRefocusComposer = false;
+    }
   }
 }
 
@@ -971,6 +993,46 @@ async function streamAssistantReply(client) {
     if (event.type === "error") throw new Error(event.data?.message ?? "Runtime stream failed");
     render();
   }
+}
+
+function handleFocusIntentDuringSend(event) {
+  if (!state.sending || !state.shouldRefocusComposer) return;
+  const target = event.target;
+  if (target?.closest?.(".composer")) return;
+  if (event.type === "pointerdown" || isEditableElement(target)) {
+    state.suppressComposerRefocus = true;
+  }
+}
+
+function refocusComposerAfterAgentTurn() {
+  if (!shouldFocusComposerAfterAgentTurn()) {
+    state.shouldRefocusComposer = false;
+    return;
+  }
+  requestAnimationFrame(() => {
+    if (!shouldFocusComposerAfterAgentTurn()) {
+      state.shouldRefocusComposer = false;
+      return;
+    }
+    document.querySelector("[data-testid='composer-input']")?.focus({ preventScroll: true });
+    state.shouldRefocusComposer = false;
+  });
+}
+
+function shouldFocusComposerAfterAgentTurn() {
+  if (!state.shouldRefocusComposer || state.suppressComposerRefocus) return false;
+  if (state.route !== "/chat" || state.sending || state.loading) return false;
+  if (state.editingMessageId || state.messageMutationId) return false;
+  if (state.openSessionMenuId || state.openTimelineMenuId || state.openMessageMenuId) return false;
+  if (state.renamingSessionId || state.renamingTimelineId || state.deletingSessionId || state.deletingTimelineId) return false;
+  const active = document.activeElement;
+  return !isEditableElement(active);
+}
+
+function isEditableElement(element) {
+  if (!element || element === document.body) return false;
+  if (element.isContentEditable) return true;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName);
 }
 
 function applyToken(data) {

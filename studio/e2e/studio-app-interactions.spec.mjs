@@ -76,6 +76,112 @@ test("Studio app has working navigation chat send selection and disabled action 
   }
 });
 
+test("Composer refocuses after assistant reply finishes without stealing focus during streaming", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    let releaseStream;
+    const streamHeld = new Promise((resolve) => {
+      releaseStream = resolve;
+    });
+    await page.route("**/sse/sessions/demo-session/chat**", async (route) => {
+      await streamHeld;
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          'event: token\ndata: {"message_id":"focus-stream","role":"assistant","content":"OK"}',
+          'event: done\ndata: {"message_id":"focus-stream","checkpoint_id":"focus-checkpoint"}',
+          "",
+        ].join("\n\n"),
+      });
+    });
+
+    const composer = page.getByTestId("composer-input");
+    await composer.fill("Hello, please reply with OK");
+
+    const streamResponse = page.waitForResponse((response) => {
+      return response.url().includes("/sse/sessions/demo-session/chat") && response.status() === 200;
+    });
+    await page.getByTestId("send-message").click();
+    await expect(composer).toBeDisabled();
+
+    await page.waitForTimeout(150);
+    await expect(composer).toBeDisabled();
+    releaseStream();
+    await streamResponse;
+    await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
+    await expect(composer).toBeEnabled();
+    await expect(composer).toBeFocused();
+    await page.keyboard.type("Second turn");
+    await expect(composer).toHaveValue("Second turn");
+
+    const secondStream = page.waitForResponse((response) => {
+      return response.url().includes("/sse/sessions/demo-session/chat") && response.status() === 200;
+    });
+    await page.getByTestId("send-message").click();
+    await secondStream;
+    await expect(composer).toBeEnabled();
+    await expect(composer).toBeFocused();
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Composer refocus is suppressed when the user edits during assistant reply", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/chat?sessionId=demo-session&timelineId=demo-timeline`);
+    let releaseStream;
+    const streamHeld = new Promise((resolve) => {
+      releaseStream = resolve;
+    });
+    await page.route("**/sse/sessions/demo-session/chat**", async (route) => {
+      await streamHeld;
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          'event: token\ndata: {"message_id":"focus-stream","role":"assistant","content":"OK"}',
+          'event: done\ndata: {"message_id":"focus-stream","checkpoint_id":"focus-checkpoint"}',
+          "",
+        ].join("\n\n"),
+      });
+    });
+
+    const composer = page.getByTestId("composer-input");
+    await composer.fill("Hello, please reply with OK");
+    const streamResponse = page.waitForResponse((response) => {
+      return response.url().includes("/sse/sessions/demo-session/chat") && response.status() === 200;
+    });
+    await page.getByTestId("send-message").click();
+    await expect(composer).toBeDisabled();
+
+    const userCard = page.locator(".message-card.user").first();
+    await startEditing(page, userCard);
+    const editor = page.locator("[data-message-edit-input]").first();
+    await editor.fill("Draft during stream");
+
+    releaseStream();
+    await streamResponse;
+    await expect(composer).toBeEnabled();
+    await expect(composer).not.toBeFocused();
+    await expect(editor).toHaveValue("Draft during stream");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
 test("Workflow page lists saves reloads and preserves dragged node positions", async ({ page }) => {
   const backendPort = await freePort();
   const studioPort = await freePort();
@@ -215,6 +321,7 @@ test("Editing a user message forks timeline and streams a new assistant reply", 
     await expect(page.locator(`[data-testid="timeline-${childTimelineId}"]`)).toHaveAttribute("data-current", "true");
     await expect(page.locator(".message-card.user").getByText("Hello, please reply with OK", { exact: true })).toBeVisible();
     await expect(page.locator(".message-card.assistant").getByText("OK", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toBeFocused();
     const childMessages = await (await page.request.get(`${studio.url}/api/sessions/demo-session/messages?timelineId=${childTimelineId}`)).json();
     expect(childMessages.messages.map((message) => message.content)).toContain("OK");
   } finally {
