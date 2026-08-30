@@ -20,12 +20,12 @@ test("UI09-T04-TC01: four demos have fixed page entry routes", () => {
 test("UI09-T04-TC02: demo ids and workflow graph are stable for reusable screenshots", () => {
   assert.equal(demoSeedCatalog.seedId, "contextos-v1-studio-demo-seed");
   assert.deepEqual(
-    demoFixtures.templateManifest.graph.nodes.map((node) => [node.id, node.type]),
+    demoFixtures.templateManifest.runtime.nodes.map((node) => [node.id, node.type]),
     [
-      ["planner", "agent"],
+      ["compose_prompt", "prompt"],
+      ["planner", "llm"],
       ["sales_search", "tool"],
       ["region_condition", "condition"],
-      ["region_router", "router"],
       ["writer", "output"],
     ],
   );
@@ -37,7 +37,8 @@ test("UI09-T04-TC03: demo covers chat impact template policy and does not allow 
   assert.equal(demoFixtures.messages[1].editable, true);
   assert.equal(demoFixtures.impact.issues[0].issue_type, "message_context_drift");
   assert.equal(demoFixtures.templateManifest.context.policy, "balanced");
-  assert.ok(demoFixtures.templateManifest.graph.nodes.find((node) => node.id === "sales_search").config.tool_name === "sales.search");
+  assert.ok(demoFixtures.templateManifest.runtime.nodes.find((node) => node.id === "sales_search").config.tool_name === "sales.search");
+  assert.equal(demoFixtures.templateManifest.runtime.nodes.some((node) => ["agent", "router"].includes(node.type)), false);
 
   const toolCall = demoFixtures.replay.sideEffectToolCall;
   assert.equal(toolCall.tool_id, "send_report_email");

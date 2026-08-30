@@ -39,12 +39,11 @@ from contextos.runtime.checkpoint.service import CheckpointService
 from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
 from contextos.runtime.debug.projection import DebugProjection
 from contextos.runtime.graph.cache import CompiledGraphCache
-from contextos.runtime.graph.nodes.agent import AgentNodeExecutor
 from contextos.runtime.graph.nodes.condition import ConditionNodeExecutor
 from contextos.runtime.graph.nodes.llm import LLMNodeExecutor
 from contextos.runtime.graph.nodes.output import OutputNodeExecutor
+from contextos.runtime.graph.nodes.prompt import PromptNodeExecutor
 from contextos.runtime.graph.nodes.registry import NodeExecutorRegistry
-from contextos.runtime.graph.nodes.router import RouterNodeExecutor
 from contextos.runtime.graph.nodes.tool import ToolNodeExecutor
 from contextos.runtime.persistence.json_store import JsonRuntimeStore
 from contextos.runtime.session.message_service import InMemoryMessageRepository, MessageService
@@ -143,12 +142,11 @@ class RuntimeServices:
     @property
     def node_executor_registry(self) -> NodeExecutorRegistry:
         registry = NodeExecutorRegistry()
+        registry.register(PromptNodeExecutor())
         if self.llm_client is not None:
             registry.register(LLMNodeExecutor(self.llm_client))
-            registry.register(AgentNodeExecutor(self.llm_client))
         registry.register(ToolNodeExecutor(ToolExecutorRegistry()))
         registry.register(ConditionNodeExecutor())
-        registry.register(RouterNodeExecutor())
         registry.register(OutputNodeExecutor())
         return registry
 

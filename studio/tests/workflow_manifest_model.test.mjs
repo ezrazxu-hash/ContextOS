@@ -48,6 +48,13 @@ test("T71 legacy graph manifest can be deserialized without losing config", asyn
     ui: { editable_messages: true },
   });
 
-  assert.deepEqual(restored.nodes[0], { id: "agent", type: "agent", config: { model: "default" }, position: { x: 1, y: 2 } });
+  assert.deepEqual(restored.nodes[0], {
+    id: "agent",
+    type: "agent",
+    config: { model: "default" },
+    position: { x: 1, y: 2 },
+    legacy: true,
+    unsupported: true,
+  });
   assert.deepEqual(restored.edges[0], { source: "START", target: "agent" });
 });

@@ -11,12 +11,12 @@ def valid_manifest_with(**overrides):
             "nodes": [
                 {
                     "id": "planner",
-                    "type": "agent",
-                    "config": {"tools": ["web_search"]},
+                    "type": "llm",
+                    "config": {"model": "default", "prompt": "{{input}}", "output_key": "answer"},
                 },
-                {"id": "review", "type": "custom", "extension": "extensions.requirement_review"},
+                {"id": "final", "type": "output", "config": {"source": "$state.answer"}},
             ],
-            "edges": [{"from": "START", "to": "planner"}, {"from": "planner", "to": "review"}, {"from": "review", "to": "END"}],
+            "edges": [{"from": "START", "to": "planner"}, {"from": "planner", "to": "final"}, {"from": "final", "to": "END"}],
         },
         "context": {
             "policy": "balanced",
@@ -32,12 +32,10 @@ def valid_manifest_with(**overrides):
 
 def create_registries():
     from contextos.template.extension.registry import ExtensionRegistry
-    from contextos.tool.registry.metadata import SideEffect, ToolMetadata
     from contextos.tool.registry.registry import ToolRegistry
 
     extension_registry = ExtensionRegistry()
-    extension_registry.register_custom_node("extensions.requirement_review", object())
-    tool_registry = ToolRegistry([ToolMetadata(tool_id="web_search", name="Web Search", side_effect=SideEffect.READ, idempotent=True)])
+    tool_registry = ToolRegistry()
     return extension_registry, tool_registry
 
 
@@ -49,7 +47,7 @@ class ManifestValidatorTests(unittest.TestCase):
         manifest = valid_manifest_with(
             graph={
                 "state_schema": "default_chat_state",
-                "nodes": [{"id": "planner", "type": "agent", "config": {"tools": ["web_search"]}}],
+                "nodes": [{"id": "planner", "type": "llm", "config": {"model": "default", "prompt": "{{input}}", "output_key": "answer"}}],
                 "edges": [{"from": "planner", "to": "missing"}],
             }
         )
@@ -59,32 +57,43 @@ class ManifestValidatorTests(unittest.TestCase):
 
         self.assertEqual(error.exception.field_path, "graph.edges[0].to")
 
-    def test_unregistered_custom_node_fails_without_dynamic_import(self) -> None:
+    def test_unsupported_custom_node_fails_without_dynamic_import(self) -> None:
         from contextos.template.extension.registry import ExtensionRegistry
         from contextos.template.validator.validator import ManifestValidationError, ManifestValidator
-        from contextos.tool.registry.metadata import SideEffect, ToolMetadata
         from contextos.tool.registry.registry import ToolRegistry
 
-        manifest = valid_manifest_with()
-        tool_registry = ToolRegistry([ToolMetadata(tool_id="web_search", name="Web Search", side_effect=SideEffect.READ, idempotent=True)])
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [{"id": "custom", "type": "custom", "extension": "extensions.requirement_review"}],
+                "edges": [{"from": "START", "to": "custom"}, {"from": "custom", "to": "END"}],
+            }
+        )
+        tool_registry = ToolRegistry()
 
         with self.assertRaises(ManifestValidationError) as error:
             ManifestValidator(ExtensionRegistry(), tool_registry).validate(manifest)
 
-        self.assertEqual(error.exception.field_path, "graph.nodes[1].extension")
-        self.assertEqual(error.exception.code, "unknown_extension")
+        self.assertEqual(error.exception.field_path, "graph.nodes[0].type")
+        self.assertEqual(error.exception.code, "unsupported_node_type")
 
     def test_missing_tool_binding_fails(self) -> None:
         from contextos.template.validator.validator import ManifestValidationError, ManifestValidator
         from contextos.tool.registry.registry import ToolRegistry
 
         extension_registry, _ = create_registries()
-        manifest = valid_manifest_with()
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [{"id": "lookup", "type": "tool", "config": {"tool_name": "web_search", "output_key": "tool_result"}}],
+                "edges": [{"from": "START", "to": "lookup"}, {"from": "lookup", "to": "END"}],
+            }
+        )
 
         with self.assertRaises(ManifestValidationError) as error:
             ManifestValidator(extension_registry, ToolRegistry()).validate(manifest)
 
-        self.assertEqual(error.exception.field_path, "graph.nodes[0].config.tools[0]")
+        self.assertEqual(error.exception.field_path, "graph.nodes[0].config.tool_name")
         self.assertEqual(error.exception.code, "unknown_tool")
 
     def test_registered_extensions_and_tools_validate(self) -> None:
@@ -119,6 +128,8 @@ class ManifestValidatorTests(unittest.TestCase):
             [(error.code, error.node_id, error.edge_id, error.field) for error in result.errors],
             [
                 ("unknown_node", None, "1:planner->missing", "graph.edges[1].to"),
+                ("unsupported_node_type", "planner", None, "graph.nodes[0].type"),
+                ("output_config.required", "orphan", None, "graph.nodes[1].config.source"),
                 ("missing_end_edge", None, None, "graph.edges"),
                 ("isolated_node", "orphan", None, "graph.nodes[1]"),
                 ("output_not_reachable", "orphan", None, "graph.nodes[1]"),
@@ -133,7 +144,7 @@ class ManifestValidatorTests(unittest.TestCase):
         manifest = valid_manifest_with(
             graph={
                 "state_schema": "default_chat_state",
-                "nodes": [{"id": "planner", "type": "llm", "config": {"model": "default", "prompt_template": "{{input}}"}}],
+                "nodes": [{"id": "planner", "type": "llm", "config": {"model": "default", "prompt": "{{input}}"}}],
                 "edges": [{"from": "START", "to": "planner"}, {"from": "planner", "to": "END"}],
             }
         )
@@ -144,6 +155,81 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertEqual(result.errors[0].code, "llm_config.required")
         self.assertEqual(result.errors[0].node_id, "planner")
         self.assertEqual(result.errors[0].field, "graph.nodes[0].config.output_key")
+
+    def test_start_and_end_cannot_be_manifest_nodes(self) -> None:
+        from contextos.template.validator.validator import ManifestValidator
+
+        extension_registry, tool_registry = create_registries()
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [
+                    {"id": "START", "type": "start", "config": {}},
+                    {"id": "END", "type": "end", "config": {}},
+                ],
+                "edges": [{"from": "START", "to": "END"}],
+            }
+        )
+
+        result = ManifestValidator(extension_registry, tool_registry).validate_result(manifest)
+
+        self.assertFalse(result.valid)
+        self.assertEqual([error.code for error in result.errors[:2]], ["reserved_boundary_node", "reserved_boundary_node"])
+
+    def test_condition_must_have_true_and_false_routes(self) -> None:
+        from contextos.template.validator.validator import ManifestValidator
+
+        extension_registry, tool_registry = create_registries()
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [
+                    {"id": "check", "type": "condition", "config": {"source": "$state.flag", "operator": "is_true"}},
+                    {"id": "yes", "type": "output", "config": {"source": "$state.answer"}},
+                ],
+                "edges": [
+                    {"from": "START", "to": "check"},
+                    {"from": "check", "to": "yes", "condition": "true"},
+                    {"from": "yes", "to": "END"},
+                ],
+            }
+        )
+
+        result = ManifestValidator(extension_registry, tool_registry).validate_result(manifest)
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.errors[0].code, "condition_routes_required")
+        self.assertEqual(result.errors[0].node_id, "check")
+
+    def test_agent_and_router_are_legacy_unsupported(self) -> None:
+        from contextos.template.validator.validator import ManifestValidator
+
+        extension_registry, tool_registry = create_registries()
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [
+                    {"id": "old_agent", "type": "agent", "config": {}},
+                    {"id": "old_router", "type": "router", "config": {}},
+                ],
+                "edges": [
+                    {"from": "START", "to": "old_agent"},
+                    {"from": "old_agent", "to": "old_router"},
+                    {"from": "old_router", "to": "END"},
+                ],
+            }
+        )
+
+        result = ManifestValidator(extension_registry, tool_registry).validate_result(manifest)
+
+        self.assertFalse(result.valid)
+        self.assertEqual(
+            [(error.code, error.node_id, error.field) for error in result.errors[:2]],
+            [
+                ("unsupported_node_type", "old_agent", "graph.nodes[0].type"),
+                ("unsupported_node_type", "old_router", "graph.nodes[1].type"),
+            ],
+        )
 
 
 if __name__ == "__main__":

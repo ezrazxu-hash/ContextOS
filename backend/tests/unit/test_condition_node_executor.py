@@ -15,6 +15,8 @@ class ConditionNodeExecutorTests(unittest.TestCase):
             ("lt", 2, 3, "true"),
             ("lte", 3, 3, "true"),
             ("exists", "present", None, "true"),
+            ("is_empty", "", None, "true"),
+            ("is_empty", [], None, "true"),
             ("contains", ["a", "b"], "b", "true"),
             ("is_true", True, None, "true"),
             ("is_false", False, None, "true"),

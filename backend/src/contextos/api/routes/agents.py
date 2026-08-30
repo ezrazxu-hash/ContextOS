@@ -95,9 +95,23 @@ def post_agent_graph_preview(
     extension_registry: ExtensionRegistry,
     tool_registry: ToolRegistry,
 ) -> dict[str, object]:
-    del agent_id, extension_registry, tool_registry
+    del agent_id
     try:
         manifest = parse_manifest(payload)
+        validation = ManifestValidator(extension_registry, tool_registry).validate_result(manifest)
+        if not validation.valid:
+            first = validation.errors[0]
+            return {
+                "status": 200,
+                "body": {
+                    "valid": False,
+                    "error": {
+                        "code": first.code,
+                        "field_path": first.field,
+                        "message": first.message,
+                    },
+                },
+            }
         result = CompileDryRunService().run(manifest)
     except ManifestParseError as exc:
         return {

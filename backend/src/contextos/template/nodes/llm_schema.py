@@ -11,16 +11,33 @@ _STATE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def validate_llm_node_config(config: dict[str, Any], *, field_prefix: str, node_id: str | None = None) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
-    for field in ("model", "prompt_template", "output_key"):
-        if not config.get(field):
-            issues.append(
-                ValidationIssue(
-                    code="llm_config.required",
-                    field=f"{field_prefix}.{field}",
-                    message=f"LLM node config field is required: {field}",
-                    node_id=node_id,
-                )
+    if not config.get("model"):
+        issues.append(
+            ValidationIssue(
+                code="llm_config.required",
+                field=f"{field_prefix}.model",
+                message="LLM node config field is required: model",
+                node_id=node_id,
             )
+        )
+    if not config.get("prompt") and not config.get("prompt_template"):
+        issues.append(
+            ValidationIssue(
+                code="llm_config.required",
+                field=f"{field_prefix}.prompt",
+                message="LLM node config field is required: prompt",
+                node_id=node_id,
+            )
+        )
+    if not config.get("output_key"):
+        issues.append(
+            ValidationIssue(
+                code="llm_config.required",
+                field=f"{field_prefix}.output_key",
+                message="LLM node config field is required: output_key",
+                node_id=node_id,
+            )
+        )
 
     temperature = config.get("temperature")
     if temperature is not None and not _valid_temperature(temperature):

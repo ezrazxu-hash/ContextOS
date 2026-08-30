@@ -1,22 +1,27 @@
 export const demoTemplateManifest = {
+  schema_version: "1.0",
   template: { id: "demo-template", name: "ContextOS Demo Agent", version: "1.0.0" },
-  graph: {
+  runtime: {
     state_schema: "default_chat_state",
     nodes: [
-      { id: "planner", type: "agent", config: { model: "demo-model", instruction: "Plan the PRD review answer", output_key: "plan" } },
-      { id: "sales_search", type: "tool", config: { tool_name: "sales.search", output_key: "sales" } },
-      { id: "region_condition", type: "condition", config: { state_key: "region" } },
-      { id: "region_router", type: "router", config: { state_key: "route", routes: { enterprise: "writer" } } },
+      {
+        id: "compose_prompt",
+        type: "prompt",
+        config: { template: "Plan the PRD review answer for {{topic}}", input_mapping: { topic: "$state.topic" }, output_key: "prompt_text" },
+      },
+      { id: "planner", type: "llm", config: { model: "demo-model", prompt: "{{prompt}}", input_mapping: { prompt: "$state.prompt_text" }, output_key: "plan" } },
+      { id: "sales_search", type: "tool", config: { tool_name: "sales.search", args: { query: "$state.plan" }, output_key: "sales" } },
+      { id: "region_condition", type: "condition", config: { source: "$state.sales.region", operator: "eq", value: "enterprise" } },
       { id: "writer", type: "output", config: { source: "$state.plan" } },
     ],
     edges: [
-      { from: "START", to: "planner" },
-      { from: "planner", to: "sales_search" },
-      { from: "sales_search", to: "region_condition" },
-      { from: "region_condition", to: "region_router", condition: "yes" },
-      { from: "region_condition", to: "writer", condition: "no" },
-      { from: "region_router", to: "writer", condition: "enterprise" },
-      { from: "writer", to: "END" },
+      { source: "START", target: "compose_prompt" },
+      { source: "compose_prompt", target: "planner" },
+      { source: "planner", target: "sales_search" },
+      { source: "sales_search", target: "region_condition" },
+      { source: "region_condition", target: "writer", route: "true" },
+      { source: "region_condition", target: "writer", route: "false" },
+      { source: "writer", target: "END" },
     ],
   },
   context: {
@@ -25,7 +30,16 @@ export const demoTemplateManifest = {
     restore: { mode: "auto", max_tokens_per_restore: 12000, max_restore_per_turn: 3 },
   },
   checkpoint: { enabled: true },
-  ui: { editable_messages: true, expose_context_panel: true },
+  ui: {
+    nodes: {
+      compose_prompt: { position: { x: 80, y: 120 } },
+      planner: { position: { x: 280, y: 120 } },
+      sales_search: { position: { x: 480, y: 120 } },
+      region_condition: { position: { x: 680, y: 120 } },
+      writer: { position: { x: 880, y: 120 } },
+    },
+    viewport: {},
+  },
 };
 
 export const demoSeedCatalog = {

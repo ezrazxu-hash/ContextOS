@@ -14,7 +14,7 @@ class LlmNodeExecutorTests(unittest.TestCase):
             config={
                 "model": "default",
                 "system_prompt": "You are helpful.",
-                "prompt_template": "Topic: {{topic}}",
+                "prompt": "Topic: {{topic}}",
                 "input_mapping": {"topic": "$state.input"},
                 "output_key": "answer",
             },
@@ -83,7 +83,7 @@ class FakeProvider:
 def llm_config(**overrides):
     config = {
         "model": "default",
-        "prompt_template": "{{input}}",
+        "prompt": "{{input}}",
         "input_mapping": {"input": "$state.input"},
         "output_key": "answer",
     }

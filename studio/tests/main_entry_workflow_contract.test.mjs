@@ -9,8 +9,13 @@ const studioRoot = dirname(fileURLToPath(import.meta.url)).replace(/\\tests$/, "
 test("main Workflow page exposes only V1 executable node library entries", () => {
   const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
 
+  assert.match(source, /"prompt"/);
   assert.match(source, /"llm"/);
-  assert.match(source, /"router"/);
+  assert.match(source, /"tool"/);
+  assert.match(source, /"condition"/);
+  assert.match(source, /"output"/);
+  assert.doesNotMatch(source, /"router"/);
+  assert.doesNotMatch(source, /"agent", "tool"/);
   assert.doesNotMatch(source, /"context_operator"/);
 });
 

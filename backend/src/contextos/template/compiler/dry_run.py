@@ -57,26 +57,42 @@ class _DryRunExecutor:
             update = {**state, "visited_nodes": [*state.get("visited_nodes", []), node.id]}
             output_key = node.config.get("output_key")
             if output_key is not None:
-                value = update.get(str(output_key), _dry_value(node)) if node.type == "output" else _dry_value(node)
+                value = _dry_value(node, update)
                 update[str(output_key)] = value
-                if node.type == "output":
-                    update["output"] = value
-            state_key = node.config.get("state_key")
-            if state_key is not None and str(state_key) not in update:
-                update[str(state_key)] = str(node.config.get("default_route", "true"))
+            if node.type == "output":
+                update["output"] = _dry_value(node, update)
+            if node.type == "condition":
+                state_key = str(node.config.get("state_key", "route"))
+                update[state_key] = "true"
             return update
 
         return run
 
 
-def _dry_value(node: NodeSpec) -> object:
+def _dry_value(node: NodeSpec, state: dict[str, object]) -> object:
     if node.type == "tool":
         return {"dry_run": node.id}
+    if node.type == "output":
+        source = str(node.config.get("source", f"dry_run:{node.id}"))
+        if source.startswith("$state."):
+            found, value = _resolve_state_path(source, state)
+            return value if found else source
+        return source
     return str(node.config.get("output", f"dry_run:{node.id}"))
+
+
+def _resolve_state_path(expression: str, state: dict[str, object]) -> tuple[bool, object]:
+    value: object = state
+    for part in expression.removeprefix("$state.").split("."):
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        else:
+            return False, None
+    return True, value
 
 
 def _dry_run_registry() -> NodeExecutorRegistry:
     registry = NodeExecutorRegistry()
-    for node_type in ["llm", "agent", "tool", "condition", "router", "output"]:
+    for node_type in ["prompt", "llm", "tool", "condition", "output"]:
         registry.register(_DryRunExecutor(node_type))
     return registry

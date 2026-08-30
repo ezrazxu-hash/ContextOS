@@ -19,7 +19,7 @@ test("UI02-T05-TC01 mock mode opens all four Studio pages", async () => {
   assert.equal(chat.sessionId, "demo-session");
   assert.ok(chat.cards.length > 0);
   assert.equal(debug.graph.selectedTimelineId, "demo-timeline");
-  assert.ok(workflow.nodeLibrary().some((node) => node.type === "agent"));
+  assert.deepEqual(workflow.nodeLibrary().map((node) => node.type), ["prompt", "llm", "tool", "condition", "output"]);
   assert.equal(template.view().manifest.template.id, "demo-template");
 });
 

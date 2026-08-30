@@ -44,8 +44,23 @@ class PublishServiceTests(unittest.TestCase):
         version = PublishService(template_service, version_service, *registries()).publish("research-agent")
 
         self.assertEqual(version.version, 1)
-        self.assertEqual(version.manifest_payload["graph"]["nodes"][0]["config"]["output"], "draft")
+        self.assertEqual(version.manifest_payload["graph"]["nodes"][0]["config"]["source"], "draft")
         self.assertEqual(template_service.get("research-agent").active_version_id, version.id)
+
+    def test_unsupported_agent_or_router_draft_cannot_publish(self) -> None:
+        from contextos.template.publish_service import PublishService, PublishValidationError
+
+        template_service, version_service = services_with_template()
+        invalid = manifest_payload("draft")
+        invalid["graph"]["nodes"] = [{"id": "legacy_agent", "type": "agent", "config": {}}]
+        invalid["graph"]["edges"] = [{"from": "START", "to": "legacy_agent"}, {"from": "legacy_agent", "to": "END"}]
+        template_service.save_draft("research-agent", invalid)
+
+        with self.assertRaises(PublishValidationError) as error:
+            PublishService(template_service, version_service, *registries()).publish("research-agent")
+
+        self.assertEqual(error.exception.validation.errors[0].code, "unsupported_node_type")
+        self.assertEqual(version_service.list_versions("research-agent"), [])
 
 
 def services_with_template():
@@ -78,7 +93,7 @@ def manifest_payload(output: str) -> dict[str, object]:
         "template": {"id": "research-agent", "name": "Research Agent", "version": "1.0.0"},
         "graph": {
             "state_schema": "default_chat_state",
-            "nodes": [{"id": "writer", "type": "output", "config": {"output_key": "answer", "output": output}}],
+            "nodes": [{"id": "writer", "type": "output", "config": {"source": output}}],
             "edges": [{"from": "START", "to": "writer"}, {"from": "writer", "to": "END"}],
         },
         "context": {

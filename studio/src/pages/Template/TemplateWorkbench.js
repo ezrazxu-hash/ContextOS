@@ -224,10 +224,10 @@ function fieldsForSection(sectionId, manifest, capabilities, estimateTokens, fie
   if (sectionId === "model" && agent) {
     return [
       {
-        path: `graph.nodes[${agent.index}].config.model`,
+        path: `${agent.fieldRoot}.nodes[${agent.index}].config.model`,
         value: agent.node.config?.model ?? "",
         options: [...(capabilities.models ?? [])],
-        error: fieldErrors.get(`graph.nodes[${agent.index}].config.model`) ?? null,
+        error: fieldErrors.get(`${agent.fieldRoot}.nodes[${agent.index}].config.model`) ?? null,
       },
     ];
   }
@@ -235,11 +235,11 @@ function fieldsForSection(sectionId, manifest, capabilities, estimateTokens, fie
     const value = agent.node.config?.prompt ?? "";
     return [
       {
-        path: `graph.nodes[${agent.index}].config.prompt`,
+        path: `${agent.fieldRoot}.nodes[${agent.index}].config.prompt`,
         value,
         multiline: true,
         tokenEstimate: estimateTokens ? estimateTokens(value) : null,
-        error: fieldErrors.get(`graph.nodes[${agent.index}].config.prompt`) ?? null,
+        error: fieldErrors.get(`${agent.fieldRoot}.nodes[${agent.index}].config.prompt`) ?? null,
       },
     ];
   }
@@ -247,7 +247,7 @@ function fieldsForSection(sectionId, manifest, capabilities, estimateTokens, fie
     const selectedTools = new Set(agent.node.config?.tools ?? []);
     return [
       {
-        path: `graph.nodes[${agent.index}].config.tools`,
+        path: `${agent.fieldRoot}.nodes[${agent.index}].config.tools`,
         value: [...selectedTools],
         options: (capabilities.tools ?? []).map((tool) => ({
           id: tool.id,
@@ -255,7 +255,7 @@ function fieldsForSection(sectionId, manifest, capabilities, estimateTokens, fie
           selected: selectedTools.has(tool.id),
           risk: tool.side_effect ? { kind: "side_effect", label: "Side effect" } : null,
         })),
-        error: fieldErrors.get(`graph.nodes[${agent.index}].config.tools`) ?? null,
+        error: fieldErrors.get(`${agent.fieldRoot}.nodes[${agent.index}].config.tools`) ?? null,
       },
     ];
   }
@@ -266,7 +266,7 @@ function fieldsForSection(sectionId, manifest, capabilities, estimateTokens, fie
 }
 
 function workflowIssues(fieldErrors) {
-  return [...fieldErrors.values()].filter((issue) => issue.fieldPath.startsWith("graph."));
+  return [...fieldErrors.values()].filter((issue) => issue.fieldPath.startsWith("graph.") || issue.fieldPath.startsWith("runtime."));
 }
 
 function contextFields(manifest, fieldErrors) {
@@ -384,11 +384,12 @@ function updateAgentConfig(state, patch) {
 }
 
 function firstAgentNode(manifest) {
-  const index = manifest.graph.nodes.findIndex((node) => node.type === "agent");
+  const nodes = manifest.runtime?.nodes ?? manifest.graph?.nodes ?? [];
+  const index = nodes.findIndex((node) => node.type === "llm" || node.type === "agent");
   if (index < 0) {
     return null;
   }
-  return { index, node: manifest.graph.nodes[index] };
+  return { index, node: nodes[index], fieldRoot: manifest.runtime?.nodes ? "runtime" : "graph" };
 }
 
 function validateLocalTemplate(manifest, capabilities) {
@@ -401,7 +402,7 @@ function validateLocalTemplate(manifest, capabilities) {
     return {
       valid: false,
       error: {
-        field_path: `graph.nodes[${agent.index}].config.model`,
+        field_path: `${agent.fieldRoot}.nodes[${agent.index}].config.model`,
         code: "model_not_allowed",
         message: "Model is not allowed by this template capability",
       },

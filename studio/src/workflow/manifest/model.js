@@ -34,6 +34,7 @@ export function deserializeGraph(manifest) {
         config: clone(node.config ?? {}),
         ...uiNodeFields(manifest.ui?.nodes?.[node.id]),
         ...(node.extension ? { extension: node.extension } : {}),
+        ...legacyUnsupportedFields(node.type),
       })),
       edges: (manifest.runtime.edges ?? []).map(deserializeRuntimeEdge),
       viewport: clone(manifest.ui?.viewport ?? {}),
@@ -42,13 +43,14 @@ export function deserializeGraph(manifest) {
 
   return {
     template: clone(manifest.template ?? { id: "", name: "", version: "" }),
-    nodes: (manifest.graph?.nodes ?? []).map((node) => ({
-      id: node.id,
-      type: node.type,
-      config: clone(node.config ?? {}),
-      ...(node.position ? { position: clone(node.position) } : {}),
-      ...(node.extension ? { extension: node.extension } : {}),
-    })),
+      nodes: (manifest.graph?.nodes ?? []).map((node) => ({
+        id: node.id,
+        type: node.type,
+        config: clone(node.config ?? {}),
+        ...(node.position ? { position: clone(node.position) } : {}),
+        ...(node.extension ? { extension: node.extension } : {}),
+        ...legacyUnsupportedFields(node.type),
+      })),
     edges: (manifest.graph?.edges ?? []).map((edge) => ({
       source: edge.source ?? edge.from,
       target: edge.target ?? edge.to,
@@ -82,6 +84,10 @@ function deserializeRuntimeEdge(edge) {
 
 function uiNodeFields(uiNode) {
   return uiNode?.position ? { position: clone(uiNode.position) } : {};
+}
+
+function legacyUnsupportedFields(type) {
+  return ["agent", "router"].includes(type) ? { legacy: true, unsupported: true } : {};
 }
 
 function clone(value) {

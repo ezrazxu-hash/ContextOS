@@ -31,10 +31,10 @@ class NodeExecutorRegistryTests(unittest.TestCase):
         from contextos.runtime.graph.nodes.registry import NodeExecutorRegistry
 
         registry = NodeExecutorRegistry()
-        for node_type in ["llm", "agent", "tool", "condition", "router", "output"]:
+        for node_type in ["prompt", "llm", "tool", "condition", "output"]:
             registry.register(fake_executor(node_type))
 
-        self.assertEqual(registry.node_types(), ["agent", "condition", "llm", "output", "router", "tool"])
+        self.assertEqual(registry.node_types(), ["condition", "llm", "output", "prompt", "tool"])
 
 
 def fake_executor(node_type: str):

@@ -13,6 +13,8 @@ const DEFAULT_SESSION_ID = "demo-session";
 const DEFAULT_TIMELINE_ID = "demo-timeline";
 const app = document.querySelector("#app");
 let routeLoadVersion = 0;
+const demoWorkflowGraph = deserializeGraph(demoTemplateManifest);
+const WORKFLOW_NODE_TYPES = ["prompt", "llm", "tool", "condition", "output"];
 
 const state = {
   config: { apiBaseUrl: "http://localhost:18000", sseBaseUrl: "http://localhost:18000", mockRuntime: true },
@@ -44,11 +46,15 @@ const state = {
   switchingAgent: false,
   debugIndex: null,
   contextItems: [],
-  workflowNodes: demoTemplateManifest.graph.nodes.slice(0, 4).map((node, index) => ({
+  workflowNodes: demoWorkflowGraph.nodes.map((node, index) => ({
     ...node,
-    position: { x: 60 + index * 140, y: 80 + (index % 2) * 110 },
+    position: node.position ?? { x: 60 + index * 140, y: 80 + (index % 2) * 110 },
   })),
-  workflowEdges: demoTemplateManifest.graph.edges.map(clone),
+  workflowEdges: demoWorkflowGraph.edges.map((edge) => ({
+    from: edge.source,
+    to: edge.target,
+    ...(edge.route ? { condition: edge.route } : {}),
+  })),
   workflowTemplates: [],
   workflowSelectedTemplateId: demoTemplateManifest.template.id,
   workflowName: demoTemplateManifest.template.name,
@@ -357,7 +363,7 @@ function renderWorkflow() {
       <div class="page-head">
         <div><h1 data-testid="main-title">Workflow Builder</h1><p>Workflow manifests from Runtime.</p></div>
         <div class="actions">
-          <button class="secondary" data-action="add-workflow-node">Add Agent</button>
+          <button class="secondary" data-action="add-workflow-node">Add Prompt</button>
           <button class="secondary" data-action="preview-workflow-graph" data-testid="workflow-preview" ${state.workflowPreviewing ? "disabled" : ""}>${state.workflowPreviewing ? "Previewing" : "Preview Graph"}</button>
           <button data-action="save-workflow" data-testid="workflow-save" ${state.workflowSaving ? "disabled" : ""}>${state.workflowSaving ? "Saving" : "Save"}</button>
         </div>
@@ -373,7 +379,7 @@ function renderWorkflow() {
           </section>
           <section>
             <h2>Node Library</h2>
-            ${["llm", "agent", "tool", "condition", "router", "output"].map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.replace(/_/g, " ")}</button>`).join("")}
+            ${WORKFLOW_NODE_TYPES.map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.toUpperCase()}</button>`).join("")}
           </section>
         </div>
         <div class="graph-canvas" data-testid="workflow-canvas">
@@ -517,8 +523,8 @@ function renderTemplate() {
   const manifest = demoTemplateManifest;
   const sections = {
     basic: [["ID", manifest.template.id], ["Name", manifest.template.name], ["Version", manifest.template.version]],
-    model: [["Model", manifest.graph.nodes.find((node) => node.type === "agent")?.config?.model ?? ""]],
-    prompt: [["Prompt", manifest.graph.nodes.find((node) => node.type === "agent")?.config?.prompt ?? ""]],
+    model: [["Model", (manifest.runtime?.nodes ?? manifest.graph?.nodes ?? []).find((node) => node.type === "llm" || node.type === "agent")?.config?.model ?? ""]],
+    prompt: [["Prompt", (manifest.runtime?.nodes ?? manifest.graph?.nodes ?? []).find((node) => node.type === "llm" || node.type === "agent")?.config?.prompt ?? ""]],
     context: [["Policy", manifest.context.policy], ["Restore", manifest.context.restore.mode]],
   };
   return `
@@ -1088,7 +1094,7 @@ async function handleAction(event) {
       render();
     }
   } else if (action === "add-workflow-node") {
-    addWorkflowNode(target.dataset.nodeType ?? "agent");
+    addWorkflowNode(target.dataset.nodeType ?? "prompt");
     render();
   } else if (action === "select-edge-source") {
     state.workflowEdgeSourceId = target.dataset.edgeSourceId ?? target.value ?? null;
@@ -1352,6 +1358,10 @@ async function saveWorkflow() {
 }
 
 function addWorkflowNode(type) {
+  if (!WORKFLOW_NODE_TYPES.includes(type)) {
+    state.toast = { tone: "error", text: "Unsupported workflow node type" };
+    return;
+  }
   const id = `${type}-${state.workflowNodes.length + 1}`.replace(/_/g, "-");
   const firstNode = state.workflowNodes.length === 0;
   state.workflowNodes.push({ id, type, config: {}, position: { x: 80 + (state.workflowNodes.length % 4) * 150, y: 80 + Math.floor(state.workflowNodes.length / 4) * 120 } });

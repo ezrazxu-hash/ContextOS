@@ -49,7 +49,7 @@ def manifest_payload(output: str) -> dict[str, object]:
         "template": {"id": "research-agent", "name": "Research Agent", "version": "1.0.0"},
         "graph": {
             "state_schema": "default_chat_state",
-            "nodes": [{"id": "writer", "type": "output", "config": {"output_key": "answer", "output": output}}],
+            "nodes": [{"id": "writer", "type": "output", "config": {"source": output, "output_key": "answer", "output": output}}],
             "edges": [{"from": "START", "to": "writer"}, {"from": "writer", "to": "END"}],
         },
         "context": {

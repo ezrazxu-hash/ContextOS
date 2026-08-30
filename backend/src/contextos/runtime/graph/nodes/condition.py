@@ -51,6 +51,8 @@ def _evaluate(node: NodeSpec, source_value: object) -> bool:
             return bool(source_value <= expected)  # type: ignore[operator]
         if operator == "exists":
             return source_value is not None
+        if operator == "is_empty":
+            return source_value is None or source_value == "" or source_value == [] or source_value == {}
         if operator == "contains":
             return bool(expected in source_value)  # type: ignore[operator]
         if operator == "is_true":

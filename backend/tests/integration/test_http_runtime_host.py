@@ -560,7 +560,7 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertIn("workflow-http", [item["id"] for item in listed["templates"]])
         self.assertEqual(loaded["manifest"]["graph"]["nodes"][0]["position"], {"x": 240, "y": 180})
         self.assertEqual(run["graph_state"]["answer"], "hello workflow")
-        self.assertEqual(run["graph_state"]["visited_nodes"], ["agent"])
+        self.assertEqual(run["graph_state"]["visited_nodes"], ["writer"])
         self.assertIn("workflow-http", [item["id"] for item in reloaded_list["templates"]])
 
     def test_host_serves_workflow_node_catalog(self) -> None:
@@ -575,9 +575,9 @@ class HttpRuntimeHostTests(unittest.TestCase):
 
         self.assertEqual(
             [node["type"] for node in catalog["nodes"]],
-            ["START", "END", "llm", "agent", "tool", "condition", "router", "output"],
+            ["prompt", "llm", "tool", "condition", "output"],
         )
-        self.assertFalse({"prompt", "subgraph", "memory", "custom"} & {node["type"] for node in catalog["nodes"]})
+        self.assertFalse({"START", "END", "agent", "router", "subgraph", "memory", "custom"} & {node["type"] for node in catalog["nodes"]})
 
     def test_host_saves_and_loads_agent_draft_without_modifying_template_manifest(self) -> None:
         from contextos.api.server import create_http_runtime_host
@@ -630,8 +630,8 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertTrue(response["valid"])
         self.assertEqual(response["start"], "START")
         self.assertEqual(response["end"], "END")
-        self.assertEqual(response["edges"], [{"source": "START", "target": "agent"}, {"source": "agent", "target": "END"}])
-        self.assertEqual(response["execution_order"], ["agent"])
+        self.assertEqual(response["edges"], [{"source": "START", "target": "writer"}, {"source": "writer", "target": "END"}])
+        self.assertEqual(response["execution_order"], ["writer"])
 
     def test_deleted_demo_session_is_not_reseeded_after_restart(self) -> None:
         from contextos.api.server import create_http_runtime_host
@@ -1012,18 +1012,17 @@ def workflow_payload(template_id: str, name: str, output: str, position: dict[st
             "state_schema": "default_chat_state",
             "nodes": [
                 {
-                    "id": "agent",
-                    "type": "agent",
+                    "id": "writer",
+                    "type": "output",
                     "config": {
-                        "model": "default",
-                        "instruction": "Return the configured output.",
+                        "source": output,
                         "output_key": "answer",
                         "output": output,
                     },
                     "position": position,
                 }
             ],
-            "edges": [{"from": "START", "to": "agent"}, {"from": "agent", "to": "END"}],
+            "edges": [{"from": "START", "to": "writer"}, {"from": "writer", "to": "END"}],
         },
         "context": {
             "policy": "balanced",

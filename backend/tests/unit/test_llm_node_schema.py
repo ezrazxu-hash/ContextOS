@@ -11,10 +11,19 @@ class LlmNodeSchemaTests(unittest.TestCase):
             [(issue.code, issue.field) for issue in issues],
             [
                 ("llm_config.required", "graph.nodes[0].config.model"),
-                ("llm_config.required", "graph.nodes[0].config.prompt_template"),
+                ("llm_config.required", "graph.nodes[0].config.prompt"),
                 ("llm_config.required", "graph.nodes[0].config.output_key"),
             ],
         )
+
+    def test_legacy_prompt_template_is_still_accepted(self) -> None:
+        from contextos.template.nodes.llm_schema import validate_llm_node_config
+
+        config = valid_config()
+        del config["prompt"]
+        config["prompt_template"] = "{{input}}"
+
+        self.assertEqual(validate_llm_node_config(config, field_prefix="config"), [])
 
     def test_temperature_must_be_in_supported_range(self) -> None:
         from contextos.template.nodes.llm_schema import validate_llm_node_config
@@ -46,7 +55,7 @@ def valid_config(**overrides):
     config = {
         "model": "default",
         "system_prompt": "You are helpful.",
-        "prompt_template": "{{input}}",
+        "prompt": "{{input}}",
         "temperature": 0.2,
         "input_mapping": {"input": "$state.input"},
         "output_key": "answer",

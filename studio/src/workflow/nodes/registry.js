@@ -1,11 +1,10 @@
 const NODE_DEFINITIONS = [
   definition("START", "Start", []),
   definition("END", "End", []),
-  definition("llm", "LLM", ["model", "prompt_template", "input_mapping", "output_key"]),
-  definition("agent", "Agent", ["model", "instruction", "input", "context_policy", "tools", "max_steps", "output_key"]),
+  definition("prompt", "PROMPT", ["template", "input_mapping", "output_key"]),
+  definition("llm", "LLM", ["model", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"]),
   definition("tool", "Tool", ["tool_name", "args", "output_key"]),
-  definition("condition", "Condition", ["source", "operator", "value", "state_key"]),
-  definition("router", "Router", ["source", "routes", "default_route", "state_key"]),
+  definition("condition", "Condition", ["source", "operator", "value"]),
   definition("output", "Output", ["source"]),
 ];
 
@@ -42,8 +41,8 @@ function definition(type, label, fields) {
 }
 
 function controlFor(path) {
-  if (path === "tools") return "multi-select";
-  if (path === "max_steps") return "number";
+  if (path === "temperature") return "number";
+  if (path === "operator") return "select";
   if (path === "input_mapping" || path === "args" || path === "routes") return "json";
   return "text";
 }

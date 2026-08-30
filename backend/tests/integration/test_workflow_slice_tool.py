@@ -14,6 +14,7 @@ class WorkflowSliceToolTests(unittest.TestCase):
         from contextos.template.validator.validator import ManifestValidator
         from contextos.tool.executor import ToolExecutor
         from contextos.tool.executor_registry import ToolExecutorRegistry
+        from contextos.tool.registry.metadata import SideEffect, ToolMetadata
         from contextos.tool.registry.registry import ToolRegistry
 
         provider = FakeProvider("lookup-key")
@@ -25,7 +26,10 @@ class WorkflowSliceToolTests(unittest.TestCase):
         node_registry.register(OutputNodeExecutor())
         manifest = parse_manifest(manifest_payload())
 
-        validation = ManifestValidator(ExtensionRegistry(), ToolRegistry()).validate_result(manifest)
+        validation = ManifestValidator(
+            ExtensionRegistry(),
+            ToolRegistry([ToolMetadata(tool_id="context.echo", name="Context Echo", side_effect=SideEffect.READ, idempotent=True)]),
+        ).validate_result(manifest)
         self.assertTrue(validation.valid, validation.errors)
 
         state = GraphCompileService().compile(manifest, node_executor_registry=node_registry).run(

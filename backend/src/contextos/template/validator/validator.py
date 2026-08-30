@@ -1,9 +1,18 @@
 from dataclasses import dataclass
+import re
 
 from contextos.template.extension.registry import ExtensionRegistry
 from contextos.template.manifest.schema import EdgeSpec
+from contextos.template.manifest.schema import NodeSpec
 from contextos.template.manifest.schema import TemplateManifest
 from contextos.tool.registry.registry import ToolRegistry
+
+
+SUPPORTED_NODE_TYPES = {"prompt", "llm", "tool", "condition", "output"}
+RESERVED_UNSUPPORTED_NODE_TYPES = {"agent", "router"}
+BOUNDARY_NODE_TYPES = {"start", "end"}
+CONDITION_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "contains", "exists", "is_empty", "is_true", "is_false"}
+_STATE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class ManifestValidationError(ValueError):
@@ -92,6 +101,28 @@ class ManifestValidator:
     def _node_issues(self, manifest: TemplateManifest) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         for index, node in enumerate(manifest.graph.nodes):
+            if node.id in {"START", "END"} or node.type in BOUNDARY_NODE_TYPES:
+                issues.append(
+                    ValidationIssue(
+                        code="reserved_boundary_node",
+                        field=f"graph.nodes[{index}].type",
+                        message="START and END are system boundary nodes and cannot be declared in manifest nodes",
+                        node_id=node.id,
+                    )
+                )
+                continue
+            if node.type in RESERVED_UNSUPPORTED_NODE_TYPES or node.type not in SUPPORTED_NODE_TYPES:
+                issues.append(
+                    ValidationIssue(
+                        code="unsupported_node_type",
+                        field=f"graph.nodes[{index}].type",
+                        message=f"Workflow node type is not supported for publish: {node.type}",
+                        node_id=node.id,
+                    )
+                )
+                continue
+            if node.type == "prompt":
+                issues.extend(_prompt_config_issues(node, index))
             if node.type == "llm":
                 from contextos.template.nodes.llm_schema import validate_llm_node_config
 
@@ -102,25 +133,12 @@ class ManifestValidator:
                         node_id=node.id,
                     )
                 )
-            if node.type == "agent" and _uses_agent_v1_config(node.config):
-                from contextos.template.nodes.agent_schema import validate_agent_node_config
-
-                issues.extend(
-                    validate_agent_node_config(
-                        node.config,
-                        field_prefix=f"graph.nodes[{index}].config",
-                        node_id=node.id,
-                    )
-                )
-            if node.type == "custom" and (node.extension is None or not self._extension_registry.has_custom_node(node.extension)):
-                issues.append(
-                    ValidationIssue(
-                        code="unknown_extension",
-                        field=f"graph.nodes[{index}].extension",
-                        message=f"Custom node extension is not registered: {node.extension}",
-                        node_id=node.id,
-                    )
-                )
+            if node.type == "tool":
+                issues.extend(_tool_config_issues(node, index, self._tool_registry))
+            if node.type == "condition":
+                issues.extend(_condition_config_issues(node, index))
+            if node.type == "output":
+                issues.extend(_output_config_issues(node, index))
             for tool_index, tool_id in enumerate(node.config.get("tools", [])):
                 if not self._tool_registry.has(str(tool_id)):
                     issues.append(
@@ -157,6 +175,61 @@ class ManifestValidator:
                         f"Node is not connected: {node.id}",
                         f"graph.nodes[{index}]",
                         node_id=node.id,
+                    )
+                )
+
+        start_edges = [edge for edge in edges if edge.source == "START"]
+        end_edges = [edge for edge in edges if edge.target == "END"]
+        if len(start_edges) > 1:
+            issues.append(ValidationIssue("multiple_start_edges", "Graph must have exactly one outgoing START edge", "graph.edges"))
+        if len(end_edges) > 1:
+            issues.append(ValidationIssue("multiple_end_edges", "Graph must have exactly one incoming END edge", "graph.edges"))
+        for index, edge in enumerate(edges):
+            if edge.target == "START":
+                issues.append(
+                    ValidationIssue(
+                        "invalid_start_connection",
+                        "START cannot have incoming edges",
+                        f"graph.edges[{index}].target",
+                        edge_id=_edge_id(index, edge),
+                    )
+                )
+            if edge.source == "END":
+                issues.append(
+                    ValidationIssue(
+                        "invalid_end_connection",
+                        "END cannot have outgoing edges",
+                        f"graph.edges[{index}].source",
+                        edge_id=_edge_id(index, edge),
+                    )
+                )
+
+        node_by_id = {node.id: node for node in manifest.graph.nodes}
+        for index, node in enumerate(manifest.graph.nodes):
+            if node.type != "condition":
+                continue
+            routes = {edge.condition for edge in edges if edge.source == node.id and edge.condition is not None}
+            if routes != {"true", "false"}:
+                issues.append(
+                    ValidationIssue(
+                        "condition_routes_required",
+                        "Condition nodes must declare true and false outgoing routes",
+                        f"graph.nodes[{index}]",
+                        node_id=node.id,
+                    )
+                )
+        for index, edge in enumerate(edges):
+            if edge.condition is None:
+                continue
+            source_node = node_by_id.get(edge.source)
+            if source_node and source_node.type == "condition" and edge.condition not in {"true", "false"}:
+                issues.append(
+                    ValidationIssue(
+                        "condition_route_invalid",
+                        "Condition route must be true or false",
+                        f"graph.edges[{index}].condition",
+                        node_id=edge.source,
+                        edge_id=_edge_id(index, edge),
                     )
                 )
 
@@ -197,5 +270,73 @@ def _reachable_from_start(edges: list[EdgeSpec]) -> set[str]:
     return seen
 
 
-def _uses_agent_v1_config(config: dict[str, object]) -> bool:
-    return any(field in config for field in ("model", "instruction", "output_key", "input", "context_policy", "max_steps", "tool_loop"))
+def _prompt_config_issues(node: NodeSpec, index: int) -> list[ValidationIssue]:
+    return _required_config_issues(node, index, "prompt_config", ["template", "output_key"]) + _output_key_issues(
+        node,
+        index,
+        "prompt_config",
+    )
+
+
+def _tool_config_issues(node: NodeSpec, index: int, tool_registry: ToolRegistry) -> list[ValidationIssue]:
+    issues = _required_config_issues(node, index, "tool_config", ["tool_name", "output_key"])
+    issues.extend(_output_key_issues(node, index, "tool_config"))
+    tool_name = node.config.get("tool_name")
+    if tool_name and not tool_registry.has(str(tool_name)):
+        issues.append(
+            ValidationIssue(
+                code="unknown_tool",
+                field=f"graph.nodes[{index}].config.tool_name",
+                message=f"Tool is not registered: {tool_name}",
+                node_id=node.id,
+            )
+        )
+    return issues
+
+
+def _condition_config_issues(node: NodeSpec, index: int) -> list[ValidationIssue]:
+    issues = _required_config_issues(node, index, "condition_config", ["source", "operator"])
+    operator = node.config.get("operator")
+    if operator and str(operator) not in CONDITION_OPERATORS:
+        issues.append(
+            ValidationIssue(
+                code="condition_config.invalid_operator",
+                field=f"graph.nodes[{index}].config.operator",
+                message=f"Condition operator is not supported: {operator}",
+                node_id=node.id,
+            )
+        )
+    return issues
+
+
+def _output_config_issues(node: NodeSpec, index: int) -> list[ValidationIssue]:
+    return _required_config_issues(node, index, "output_config", ["source"])
+
+
+def _required_config_issues(node: NodeSpec, index: int, code_prefix: str, fields: list[str]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for field in fields:
+        if not node.config.get(field):
+            issues.append(
+                ValidationIssue(
+                    code=f"{code_prefix}.required",
+                    field=f"graph.nodes[{index}].config.{field}",
+                    message=f"{node.type} node config field is required: {field}",
+                    node_id=node.id,
+                )
+            )
+    return issues
+
+
+def _output_key_issues(node: NodeSpec, index: int, code_prefix: str) -> list[ValidationIssue]:
+    output_key = node.config.get("output_key")
+    if output_key and not _STATE_KEY_RE.match(str(output_key)):
+        return [
+            ValidationIssue(
+                code=f"{code_prefix}.invalid_output_key",
+                field=f"graph.nodes[{index}].config.output_key",
+                message=f"{node.type} node output_key must be a simple state key",
+                node_id=node.id,
+            )
+        ]
+    return []

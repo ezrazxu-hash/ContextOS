@@ -4,22 +4,31 @@ import { serializeGraph } from "../../workflow/manifest/model.js";
 
 const DEFAULT_VIEWPORT_WIDTH = 1280;
 const NODE_LIBRARY = [
+  { type: "prompt", label: "PROMPT", category: "Prompt" },
   { type: "llm", label: "LLM", category: "Model" },
-  { type: "agent", label: "Agent", category: "Core" },
-  { type: "tool", label: "Tool", category: "Tools" },
-  { type: "condition", label: "Condition", category: "Flow" },
-  { type: "router", label: "Router", category: "Flow" },
-  { type: "output", label: "Output", category: "Output" },
+  { type: "tool", label: "TOOL", category: "Tools" },
+  { type: "condition", label: "CONDITION", category: "Flow" },
+  { type: "output", label: "OUTPUT", category: "Output" },
 ];
 const CANVAS_TOOLS = ["pointer", "pan", "zoom", "fit", "grid"];
 const NODE_CONFIG_SCHEMAS = {
+  prompt: [
+    { id: "template", fields: [{ path: "template", label: "Template", required: true }] },
+    {
+      id: "io",
+      fields: [
+        { path: "input_mapping", label: "Input Mapping" },
+        { path: "output_key", label: "Output Key", required: true },
+      ],
+    },
+  ],
   llm: [
     { id: "model", fields: [{ path: "model", label: "Model", required: true }] },
     {
       id: "prompt",
       fields: [
         { path: "system_prompt", label: "System Prompt" },
-        { path: "prompt_template", label: "Prompt Template", required: true },
+        { path: "prompt", label: "Prompt", required: true },
         { path: "temperature", label: "Temperature" },
       ],
     },
@@ -30,25 +39,6 @@ const NODE_CONFIG_SCHEMAS = {
         { path: "output_key", label: "Output Key", required: true },
       ],
     },
-  ],
-  agent: [
-    { id: "model", fields: [{ path: "model", label: "Model", required: true }] },
-    { id: "instruction", fields: [{ path: "instruction", label: "Instruction", required: true }] },
-    {
-      id: "io",
-      fields: [
-        { path: "input", label: "Input" },
-        { path: "output_key", label: "Output Key", required: true },
-      ],
-    },
-    {
-      id: "tools",
-      fields: [
-        { path: "tools", label: "Tools" },
-        { path: "max_steps", label: "Max Steps" },
-      ],
-    },
-    { id: "policy", fields: [{ path: "context_policy", label: "Context Policy" }] },
   ],
   tool: [
     { id: "tool", fields: [{ path: "tool_name", label: "Tool", required: true }] },
@@ -65,22 +55,10 @@ const NODE_CONFIG_SCHEMAS = {
       id: "condition",
       fields: [
         { path: "source", label: "Source", required: true },
-        { path: "operator", label: "Operator" },
+        { path: "operator", label: "Operator", required: true },
         { path: "value", label: "Value" },
       ],
     },
-    { id: "route", fields: [{ path: "state_key", label: "Route State Key", required: true }] },
-  ],
-  router: [
-    {
-      id: "router",
-      fields: [
-        { path: "source", label: "Source", required: true },
-        { path: "routes", label: "Routes", required: true },
-        { path: "default_route", label: "Default Route" },
-      ],
-    },
-    { id: "route", fields: [{ path: "state_key", label: "Route State Key", required: true }] },
   ],
   output: [{ id: "output", fields: [{ path: "source", label: "Source", required: true }] }],
 };
@@ -284,7 +262,7 @@ export function createWorkflowWorkbench(options = {}) {
       }
       const workflowView = builder.view();
       const source = selectedNode(workflowView, state.selectedNodeId);
-      if (!source) {
+      if (!source || source.unsupported) {
         return { node: null };
       }
       const sourcePosition = source.position ?? { x: 0, y: 0 };
@@ -303,6 +281,10 @@ export function createWorkflowWorkbench(options = {}) {
       return { node };
     },
     selectNode(nodeId) {
+      if (nodeId === "START" || nodeId === "END") {
+        state.selectedNodeId = null;
+        return this.view();
+      }
       state.selectedNodeId = nodeId;
       return this.view();
     },
@@ -461,8 +443,8 @@ export function createWorkflowWorkbench(options = {}) {
       state.publish.changeSummary = {
         templateId: manifest.template.id,
         version: state.publish.version,
-        nodes: manifest.graph.nodes.length,
-        edges: manifest.graph.edges.length,
+        nodes: manifest.runtime.nodes.length,
+        edges: manifest.runtime.edges.length,
       };
       state.dirty = false;
       state.status = "saved";
@@ -691,7 +673,7 @@ function validateNodeConfig(node, draft) {
         .filter((field) => field.required && isBlank(valueAtPath(draft, field.path)))
         .map((field) => ({
           sectionId: section.id,
-          fieldPath: `graph.nodes[${node.id}].config.${field.path}`,
+          fieldPath: `runtime.nodes[${node.id}].config.${field.path}`,
           code: "required",
           message: `${field.label} is required`,
           controlPath: field.path,
@@ -740,11 +722,22 @@ function graphBounds(nodes) {
 
 function validateEdgeDraft(workflowView, edge) {
   const nodes = new Set(workflowView.nodes.map((node) => node.id));
-  if (!nodes.has(edge.from) || !nodes.has(edge.to)) {
+  const validSources = new Set([...nodes, "START"]);
+  const validTargets = new Set([...nodes, "END"]);
+  if (!validSources.has(edge.from) || !validTargets.has(edge.to)) {
     return {
-      fieldPath: "graph.edges",
+      fieldPath: "runtime.edges",
       code: "unknown_node",
       message: "Edge endpoints must reference existing workflow nodes",
+      target: { kind: "edge", from: edge.from, to: edge.to },
+    };
+  }
+  const sourceNode = workflowView.nodes.find((node) => node.id === edge.from);
+  if (sourceNode?.type === "condition" && edge.condition && !["true", "false"].includes(edge.condition)) {
+    return {
+      fieldPath: "runtime.edges",
+      code: "condition_route_invalid",
+      message: "Condition branch must be true or false",
       target: { kind: "edge", from: edge.from, to: edge.to },
     };
   }
@@ -754,7 +747,8 @@ function validateEdgeDraft(workflowView, edge) {
 function canvasNode(node, state) {
   const runtimeStatus = state.runtimeNodeStatus.get(node.id);
   if (node.type !== "subgraph") {
-    return runtimeStatus ? { ...node, runtimeStatus } : node;
+    const withHandles = { ...node, handles: handlesFor(node) };
+    return runtimeStatus ? { ...withHandles, runtimeStatus } : withHandles;
   }
   const internalNodeIds = Array.isArray(node.config?.internal_node_ids) ? node.config.internal_node_ids : [];
   const collapsed = state.collapsedSubgraphs.has(node.id);
@@ -813,13 +807,20 @@ function parseEdgeId(edgeId) {
 }
 
 function branchLabel(condition) {
-  if (condition === "yes") {
-    return "Yes";
+  if (condition === "true") {
+    return "True";
   }
-  if (condition === "no") {
-    return "No";
+  if (condition === "false") {
+    return "False";
   }
   return String(condition);
+}
+
+function handlesFor(node) {
+  if (node.type === "condition") {
+    return { inputs: ["in"], outputs: ["true", "false"] };
+  }
+  return { inputs: ["in"], outputs: ["out"] };
 }
 
 function normalizeValidationIssues(validation, workflowView) {

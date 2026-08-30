@@ -11,8 +11,8 @@ class AgentGraphPreviewApiTests(unittest.TestCase):
             "research-agent",
             manifest_payload(
                 nodes=[
-                    {"id": "a", "type": "llm", "config": {"output_key": "a"}},
-                    {"id": "b", "type": "llm", "config": {"output_key": "b"}},
+                    {"id": "a", "type": "llm", "config": {"model": "default", "prompt": "draft", "output_key": "a"}},
+                    {"id": "b", "type": "llm", "config": {"model": "default", "prompt": "{{a}}", "output_key": "b"}},
                     {"id": "c", "type": "output", "config": {"source": "$state.b", "output_key": "b"}},
                 ],
                 edges=[
@@ -49,7 +49,7 @@ class AgentGraphPreviewApiTests(unittest.TestCase):
         response = post_agent_graph_preview(
             "research-agent",
             manifest_payload(
-                nodes=[{"id": "a", "type": "llm", "config": {"output_key": "a"}}],
+                nodes=[{"id": "a", "type": "llm", "config": {"model": "default", "prompt": "draft", "output_key": "a"}}],
                 edges=[{"source": "START", "target": "missing"}, {"source": "a", "target": "END"}],
             ),
             extension_registry=ExtensionRegistry(),
@@ -60,6 +60,26 @@ class AgentGraphPreviewApiTests(unittest.TestCase):
         self.assertEqual(response["body"]["valid"], False)
         self.assertEqual(response["body"]["error"]["code"], "unknown_node")
         self.assertEqual(response["body"]["error"]["field_path"], "graph.edges[0].to")
+
+    def test_preview_reports_unsupported_reserved_node_without_502(self) -> None:
+        from contextos.api.routes.agents import post_agent_graph_preview
+        from contextos.template.extension.registry import ExtensionRegistry
+        from contextos.tool.registry.registry import ToolRegistry
+
+        response = post_agent_graph_preview(
+            "research-agent",
+            manifest_payload(
+                nodes=[{"id": "old_agent", "type": "agent", "config": {"output_key": "answer"}}],
+                edges=[{"source": "START", "target": "old_agent"}, {"source": "old_agent", "target": "END"}],
+            ),
+            extension_registry=ExtensionRegistry(),
+            tool_registry=ToolRegistry(),
+        )
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(response["body"]["valid"], False)
+        self.assertEqual(response["body"]["error"]["code"], "unsupported_node_type")
+        self.assertEqual(response["body"]["error"]["field_path"], "graph.nodes[0].type")
 
 
 def manifest_payload(nodes, edges) -> dict[str, object]:

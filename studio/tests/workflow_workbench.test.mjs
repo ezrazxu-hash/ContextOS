@@ -51,12 +51,12 @@ test("UI05-T01-TC02: dirty workflow protects refresh and preserves node drafts a
     viewportWidth: 1280,
   });
 
-  workbench.addNode({ id: "agent", type: "agent", config: { model: "default" } });
-  workbench.addNode({ id: "tool", type: "tool", config: { tool_id: "search" } });
-  workbench.selectNode("agent");
+  workbench.addNode({ id: "llm", type: "llm", config: { model: "default" } });
+  workbench.addNode({ id: "tool", type: "tool", config: { tool_name: "search" } });
+  workbench.selectNode("llm");
   workbench.updateNodeConfigDraft({ model: "fast-model" });
   workbench.selectNode("tool");
-  workbench.selectNode("agent");
+  workbench.selectNode("llm");
 
   const view = workbench.view();
 
@@ -85,7 +85,7 @@ test("UI05-T01-TC03: successful save clears dirty workflow state", async () => {
     },
   });
 
-  workbench.addNode({ id: "agent", type: "agent", config: { model: "default" } });
+  workbench.addNode({ id: "llm", type: "llm", config: { model: "default", prompt: "{{input}}", output_key: "answer" } });
   assert.equal(workbench.view().header.status, "dirty");
 
   const result = await workbench.save({ id: "research-agent", name: "Research Agent", version: "1.0.0" });
@@ -111,7 +111,7 @@ test("UI05-T02-TC01: searching Tool only shows related runtime library nodes", a
   const matches = workbench.view().nodeLibrary.items;
   assert.deepEqual(matches.map((node) => node.type), ["tool"]);
   assert.equal(matches[0].category, "Tools");
-  assert.match(matches[0].label, /Tool/);
+  assert.match(matches[0].label, /TOOL/);
 });
 
 test("UI05-T02-TC02: dropping library nodes creates unique manifest node ids at stable positions", async () => {
@@ -122,12 +122,12 @@ test("UI05-T02-TC02: dropping library nodes creates unique manifest node ids at 
     viewportWidth: 1280,
   });
 
-  const first = workbench.dropLibraryNode("agent", { x: 120, y: 160 });
-  const second = workbench.dropLibraryNode("agent", { x: 180, y: 220 });
+  const first = workbench.dropLibraryNode("prompt", { x: 120, y: 160 });
+  const second = workbench.dropLibraryNode("prompt", { x: 180, y: 220 });
   const manifest = workbench.serializeManifest();
 
   assert.notEqual(first.node.id, second.node.id);
-  assert.deepEqual(manifest.graph.nodes.map((node) => node.id), [first.node.id, second.node.id]);
+  assert.deepEqual(manifest.runtime.nodes.map((node) => node.id), [first.node.id, second.node.id]);
   assert.deepEqual(workbench.view().canvas.nodes.map((node) => node.position), [
     { x: 120, y: 160 },
     { x: 180, y: 220 },
@@ -145,13 +145,15 @@ test("T81 node library only creates V1 runtime-supported workflow nodes", async 
 
   assert.deepEqual(
     workbench.view().nodeLibrary.items.map((node) => node.type),
-    ["llm", "agent", "tool", "condition", "router", "output"],
+    ["prompt", "llm", "tool", "condition", "output"],
   );
 
   const llm = workbench.dropLibraryNode("llm", { x: 120, y: 160 });
   assert.equal(llm.node.type, "llm");
   assert.deepEqual(llm.node.position, { x: 120, y: 160 });
-  assert.throws(() => workbench.dropLibraryNode("prompt", { x: 0, y: 0 }), /not supported/i);
+  assert.throws(() => workbench.dropLibraryNode("agent", { x: 0, y: 0 }), /not supported/i);
+  assert.throws(() => workbench.dropLibraryNode("router", { x: 0, y: 0 }), /not supported/i);
+  assert.throws(() => workbench.dropLibraryNode("START", { x: 0, y: 0 }), /not supported/i);
 });
 
 test("UI05-T02-TC03: unsupported validator node types cannot be created from the library", async () => {
@@ -161,19 +163,19 @@ test("UI05-T02-TC03: unsupported validator node types cannot be created from the
     platform: createMemoryPlatform(),
     viewportWidth: 1280,
     manifestSchema: {
-      supportedNodeTypes: ["agent", "tool"],
+      supportedNodeTypes: ["agent", "prompt", "tool"],
     },
   });
 
   assert.deepEqual(
     workbench.view().nodeLibrary.items.map((node) => node.type),
-    ["agent", "tool"],
+    ["prompt", "tool"],
   );
   assert.throws(
     () => workbench.dropLibraryNode("context_operator", { x: 0, y: 0 }),
     /not supported by the active workflow schema/i,
   );
-  assert.deepEqual(workbench.serializeManifest().graph.nodes, []);
+  assert.deepEqual(workbench.serializeManifest().runtime.nodes, []);
 });
 
 test("UI05-T03-TC01: Backspace in a focused config input does not delete selected canvas nodes", async () => {
@@ -194,7 +196,7 @@ test("UI05-T03-TC01: Backspace in a focused config input does not delete selecte
 
   assert.equal(result.handled, false);
   assert.deepEqual(
-    workbench.serializeManifest().graph.nodes.map((node) => node.id),
+    workbench.serializeManifest().runtime.nodes.map((node) => node.id),
     [dropped.node.id],
   );
 });
@@ -207,7 +209,7 @@ test("UI05-T03-TC02: fit view frames the complete workflow graph", async () => {
     viewportWidth: 1280,
   });
 
-  workbench.dropLibraryNode("agent", { x: 100, y: 120 });
+  workbench.dropLibraryNode("prompt", { x: 100, y: 120 });
   workbench.dropLibraryNode("tool", { x: 500, y: 420 });
   workbench.setCanvasTool("pan");
 
@@ -232,10 +234,10 @@ test("UI05-T03-TC03: deleting a selected node removes connected edges from the d
     viewportWidth: 1280,
   });
 
-  const agent = workbench.dropLibraryNode("agent", { x: 100, y: 100 }).node;
+  const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
   const tool = workbench.dropLibraryNode("tool", { x: 300, y: 100 }).node;
   const output = workbench.dropLibraryNode("output", { x: 500, y: 100 }).node;
-  workbench.connect(agent.id, tool.id);
+  workbench.connect(llm.id, tool.id);
   workbench.connect(tool.id, output.id);
   workbench.selectNode(tool.id);
 
@@ -244,10 +246,10 @@ test("UI05-T03-TC03: deleting a selected node removes connected edges from the d
 
   assert.equal(result.handled, true);
   assert.deepEqual(
-    manifest.graph.nodes.map((node) => node.id),
-    [agent.id, output.id],
+    manifest.runtime.nodes.map((node) => node.id),
+    [llm.id, output.id],
   );
-  assert.deepEqual(manifest.graph.edges, []);
+  assert.deepEqual(manifest.runtime.edges, []);
   assert.equal(workbench.view().nodeConfig.selectedNodeId, null);
 });
 
@@ -263,9 +265,11 @@ test("T82 moving a node updates its manifest position and keeps selection", asyn
   workbench.selectNode(llm.id);
   const moved = workbench.moveCanvasNode(llm.id, { x: 320, y: 240 });
 
-  const manifestNode = workbench.serializeManifest().graph.nodes[0];
+  const manifest = workbench.serializeManifest();
+  const manifestNode = manifest.runtime.nodes[0];
   assert.deepEqual(moved.node.position, { x: 320, y: 240 });
-  assert.deepEqual(manifestNode.position, { x: 320, y: 240 });
+  assert.equal(manifestNode.position, undefined);
+  assert.deepEqual(manifest.ui.nodes[llm.id].position, { x: 320, y: 240 });
   assert.equal(workbench.view().nodeConfig.selectedNodeId, llm.id);
   assert.equal(workbench.view().header.dirty, true);
 });
@@ -292,14 +296,14 @@ test("T82 duplicating a selected node clones config without cloning edges", asyn
   assert.deepEqual(duplicate.node.config, { model: "default", output_key: "answer" });
   assert.deepEqual(duplicate.node.position, { x: 140, y: 124 });
   assert.deepEqual(
-    manifest.graph.nodes.map((node) => node.id),
+    manifest.runtime.nodes.map((node) => node.id),
     [llm.id, output.id, duplicate.node.id],
   );
-  assert.deepEqual(manifest.graph.edges, [{ from: llm.id, to: output.id }]);
+  assert.deepEqual(manifest.runtime.edges, [{ source: llm.id, target: output.id }]);
   assert.equal(workbench.view().nodeConfig.selectedNodeId, duplicate.node.id);
 });
 
-test("UI05-T04-TC01: Condition Yes/No edge labels serialize stably", async () => {
+test("UI05-T04-TC01: Condition True/False edge labels and handles serialize stably", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
   const workbench = createWorkflowWorkbench({
@@ -311,18 +315,19 @@ test("UI05-T04-TC01: Condition Yes/No edge labels serialize stably", async () =>
   const tool = workbench.dropLibraryNode("tool", { x: 300, y: 40 }).node;
   const output = workbench.dropLibraryNode("output", { x: 300, y: 180 }).node;
 
-  workbench.connectCanvasEdge(condition.id, tool.id, { branch: "yes" });
-  workbench.connectCanvasEdge(condition.id, output.id, { branch: "no" });
+  workbench.connectCanvasEdge(condition.id, tool.id, { branch: "true" });
+  workbench.connectCanvasEdge(condition.id, output.id, { branch: "false" });
 
   const manifest = workbench.serializeManifest();
-  assert.deepEqual(manifest.graph.edges, [
-    { from: condition.id, to: tool.id, condition: "yes" },
-    { from: condition.id, to: output.id, condition: "no" },
+  assert.deepEqual(manifest.runtime.edges, [
+    { source: condition.id, target: tool.id, route: "true" },
+    { source: condition.id, target: output.id, route: "false" },
   ]);
   assert.deepEqual(
     workbench.view().canvas.edges.map((edge) => edge.label),
-    ["Yes", "No"],
+    ["True", "False"],
   );
+  assert.deepEqual(workbench.view().canvas.nodes.find((node) => node.id === condition.id).handles.outputs, ["true", "false"]);
 });
 
 test("UI05-T04-TC02: backend rejected edges are highlighted in canvas and validation panel", async () => {
@@ -335,15 +340,15 @@ test("UI05-T04-TC02: backend rejected edges are highlighted in canvas and valida
       async validateTemplate() {
         return {
           valid: false,
-          error: { field_path: "graph.edges[0]", code: "invalid_edge", message: "Router branch is unsupported" },
+          error: { field_path: "runtime.edges[0]", code: "invalid_edge", message: "Condition branch is unsupported" },
         };
       },
     },
   });
 
-  const router = workbench.dropLibraryNode("router", { x: 100, y: 100 }).node;
+  const condition = workbench.dropLibraryNode("condition", { x: 100, y: 100 }).node;
   const tool = workbench.dropLibraryNode("tool", { x: 300, y: 100 }).node;
-  workbench.connectCanvasEdge(router.id, tool.id, { branch: "maybe" });
+  workbench.connectCanvasEdge(condition.id, tool.id, { branch: "true" });
 
   const validation = await workbench.validateWithBackend();
   const view = workbench.view();
@@ -353,10 +358,10 @@ test("UI05-T04-TC02: backend rejected edges are highlighted in canvas and valida
   assert.equal(view.canvas.edges[0].error.code, "invalid_edge");
   assert.deepEqual(view.validationPanel.issues, [
     {
-      fieldPath: "graph.edges[0]",
+      fieldPath: "runtime.edges[0]",
       code: "invalid_edge",
-      message: "Router branch is unsupported",
-      target: { kind: "edge", index: 0, from: router.id, to: tool.id },
+      message: "Condition branch is unsupported",
+      target: { kind: "edge", index: 0, from: condition.id, to: tool.id },
     },
   ]);
 });
@@ -369,18 +374,18 @@ test("UI05-T04-TC03: deleting an edge keeps both endpoint nodes", async () => {
     viewportWidth: 1280,
   });
 
-  const agent = workbench.dropLibraryNode("agent", { x: 100, y: 100 }).node;
+  const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
   const output = workbench.dropLibraryNode("output", { x: 300, y: 100 }).node;
-  const edge = workbench.connectCanvasEdge(agent.id, output.id);
+  const edge = workbench.connectCanvasEdge(llm.id, output.id);
 
   workbench.deleteCanvasEdge(edge.edge.id);
 
   const manifest = workbench.serializeManifest();
   assert.deepEqual(
-    manifest.graph.nodes.map((node) => node.id),
-    [agent.id, output.id],
+    manifest.runtime.nodes.map((node) => node.id),
+    [llm.id, output.id],
   );
-  assert.deepEqual(manifest.graph.edges, []);
+  assert.deepEqual(manifest.runtime.edges, []);
 });
 
 test("T83 reconnecting an edge replaces the draft edge without changing nodes", async () => {
@@ -400,9 +405,9 @@ test("T83 reconnecting an edge replaces the draft edge without changing nodes", 
   const manifest = workbench.serializeManifest();
 
   assert.equal(reconnected.accepted, true);
-  assert.deepEqual(manifest.graph.edges, [{ from: tool.id, to: output.id }]);
+  assert.deepEqual(manifest.runtime.edges, [{ source: tool.id, target: output.id }]);
   assert.deepEqual(
-    manifest.graph.nodes.map((node) => node.id),
+    manifest.runtime.nodes.map((node) => node.id),
     [llm.id, tool.id, output.id],
   );
   assert.equal(workbench.view().header.dirty, true);
@@ -425,10 +430,10 @@ test("T83 invalid edge reconnect keeps the original edge", async () => {
 
   assert.equal(reconnected.accepted, false);
   assert.equal(reconnected.issue.code, "unknown_node");
-  assert.deepEqual(manifest.graph.edges, [{ from: llm.id, to: output.id }]);
+  assert.deepEqual(manifest.runtime.edges, [{ source: llm.id, target: output.id }]);
 });
 
-test("T85 Agent node config exposes backend agent fields", async () => {
+test("T85 Prompt node config exposes template assembly fields", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
   const workbench = createWorkflowWorkbench({
@@ -436,26 +441,26 @@ test("T85 Agent node config exposes backend agent fields", async () => {
     viewportWidth: 1280,
   });
 
-  const agent = workbench.dropLibraryNode("agent", { x: 100, y: 100 }).node;
-  workbench.selectNode(agent.id);
+  const prompt = workbench.dropLibraryNode("prompt", { x: 100, y: 100 }).node;
+  workbench.selectNode(prompt.id);
 
   const config = workbench.view().nodeConfig;
 
   assert.deepEqual(
     config.sections.map((section) => section.id),
-    ["model", "instruction", "io", "tools", "policy"],
+    ["template", "io"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["model", "instruction", "input", "output_key", "tools", "max_steps", "context_policy"],
+    ["template", "input_mapping", "output_key"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
-    ["model", "instruction", "output_key"],
+    ["template", "output_key"],
   );
 });
 
-test("T85 Agent node local config validation maps required fields to controls", async () => {
+test("T85 Prompt node local config validation maps required fields to controls", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
   const workbench = createWorkflowWorkbench({
@@ -463,8 +468,8 @@ test("T85 Agent node local config validation maps required fields to controls", 
     viewportWidth: 1280,
   });
 
-  const agent = workbench.dropLibraryNode("agent", { x: 100, y: 100 }).node;
-  workbench.selectNode(agent.id);
+  const prompt = workbench.dropLibraryNode("prompt", { x: 100, y: 100 }).node;
+  workbench.selectNode(prompt.id);
 
   const validation = workbench.validateSelectedNodeConfig();
 
@@ -472,9 +477,8 @@ test("T85 Agent node local config validation maps required fields to controls", 
   assert.deepEqual(
     validation.errors.map((error) => error.fieldPath),
     [
-      `graph.nodes[${agent.id}].config.model`,
-      `graph.nodes[${agent.id}].config.instruction`,
-      `graph.nodes[${agent.id}].config.output_key`,
+      `runtime.nodes[${prompt.id}].config.template`,
+      `runtime.nodes[${prompt.id}].config.output_key`,
     ],
   );
 });
@@ -498,11 +502,11 @@ test("T84 LLM node config exposes backend executable fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["model", "system_prompt", "prompt_template", "temperature", "input_mapping", "output_key"],
+    ["model", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
-    ["model", "prompt_template", "output_key"],
+    ["model", "prompt", "output_key"],
   );
 });
 
@@ -523,14 +527,14 @@ test("T84 LLM node local config validation maps required fields to controls", as
   assert.deepEqual(
     validation.errors.map((error) => error.fieldPath),
     [
-      `graph.nodes[${llm.id}].config.model`,
-      `graph.nodes[${llm.id}].config.prompt_template`,
-      `graph.nodes[${llm.id}].config.output_key`,
+      `runtime.nodes[${llm.id}].config.model`,
+      `runtime.nodes[${llm.id}].config.prompt`,
+      `runtime.nodes[${llm.id}].config.output_key`,
     ],
   );
 });
 
-test("UI05-T05-TC02: Tool node config omits Agent-only fields", async () => {
+test("UI05-T05-TC02: Tool node config omits model-only fields", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
   const workbench = createWorkflowWorkbench({
@@ -545,7 +549,7 @@ test("UI05-T05-TC02: Tool node config omits Agent-only fields", async () => {
 
   assert.deepEqual(paths, ["tool_name", "args", "output_key"]);
   assert.ok(!paths.includes("model"));
-  assert.ok(!paths.includes("instruction"));
+  assert.ok(!paths.includes("system_prompt"));
 });
 
 test("T86 Tool node config exposes executable tool fields", async () => {
@@ -590,19 +594,19 @@ test("T87 Condition node config exposes branch condition fields", async () => {
 
   assert.deepEqual(
     config.sections.map((section) => section.id),
-    ["condition", "route"],
+    ["condition"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["source", "operator", "value", "state_key"],
+    ["source", "operator", "value"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
-    ["source", "state_key"],
+    ["source", "operator"],
   );
 });
 
-test("T88 Router node config exposes multi-route fields", async () => {
+test("T88 Router node is reserved and cannot be created from the library", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
   const workbench = createWorkflowWorkbench({
@@ -610,23 +614,7 @@ test("T88 Router node config exposes multi-route fields", async () => {
     viewportWidth: 1280,
   });
 
-  const router = workbench.dropLibraryNode("router", { x: 100, y: 100 }).node;
-  workbench.selectNode(router.id);
-
-  const config = workbench.view().nodeConfig;
-
-  assert.deepEqual(
-    config.sections.map((section) => section.id),
-    ["router", "route"],
-  );
-  assert.deepEqual(
-    config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["source", "routes", "default_route", "state_key"],
-  );
-  assert.deepEqual(
-    config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
-    ["source", "routes", "state_key"],
-  );
+  assert.throws(() => workbench.dropLibraryNode("router", { x: 100, y: 100 }), /not supported/i);
 });
 
 test("T89 Output node config exposes final output source", async () => {
@@ -667,7 +655,7 @@ test("T89 canvas exposes START and END as non-library boundary nodes", async () 
   assert.deepEqual(view.canvas.boundaryNodes.map((node) => node.locked), [true, true]);
   assert.deepEqual(
     view.nodeLibrary.items.map((node) => node.type),
-    ["llm", "agent", "tool", "condition", "router", "output"],
+    ["prompt", "llm", "tool", "condition", "output"],
   );
 });
 
@@ -682,7 +670,7 @@ test("UI05-T05-TC03: backend field errors map back to concrete config controls",
         return {
           valid: false,
           error: {
-            field_path: "graph.nodes[0].config.model",
+            field_path: "runtime.nodes[0].config.model",
             code: "required",
             message: "Model is required",
           },
@@ -691,8 +679,8 @@ test("UI05-T05-TC03: backend field errors map back to concrete config controls",
     },
   });
 
-  const agent = workbench.dropLibraryNode("agent", { x: 100, y: 100 }).node;
-  workbench.selectNode(agent.id);
+  const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
+  workbench.selectNode(llm.id);
 
   const local = workbench.validateSelectedNodeConfig();
   const backend = await workbench.validateWithBackend();
@@ -701,7 +689,7 @@ test("UI05-T05-TC03: backend field errors map back to concrete config controls",
   assert.equal(local.valid, false);
   assert.equal(backend.valid, false);
   assert.deepEqual(field.error, {
-    fieldPath: "graph.nodes[0].config.model",
+    fieldPath: "runtime.nodes[0].config.model",
     code: "required",
     message: "Model is required",
   });
@@ -710,7 +698,7 @@ test("UI05-T05-TC03: backend field errors map back to concrete config controls",
     errors: [
       {
         sectionId: "model",
-        fieldPath: "graph.nodes[0].config.model",
+        fieldPath: "runtime.nodes[0].config.model",
         code: "required",
         message: "Model is required",
       },
@@ -735,7 +723,7 @@ test("UI05-T07-TC01: validation failure disables Publish", async () => {
     },
   });
 
-  workbench.dropLibraryNode("agent", { x: 100, y: 100 });
+  workbench.dropLibraryNode("llm", { x: 100, y: 100 });
 
   const validation = await workbench.validateDraft();
   const published = await workbench.publishDraft();
@@ -770,7 +758,7 @@ test("UI05-T07-TC02: Preview uses draft manifest without changing published vers
     },
   });
 
-  workbench.dropLibraryNode("agent", { x: 100, y: 100 });
+  workbench.dropLibraryNode("llm", { x: 100, y: 100 });
 
   const preview = await workbench.previewDraft({ input: "hello" });
   const view = workbench.view();
@@ -798,8 +786,8 @@ test("UI05-T07-TC03: Save failure keeps dirty state and user selection", async (
     },
   });
 
-  const agent = workbench.dropLibraryNode("agent", { x: 100, y: 100 }).node;
-  workbench.selectNode(agent.id);
+  const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
+  workbench.selectNode(llm.id);
   const saved = await workbench.saveDraft({ id: "research-agent", name: "Research Agent", version: "1.0.1" });
   const view = workbench.view();
 
@@ -807,7 +795,7 @@ test("UI05-T07-TC03: Save failure keeps dirty state and user selection", async (
   assert.equal(view.header.status, "error");
   assert.equal(view.header.dirty, true);
   assert.equal(view.refreshProtection.enabled, true);
-  assert.equal(view.nodeConfig.selectedNodeId, agent.id);
+  assert.equal(view.nodeConfig.selectedNodeId, llm.id);
   assert.equal(view.header.actions.save.enabled, true);
 });
 
@@ -830,7 +818,7 @@ test("T8A Save Draft persists runtime/ui manifest through workflow API client", 
   });
 
   const llm = workbench.dropLibraryNode("llm", { x: 100, y: 120 }).node;
-  workbench.updateNodeConfig(llm.id, { model: "default", prompt_template: "{{input}}", output_key: "answer" });
+  workbench.updateNodeConfig(llm.id, { model: "default", prompt: "{{input}}", output_key: "answer" });
 
   const result = await workbench.saveDraft({ id: "research-agent", name: "Research Agent", version: "draft" });
 
@@ -851,7 +839,7 @@ test("T8B Load Draft restores runtime/ui manifest and keeps save round-trip shap
     runtime: {
       state_schema: "default_chat_state",
       nodes: [
-        { id: "planner", type: "llm", config: { model: "default", prompt_template: "{{input}}", output_key: "answer" } },
+        { id: "planner", type: "llm", config: { model: "default", prompt: "{{input}}", output_key: "answer" } },
         { id: "final", type: "output", config: { source: "$state.answer" } },
       ],
       edges: [
@@ -924,7 +912,7 @@ test("T8C dirty workflow blocks navigation until save succeeds", async () => {
   assert.equal(blocked.allowed, false);
   assert.equal(blocked.reason, "unsaved_changes");
   assert.deepEqual(
-    workbench.serializeManifest().graph.nodes.map((node) => node.id),
+    workbench.serializeManifest().runtime.nodes.map((node) => node.id),
     [llm.id],
   );
   assert.equal(allowed.allowed, true);
@@ -947,8 +935,8 @@ test("T8D Validate UI maps structured backend node errors to selected config fie
           errors: [
             {
               code: "llm_config.required",
-              field: "runtime.nodes[0].config.prompt_template",
-              message: "LLM node config field is required: prompt_template",
+              field: "runtime.nodes[0].config.prompt",
+              message: "LLM node config field is required: prompt",
               node_id: runtimeNodeId,
             },
           ],
@@ -966,13 +954,13 @@ test("T8D Validate UI maps structured backend node errors to selected config fie
   const view = workbench.view();
   const promptField = view.nodeConfig.sections
     .flatMap((section) => section.fields)
-    .find((field) => field.path === "prompt_template");
+    .find((field) => field.path === "prompt");
 
   assert.equal(validated[0].agentId, "research-agent");
   assert.equal(validation.valid, false);
   assert.equal(view.header.actions.publish.enabled, false);
   assert.equal(promptField.error.code, "llm_config.required");
-  assert.deepEqual(view.validationPanel.issues[0].target, { kind: "node_config", nodeId: llm.id, path: "prompt_template" });
+  assert.deepEqual(view.validationPanel.issues[0].target, { kind: "node_config", nodeId: llm.id, path: "prompt" });
 });
 
 test("T8E Publish uses agent publish API and displays immutable version metadata", async () => {
@@ -1002,7 +990,7 @@ test("T8E Publish uses agent publish API and displays immutable version metadata
 
   const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
   const output = workbench.dropLibraryNode("output", { x: 300, y: 100 }).node;
-  workbench.updateNodeConfig(llm.id, { model: "default", prompt_template: "{{input}}", output_key: "answer" });
+  workbench.updateNodeConfig(llm.id, { model: "default", prompt: "{{input}}", output_key: "answer" });
   workbench.updateNodeConfig(output.id, { source: "$state.answer" });
   workbench.connectCanvasEdge("START", llm.id);
   workbench.connectCanvasEdge(llm.id, output.id);
@@ -1172,7 +1160,7 @@ test("T93 Builder Publish TestRun vertical slice updates canvas and inspector fr
   const llm = workbench.dropLibraryNode("llm", { x: 100, y: 120 }).node;
   plannerNodeId = llm.id;
   const output = workbench.dropLibraryNode("output", { x: 420, y: 120 }).node;
-  workbench.updateNodeConfig(llm.id, { model: "default", prompt_template: "{{input}}", output_key: "answer" });
+  workbench.updateNodeConfig(llm.id, { model: "default", prompt: "{{input}}", output_key: "answer" });
   workbench.updateNodeConfig(output.id, { source: "$state.answer" });
   workbench.connectCanvasEdge("START", llm.id);
   workbench.connectCanvasEdge(llm.id, output.id);

@@ -1,15 +1,15 @@
-import { deserializeGraph } from "../../workflow/manifest/model.js";
+import { deserializeGraph, serializeGraph } from "../../workflow/manifest/model.js";
 
 const V1_NODE_TYPES = [
+  "prompt",
   "llm",
-  "agent",
   "tool",
   "condition",
-  "router",
   "output",
 ];
 
 const BOUNDARY_NODES = new Set(["START", "END"]);
+const BOUNDARY_TYPES = new Set(["START", "END", "start", "end"]);
 
 export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
   const state = initialManifest ? stateFromManifest(initialManifest) : emptyState();
@@ -20,6 +20,9 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
       return V1_NODE_TYPES.map((type) => ({ type }));
     },
     addNode(node) {
+      if (BOUNDARY_NODES.has(node.id) || BOUNDARY_TYPES.has(node.type)) {
+        throw new Error("START and END are system boundary nodes and cannot be created manually");
+      }
       if (!V1_NODE_TYPES.includes(node.type)) {
         throw new Error(`Unsupported V1 workflow node type: ${node.type}`);
       }
@@ -78,6 +81,9 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
       return this.view();
     },
     removeNode(nodeId) {
+      if (BOUNDARY_NODES.has(nodeId)) {
+        return this.view();
+      }
       state.nodes = state.nodes.filter((node) => node.id !== nodeId);
       state.edges = state.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId);
       if (state.selectedNodeId === nodeId) {
@@ -86,7 +92,7 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
       return this.view();
     },
     handleCanvasKey({ key, nodeId = null } = {}) {
-      if (key === "Enter" && nodeId) {
+      if (key === "Enter" && nodeId && !BOUNDARY_NODES.has(nodeId)) {
         state.selectedNodeId = nodeId;
       }
       if ((key === "Delete" || key === "Backspace") && state.selectedNodeId) {
@@ -115,21 +121,12 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
     },
     serializeManifest(template = state.template) {
       state.template = template;
-      return {
-        template: { ...template },
-        graph: {
-          state_schema: "default_chat_state",
-          nodes: state.nodes.map(cloneNode),
-          edges: state.edges.map(cloneEdge),
-        },
-        context: {
-          policy: "balanced",
-          budget: { high_watermark: 0.8, target_watermark: 0.65 },
-          restore: { mode: "auto", max_tokens_per_restore: 12000, max_restore_per_turn: 3 },
-        },
-        checkpoint: { enabled: true },
-        ui: { editable_messages: true, expose_context_panel: true },
-      };
+      return serializeGraph({
+        template,
+        nodes: state.nodes.map(cloneNode),
+        edges: state.edges.map(cloneEdge),
+        viewport: state.viewport ?? {},
+      });
     },
     async save(template = state.template) {
       const manifest = this.serializeManifest(template);
@@ -213,12 +210,14 @@ function validateWorkflow(state) {
 
 function cloneNode(node) {
   return {
-    id: node.id,
-    type: node.type,
-    config: { ...(node.config ?? {}) },
-    ...(node.position ? { position: { ...node.position } } : {}),
-    ...(node.extension ? { extension: node.extension } : {}),
-  };
+      id: node.id,
+      type: node.type,
+      config: { ...(node.config ?? {}) },
+      ...(node.position ? { position: { ...node.position } } : {}),
+      ...(node.extension ? { extension: node.extension } : {}),
+      ...(node.legacy ? { legacy: true } : {}),
+      ...(node.unsupported ? { unsupported: true } : {}),
+    };
 }
 
 function cloneEdge(edge) {

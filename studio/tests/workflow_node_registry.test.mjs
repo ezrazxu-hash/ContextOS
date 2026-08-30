@@ -12,9 +12,9 @@ function moduleUrl(relativePath) {
 test("T72 frontend registry covers backend node catalog types", async () => {
   const { createWorkflowNodeRegistry } = await import(moduleUrl("src/workflow/nodes/registry.js"));
   const registry = createWorkflowNodeRegistry();
-  const backendCatalogTypes = ["START", "END", "llm", "agent", "tool", "condition", "router", "output"];
+  const backendCatalogTypes = ["prompt", "llm", "tool", "condition", "output"];
 
-  assert.deepEqual(registry.nodeTypes(), backendCatalogTypes);
+  assert.deepEqual(registry.nodeTypes(), ["START", "END", ...backendCatalogTypes]);
   for (const type of backendCatalogTypes) {
     const definition = registry.get(type);
     assert.equal(typeof definition.renderNode, "function");
@@ -33,7 +33,8 @@ test("T72 config renderer exposes concrete fields for supported nodes", async ()
   const { createWorkflowNodeRegistry } = await import(moduleUrl("src/workflow/nodes/registry.js"));
   const registry = createWorkflowNodeRegistry();
 
-  assert.deepEqual(registry.get("llm").renderConfig().fields.map((field) => field.path), ["model", "prompt_template", "input_mapping", "output_key"]);
+  assert.deepEqual(registry.get("prompt").renderConfig().fields.map((field) => field.path), ["template", "input_mapping", "output_key"]);
+  assert.deepEqual(registry.get("llm").renderConfig().fields.map((field) => field.path), ["model", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"]);
   assert.deepEqual(registry.get("tool").renderConfig().fields.map((field) => field.path), ["tool_name", "args", "output_key"]);
-  assert.deepEqual(registry.get("condition").renderConfig().fields.map((field) => field.path), ["source", "operator", "value", "state_key"]);
+  assert.deepEqual(registry.get("condition").renderConfig().fields.map((field) => field.path), ["source", "operator", "value"]);
 });

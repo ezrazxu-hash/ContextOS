@@ -11,7 +11,7 @@ class CompileDryRunTests(unittest.TestCase):
                 nodes=[
                     {"id": "planner", "type": "llm", "config": {"output_key": "plan"}},
                     {"id": "tool", "type": "tool", "config": {"output_key": "tool_result"}},
-                    {"id": "out", "type": "output", "config": {"output_key": "tool_result"}},
+                    {"id": "out", "type": "output", "config": {"source": "$state.tool_result"}},
                 ],
                 edges=[
                     {"from": "START", "to": "planner"},
@@ -47,10 +47,16 @@ class CompileDryRunTests(unittest.TestCase):
         manifest = parse_manifest(
             manifest_payload(
                 nodes=[
-                    {"id": "agent", "type": "agent", "config": {"output_key": "answer"}},
+                    {"id": "planner", "type": "llm", "config": {"output_key": "answer"}},
                     {"id": "tool", "type": "tool", "config": {"output_key": "tool_result"}},
+                    {"id": "out", "type": "output", "config": {"source": "$state.tool_result"}},
                 ],
-                edges=[{"from": "START", "to": "agent"}, {"from": "agent", "to": "tool"}, {"from": "tool", "to": "END"}],
+                edges=[
+                    {"from": "START", "to": "planner"},
+                    {"from": "planner", "to": "tool"},
+                    {"from": "tool", "to": "out"},
+                    {"from": "out", "to": "END"},
+                ],
             )
         )
 

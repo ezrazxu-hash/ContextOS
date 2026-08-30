@@ -2,7 +2,7 @@ import unittest
 
 
 def manifest_payload(node_override=None):
-    node = node_override or {"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "ok"}}
+    node = node_override or {"id": "writer", "type": "output", "config": {"source": "ok", "output_key": "answer", "output": "ok"}}
     return {
         "template": {"id": "research-agent", "name": "Research Agent", "version": "1.0.0"},
         "graph": {
@@ -35,7 +35,7 @@ class TemplateServiceApiTests(unittest.TestCase):
         service = TemplateService()
         created = post_template(manifest_payload(), service)
         loaded = get_template("research-agent", service)
-        updated_payload = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "updated"}})
+        updated_payload = manifest_payload({"id": "writer", "type": "output", "config": {"source": "updated", "output_key": "answer", "output": "updated"}})
         updated = put_template("research-agent", updated_payload, service)
 
         self.assertEqual(created["status"], 201)
@@ -83,7 +83,7 @@ class TemplateServiceApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response["status"], 400)
-        self.assertEqual(response["body"]["error"]["field_path"], "graph.nodes[0].extension")
+        self.assertEqual(response["body"]["error"]["field_path"], "graph.nodes[0].type")
 
     def test_run_uses_compiler_graph_and_does_not_call_provider(self) -> None:
         from contextos.api.routes.templates import post_template, post_template_run
@@ -114,8 +114,8 @@ class TemplateServiceApiTests(unittest.TestCase):
 
         service = TemplateService()
         active_manifest = manifest_payload()
-        first_draft = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "draft-1"}})
-        second_draft = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "draft-2"}})
+        first_draft = manifest_payload({"id": "writer", "type": "output", "config": {"source": "draft-1", "output_key": "answer", "output": "draft-1"}})
+        second_draft = manifest_payload({"id": "writer", "type": "output", "config": {"source": "draft-2", "output_key": "answer", "output": "draft-2"}})
         post_template(active_manifest, service)
 
         saved = put_agent_draft("research-agent", first_draft, service)
@@ -136,8 +136,8 @@ class TemplateServiceApiTests(unittest.TestCase):
 
         service = TemplateService()
         post_template(manifest_payload(), service)
-        draft = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "draft"}})
-        invalid_request = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "request-only"}})
+        draft = manifest_payload({"id": "writer", "type": "output", "config": {"source": "draft", "output_key": "answer", "output": "draft"}})
+        invalid_request = manifest_payload({"id": "writer", "type": "output", "config": {"source": "request-only", "output_key": "answer", "output": "request-only"}})
         invalid_request["graph"]["edges"] = [{"from": "START", "to": "missing"}]
         put_agent_draft("research-agent", draft, service)
         extension_registry, tool_registry = registries()
