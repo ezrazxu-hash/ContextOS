@@ -17,6 +17,11 @@ class TraceEvent:
     status: str
     timestamp: datetime
     message_id: str | None = None
+    run_id: str | None = None
+    agent_version_id: str | None = None
+    node_id: str | None = None
+    node_type: str | None = None
+    route: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -33,6 +38,11 @@ class TraceEvent:
             "status": self.status,
             "timestamp": self.timestamp.isoformat(),
             "message_id": self.message_id,
+            "run_id": self.run_id,
+            "agent_version_id": self.agent_version_id,
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "route": self.route,
         }
 
 

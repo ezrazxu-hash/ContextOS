@@ -114,6 +114,43 @@ class TraceCollector:
             message_id,
         )
 
+    def record_runtime_node(
+        self,
+        trace_id: str,
+        session_id: str,
+        timeline_id: str,
+        checkpoint_id: str,
+        run_id: str,
+        agent_version_id: str,
+        node_id: str,
+        node_type: str,
+        input_payload: object,
+        output_payload: object,
+        duration: float,
+        status: str,
+        route: str | None = None,
+    ) -> TraceEvent:
+        event = TraceEvent(
+            id=f"trace_event_{uuid4().hex}",
+            trace_id=trace_id,
+            session_id=session_id,
+            timeline_id=timeline_id,
+            checkpoint_id=checkpoint_id,
+            step_type="runtime_node",
+            component=node_id,
+            input_summary=summarize_payload(input_payload),
+            output_summary=summarize_payload(output_payload),
+            duration=duration,
+            status=status,
+            timestamp=utc_now(),
+            run_id=run_id,
+            agent_version_id=agent_version_id,
+            node_id=node_id,
+            node_type=node_type,
+            route=route,
+        )
+        return self._repository.save(event)
+
     def list_by_session(self, session_id: str) -> list[TraceEvent]:
         return self._repository.list_by_session(session_id)
 

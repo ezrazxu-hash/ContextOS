@@ -87,6 +87,8 @@ def iter_chat_event_frames(
                 message_cursor=int(data.get("message_cursor", 0)),
                 context_revision=str(data.get("context_revision", "")),
                 parent_checkpoint_id=_optional_str(data.get("parent_checkpoint_id")),
+                agent_template_id=_optional_str(data.get("agent_template_id")),
+                agent_version_id=_optional_str(data.get("agent_version_id")),
             )
             checkpoint_id = checkpoint.id
             data["checkpoint_id"] = checkpoint.id

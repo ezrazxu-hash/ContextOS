@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import cached_property
 import argparse
 import json
 import os
@@ -11,15 +12,24 @@ from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
 from contextos.api.env import load_backend_env
+from contextos.api.routes.agents import get_agent_draft, get_agent_version, get_agent_versions, list_agents, post_agent_graph_preview, post_agent_publish, post_agent_validate, put_agent_draft
+from contextos.api.routes.agent_test_runs import get_agent_test_run, iter_agent_test_run_event_frames, post_agent_version_test_run
 from contextos.api.routes.debug import get_debug_index
 from contextos.api.routes.messages import patch_message, soft_delete_message
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
-from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, patch_session, post_session, post_session_message, remove_session
+from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, patch_session, patch_session_agent, post_session, post_session_message, remove_session
 from contextos.api.routes.templates import get_template, list_templates, post_template, post_template_compile, post_template_run, post_template_validate, put_template
 from contextos.api.routes.timelines import activate_timeline, list_session_timelines, patch_timeline, remove_timeline
+from contextos.api.routes.workflow import get_node_catalog
 from contextos.provider.base.chat_client import ChatCompletionClient
 from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
+from contextos.runtime.agent.events import RuntimeEvent, RuntimeEventContractError, runtime_event_to_legacy_event
+from contextos.runtime.agent.legacy_runtime import LegacyChatRuntime
+from contextos.runtime.agent.protocol import AgentRunContext
+from contextos.runtime.agent.resolver import AgentRuntimeResolver
+from contextos.runtime.agent.test_run_service import AgentTestRunService, InMemoryAgentTestRunStore
+from contextos.runtime.agent.workflow_runtime import WorkflowAgentRuntime
 from contextos.runtime.conversation.context_builder import ConversationContextBuilder
 from contextos.runtime.conversation.orchestrator import ChatOrchestrator
 from contextos.runtime.conversation.repository import InMemoryConversationGroupRepository
@@ -28,11 +38,20 @@ from contextos.runtime.checkpoint.model import Checkpoint
 from contextos.runtime.checkpoint.service import CheckpointService
 from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
 from contextos.runtime.debug.projection import DebugProjection
+from contextos.runtime.graph.cache import CompiledGraphCache
+from contextos.runtime.graph.nodes.agent import AgentNodeExecutor
+from contextos.runtime.graph.nodes.condition import ConditionNodeExecutor
+from contextos.runtime.graph.nodes.llm import LLMNodeExecutor
+from contextos.runtime.graph.nodes.output import OutputNodeExecutor
+from contextos.runtime.graph.nodes.registry import NodeExecutorRegistry
+from contextos.runtime.graph.nodes.router import RouterNodeExecutor
+from contextos.runtime.graph.nodes.tool import ToolNodeExecutor
 from contextos.runtime.persistence.json_store import JsonRuntimeStore
 from contextos.runtime.session.message_service import InMemoryMessageRepository, MessageService
 from contextos.runtime.session.message_revision_service import MessageRevisionService
 from contextos.runtime.session.model import Session, SessionStatus
 from contextos.runtime.session.repository import InMemorySessionRepository
+from contextos.runtime.session.run_status import SessionRunStatusService
 from contextos.runtime.session.service import SessionService
 from contextos.runtime.session.snapshot_service import RuntimeSnapshotService
 from contextos.runtime.timeline.model import Timeline, TimelineStatus
@@ -41,7 +60,11 @@ from contextos.runtime.timeline.service import TimelineService
 from contextos.runtime.trace.collector import TraceCollector
 from contextos.runtime.trace.repository import InMemoryTraceRepository
 from contextos.template.extension.registry import ExtensionRegistry
+from contextos.template.publish_service import PublishService
 from contextos.template.service import TemplateService
+from contextos.template.version.repository import InMemoryAgentVersionRepository
+from contextos.template.version.service import AgentVersionService
+from contextos.tool.executor_registry import ToolExecutorRegistry
 from contextos.tool.registry.registry import ToolRegistry
 
 
@@ -55,6 +78,11 @@ class RuntimeServices:
     conversation_group_repository: InMemoryConversationGroupRepository
     trace_repository: InMemoryTraceRepository
     template_service: TemplateService
+    agent_version_repository: InMemoryAgentVersionRepository
+    agent_test_run_store: InMemoryAgentTestRunStore
+    graph_cache: CompiledGraphCache
+    run_status_service: SessionRunStatusService
+    workflow_agent_runtime_enabled: bool = True
     llm_client: ChatCompletionClient | None = None
 
     @property
@@ -94,6 +122,47 @@ class RuntimeServices:
             self.message_service,
             self.llm_client,
         )
+
+    @property
+    def agent_runtime_resolver(self) -> AgentRuntimeResolver:
+        return AgentRuntimeResolver(
+            legacy_runtime=LegacyChatRuntime(self.chat_orchestrator),
+            workflow_runtime=self.workflow_agent_runtime,
+            workflow_enabled=self.workflow_agent_runtime_enabled,
+            agent_version_loader=self.agent_version_repository.get,
+        )
+
+    @property
+    def agent_version_service(self) -> AgentVersionService:
+        return AgentVersionService(self.agent_version_repository)
+
+    @property
+    def publish_service(self) -> PublishService:
+        return PublishService(self.template_service, self.agent_version_service, self.extension_registry, self.tool_registry)
+
+    @property
+    def node_executor_registry(self) -> NodeExecutorRegistry:
+        registry = NodeExecutorRegistry()
+        if self.llm_client is not None:
+            registry.register(LLMNodeExecutor(self.llm_client))
+            registry.register(AgentNodeExecutor(self.llm_client))
+        registry.register(ToolNodeExecutor(ToolExecutorRegistry()))
+        registry.register(ConditionNodeExecutor())
+        registry.register(RouterNodeExecutor())
+        registry.register(OutputNodeExecutor())
+        return registry
+
+    @cached_property
+    def workflow_agent_runtime(self) -> WorkflowAgentRuntime:
+        return WorkflowAgentRuntime(
+            self.agent_version_service,
+            self.node_executor_registry,
+            graph_cache=self.graph_cache,
+        )
+
+    @cached_property
+    def agent_test_run_service(self) -> AgentTestRunService:
+        return AgentTestRunService(self.workflow_agent_runtime, self.agent_test_run_store, message_service=self.message_service)
 
     @property
     def trace_collector(self) -> TraceCollector:
@@ -150,8 +219,13 @@ def create_http_runtime_host(
     port: int = 8000,
     llm_client: ChatCompletionClient | None = None,
     storage_path: str | Path | None = None,
+    workflow_agent_runtime_enabled: bool | None = None,
 ) -> HttpRuntimeHost:
-    services = create_demo_services(llm_client=llm_client, storage_path=storage_path)
+    services = create_demo_services(
+        llm_client=llm_client,
+        storage_path=storage_path,
+        workflow_agent_runtime_enabled=workflow_agent_runtime_enabled,
+    )
     return HttpRuntimeHost(host=host, port=port, services=services)
 
 
@@ -174,6 +248,7 @@ def main(argv: list[str] | None = None) -> None:
 def create_demo_services(
     llm_client: ChatCompletionClient | None = None,
     storage_path: str | Path | None = None,
+    workflow_agent_runtime_enabled: bool | None = None,
 ) -> RuntimeServices:
     store = JsonRuntimeStore(storage_path) if storage_path is not None else None
     session_repository = InMemorySessionRepository(store)
@@ -184,6 +259,10 @@ def create_demo_services(
     conversation_group_repository = InMemoryConversationGroupRepository(store)
     trace_repository = InMemoryTraceRepository()
     template_service = TemplateService(store)
+    agent_version_repository = InMemoryAgentVersionRepository(store)
+    agent_test_run_store = InMemoryAgentTestRunStore()
+    graph_cache = CompiledGraphCache()
+    run_status_service = SessionRunStatusService()
     services = RuntimeServices(
         session_repository,
         timeline_repository,
@@ -193,6 +272,11 @@ def create_demo_services(
         conversation_group_repository,
         trace_repository,
         template_service,
+        agent_version_repository,
+        agent_test_run_store,
+        graph_cache,
+        run_status_service,
+        _workflow_agent_runtime_enabled(workflow_agent_runtime_enabled),
         llm_client=llm_client or create_deepseek_client_from_env(),
     )
 
@@ -286,6 +370,15 @@ def _default_runtime_state_path() -> Path:
     return Path("backend") / ".contextos" / "runtime-state.json"
 
 
+def _workflow_agent_runtime_enabled(configured: bool | None) -> bool:
+    if configured is not None:
+        return configured
+    value = os.environ.get("WORKFLOW_AGENT_RUNTIME_ENABLED")
+    if value is None:
+        return True
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
     class ContextOSRequestHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -303,6 +396,26 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 2 and segments == ["api", "templates"]:
                 self._send_route_response(list_templates(services.template_service))
+                return
+
+            if len(segments) == 2 and segments == ["api", "agents"]:
+                self._send_route_response(list_agents(services.template_service, services.agent_version_service))
+                return
+
+            if len(segments) == 3 and segments == ["api", "workflow", "node-catalog"]:
+                self._send_route_response(get_node_catalog())
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "draft":
+                self._send_route_response(get_agent_draft(segments[2], services.template_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "versions":
+                self._send_route_response(get_agent_versions(segments[2], services.agent_version_service))
+                return
+
+            if len(segments) == 3 and segments[:2] == ["api", "agent-versions"]:
+                self._send_route_response(get_agent_version(segments[2], services.agent_version_service))
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "templates"]:
@@ -340,6 +453,14 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 4 and segments[:3] == ["api", "runtime", "sessions"]:
                 self._send_route_response(get_runtime_snapshot(segments[3], services.snapshot_service))
+                return
+
+            if len(segments) == 3 and segments[:2] == ["api", "agent-test-runs"]:
+                self._send_route_response(get_agent_test_run(segments[2], services.agent_test_run_service))
+                return
+
+            if len(segments) == 3 and segments[:2] == ["sse", "agent-test-runs"]:
+                self._send_sse(iter_agent_test_run_event_frames(segments[2], services.agent_test_run_service))
                 return
 
             if len(segments) == 4 and segments[:3] == ["api", "debug", "sessions"]:
@@ -382,7 +503,7 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
             payload = self._read_json_body()
 
             if len(segments) == 2 and segments == ["api", "sessions"]:
-                response = post_session(payload, services.session_service)
+                response = post_session(payload, services.session_service, agent_version_service=services.agent_version_service)
                 if int(response["status"]) == 201:
                     session_id = str(response["body"]["id"])
                     timeline = services.timeline_service.create_initial_timeline(session_id)
@@ -404,6 +525,37 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                         tool_registry=services.tool_registry,
                     )
                 )
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "validate":
+                self._send_route_response(
+                    post_agent_validate(
+                        segments[2],
+                        payload,
+                        services.template_service,
+                        extension_registry=services.extension_registry,
+                        tool_registry=services.tool_registry,
+                    )
+                )
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "graph-preview":
+                self._send_route_response(
+                    post_agent_graph_preview(
+                        segments[2],
+                        payload,
+                        extension_registry=services.extension_registry,
+                        tool_registry=services.tool_registry,
+                    )
+                )
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "publish":
+                self._send_route_response(post_agent_publish(segments[2], services.publish_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "agent-versions"] and segments[3] == "test-runs":
+                self._send_route_response(post_agent_version_test_run(segments[2], payload, services.agent_test_run_service))
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "templates"] and segments[3] == "compile":
@@ -466,6 +618,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 self._send_route_response(put_template(segments[2], payload, services.template_service))
                 return
 
+            if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "draft":
+                self._send_route_response(put_agent_draft(segments[2], payload, services.template_service))
+                return
+
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})
 
         def do_PATCH(self) -> None:
@@ -488,6 +644,18 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
                 self._send_route_response(patch_session(segments[2], payload, services.session_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "sessions"] and segments[3] == "agent":
+                self._send_route_response(
+                    patch_session_agent(
+                        segments[2],
+                        payload,
+                        services.session_service,
+                        services.agent_version_service,
+                        run_status_service=services.run_status_service,
+                    )
+                )
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "timelines"]:
@@ -579,5 +747,56 @@ def _chat_runtime_events(
     timeline_id: str,
     services: RuntimeServices,
 ):
-    yield from services.chat_orchestrator.stream_runtime_events(session_id, timeline_id, "trace-chat-response")
+    trace_id = "trace-chat-response"
+    session = services.session_repository.get(session_id)
+    runtime = services.agent_runtime_resolver.resolve(session)
+    run_context = AgentRunContext(
+        session_id,
+        timeline_id,
+        trace_id,
+        agent_version_id=_session_agent_version_id(session),
+        input=_latest_user_input(session_id, timeline_id, services),
+    )
+    for event in runtime.stream_runtime_events(run_context):
+        event = _attach_latest_group_to_terminal_event(event, session_id, timeline_id, services)
+        try:
+            yield runtime_event_to_legacy_event(event)
+        except RuntimeEventContractError:
+            continue
+
+
+def _session_agent_version_id(session) -> str | None:
+    direct_value = getattr(session, "agent_version_id", None)
+    if direct_value:
+        return str(direct_value)
+    metadata = getattr(session, "metadata", {})
+    metadata_value = metadata.get("agent_version_id") if isinstance(metadata, dict) else None
+    return str(metadata_value) if metadata_value else None
+
+
+def _latest_user_input(session_id: str, timeline_id: str, services: RuntimeServices) -> str:
+    if not hasattr(services, "message_service"):
+        return ""
+    messages, _ = services.message_service.list_messages(session_id, limit=1000, timeline_id=timeline_id)
+    for message in reversed(messages):
+        role = getattr(message.role, "value", message.role)
+        if str(role) == "user":
+            return message.content
+    return ""
+
+
+def _attach_latest_group_to_terminal_event(
+    event: RuntimeEvent,
+    session_id: str,
+    timeline_id: str,
+    services: RuntimeServices,
+) -> RuntimeEvent:
+    if event.type != "graph_finished" or event.data.get("group_id"):
+        return event
+    if not hasattr(services, "conversation_group_service"):
+        return event
+    group = services.conversation_group_service.latest_group(session_id, timeline_id)
+    if group is None:
+        return event
+    return RuntimeEvent(event.type, {**event.data, "group_id": group.id})
 

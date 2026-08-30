@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from contextos.runtime.graph.runtime_context import RuntimeContext
@@ -19,9 +20,18 @@ class TemplateNotFound(Exception):
 class TemplateRecord:
     template_id: str
     manifest_payload: dict[str, Any]
+    draft_manifest_payload: dict[str, Any] | None = None
+    draft_updated_at: str | None = None
+    active_version_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {"id": self.template_id, "manifest": deepcopy(self.manifest_payload)}
+        payload: dict[str, object] = {"id": self.template_id, "manifest": deepcopy(self.manifest_payload)}
+        if self.active_version_id is not None:
+            payload["active_version_id"] = self.active_version_id
+        if self.draft_manifest_payload is not None:
+            payload["draft_manifest"] = deepcopy(self.draft_manifest_payload)
+            payload["draft_updated_at"] = self.draft_updated_at
+        return payload
 
 
 @dataclass(frozen=True)
@@ -62,6 +72,35 @@ class TemplateService:
         if record is None:
             raise TemplateNotFound(template_id)
         return record
+
+    def save_draft(self, template_id: str, draft_manifest_payload: dict[str, Any]) -> TemplateRecord:
+        parse_manifest(draft_manifest_payload)
+        record = self.get(template_id)
+        updated = TemplateRecord(
+            template_id=record.template_id,
+            manifest_payload=deepcopy(record.manifest_payload),
+            draft_manifest_payload=deepcopy(draft_manifest_payload),
+            draft_updated_at=datetime.now(timezone.utc).isoformat(),
+            active_version_id=record.active_version_id,
+        )
+        self._save_record(updated)
+        return updated
+
+    def get_draft(self, template_id: str) -> dict[str, Any] | None:
+        record = self.get(template_id)
+        return deepcopy(record.draft_manifest_payload) if record.draft_manifest_payload is not None else None
+
+    def activate_version(self, template_id: str, version_id: str) -> TemplateRecord:
+        record = self.get(template_id)
+        updated = TemplateRecord(
+            template_id=record.template_id,
+            manifest_payload=deepcopy(record.manifest_payload),
+            draft_manifest_payload=deepcopy(record.draft_manifest_payload) if record.draft_manifest_payload is not None else None,
+            draft_updated_at=record.draft_updated_at,
+            active_version_id=version_id,
+        )
+        self._save_record(updated)
+        return updated
 
     def validate(
         self,
@@ -121,4 +160,10 @@ class TemplateService:
 
     @staticmethod
     def _record_from_dict(record: dict[str, Any]) -> TemplateRecord:
-        return TemplateRecord(template_id=str(record["id"]), manifest_payload=deepcopy(record["manifest"]))
+        return TemplateRecord(
+            template_id=str(record["id"]),
+            manifest_payload=deepcopy(record["manifest"]),
+            draft_manifest_payload=deepcopy(record.get("draft_manifest")) if record.get("draft_manifest") is not None else None,
+            draft_updated_at=str(record["draft_updated_at"]) if record.get("draft_updated_at") is not None else None,
+            active_version_id=str(record["active_version_id"]) if record.get("active_version_id") is not None else None,
+        )

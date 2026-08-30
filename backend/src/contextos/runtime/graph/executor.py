@@ -42,6 +42,8 @@ class RuntimeExecutor:
         message_cursor: int,
         context_revision: str,
         parent_checkpoint_id: str | None = None,
+        agent_template_id: str | None = None,
+        agent_version_id: str | None = None,
     ) -> ExecutionResult:
         runtime_context = RuntimeContext(
             session_id=session_id,
@@ -62,6 +64,8 @@ class RuntimeExecutor:
             message_cursor=message_cursor,
             context_revision=context_revision,
             parent_checkpoint_id=parent_checkpoint_id,
+            agent_template_id=agent_template_id,
+            agent_version_id=agent_version_id,
         )
         return ExecutionResult(
             graph_state=completed_state,

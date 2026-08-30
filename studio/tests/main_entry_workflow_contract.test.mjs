@@ -1,0 +1,43 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const studioRoot = dirname(fileURLToPath(import.meta.url)).replace(/\\tests$/, "");
+
+test("main Workflow page exposes only V1 executable node library entries", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+
+  assert.match(source, /"llm"/);
+  assert.match(source, /"router"/);
+  assert.doesNotMatch(source, /"context_operator"/);
+});
+
+test("main Workflow save path serializes runtime and ui sections separately", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const serializer = source.slice(source.indexOf("function serializeWorkflowManifest()"), source.indexOf("function loadWorkflowManifest("));
+
+  assert.match(serializer, /serializeGraph/);
+  assert.doesNotMatch(serializer, /state_schema/);
+});
+
+test("main Workflow page exposes real edge creation and graph preview actions", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+
+  assert.match(source, /data-action="select-edge-source"/);
+  assert.match(source, /data-action="connect-workflow-edge"/);
+  assert.match(source, /data-action="preview-workflow-graph"/);
+  assert.match(source, /previewAgentGraph/);
+  assert.match(source, /workflowGraphPreview/);
+});
+
+test("main Workflow page renders saved edges instead of hiding the graph topology", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const renderer = source.slice(source.indexOf("function renderWorkflow()"), source.indexOf("function renderTemplate()"));
+
+  assert.match(renderer, /state\.workflowEdges\.map/);
+  assert.match(renderer, /workflow-edge/);
+  assert.match(renderer, /START/);
+  assert.match(renderer, /END/);
+});

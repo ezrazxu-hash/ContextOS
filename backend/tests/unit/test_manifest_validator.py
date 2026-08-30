@@ -94,6 +94,57 @@ class ManifestValidatorTests(unittest.TestCase):
 
         self.assertEqual(ManifestValidator(extension_registry, tool_registry).validate(valid_manifest_with()), [])
 
+    def test_validation_result_returns_multiple_structured_errors(self) -> None:
+        from contextos.template.validator.validator import ManifestValidator
+
+        extension_registry, tool_registry = create_registries()
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [
+                    {"id": "planner", "type": "agent", "config": {"tools": ["web_search"]}},
+                    {"id": "orphan", "type": "output", "config": {"output_key": "answer"}},
+                ],
+                "edges": [
+                    {"from": "START", "to": "planner"},
+                    {"from": "planner", "to": "missing"},
+                ],
+            }
+        )
+
+        result = ManifestValidator(extension_registry, tool_registry).validate_result(manifest)
+
+        self.assertFalse(result.valid)
+        self.assertEqual(
+            [(error.code, error.node_id, error.edge_id, error.field) for error in result.errors],
+            [
+                ("unknown_node", None, "1:planner->missing", "graph.edges[1].to"),
+                ("missing_end_edge", None, None, "graph.edges"),
+                ("isolated_node", "orphan", None, "graph.nodes[1]"),
+                ("output_not_reachable", "orphan", None, "graph.nodes[1]"),
+            ],
+        )
+        self.assertEqual(result.to_dict()["errors"][0]["message"], "Edge references unknown target node: missing")
+
+    def test_llm_node_config_errors_are_structured(self) -> None:
+        from contextos.template.validator.validator import ManifestValidator
+
+        extension_registry, tool_registry = create_registries()
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [{"id": "planner", "type": "llm", "config": {"model": "default", "prompt_template": "{{input}}"}}],
+                "edges": [{"from": "START", "to": "planner"}, {"from": "planner", "to": "END"}],
+            }
+        )
+
+        result = ManifestValidator(extension_registry, tool_registry).validate_result(manifest)
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.errors[0].code, "llm_config.required")
+        self.assertEqual(result.errors[0].node_id, "planner")
+        self.assertEqual(result.errors[0].field, "graph.nodes[0].config.output_key")
+
 
 if __name__ == "__main__":
     unittest.main()

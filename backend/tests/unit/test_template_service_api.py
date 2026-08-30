@@ -107,6 +107,130 @@ class TemplateServiceApiTests(unittest.TestCase):
         self.assertEqual(response["body"]["graph_state"]["answer"], "ok")
         self.assertEqual(provider_calls, [])
 
+    def test_agent_draft_save_load_and_overwrite_does_not_modify_active_manifest(self) -> None:
+        from contextos.api.routes.agents import get_agent_draft, put_agent_draft
+        from contextos.api.routes.templates import post_template
+        from contextos.template.service import TemplateService
+
+        service = TemplateService()
+        active_manifest = manifest_payload()
+        first_draft = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "draft-1"}})
+        second_draft = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "draft-2"}})
+        post_template(active_manifest, service)
+
+        saved = put_agent_draft("research-agent", first_draft, service)
+        overwritten = put_agent_draft("research-agent", second_draft, service)
+        loaded = get_agent_draft("research-agent", service)
+        active = service.get("research-agent")
+
+        self.assertEqual(saved["status"], 200)
+        self.assertEqual(overwritten["status"], 200)
+        self.assertEqual(loaded["body"]["draft_manifest"], second_draft)
+        self.assertIsNotNone(loaded["body"]["draft_updated_at"])
+        self.assertEqual(active.manifest_payload, active_manifest)
+
+    def test_agent_validate_api_returns_structured_result_without_modifying_draft(self) -> None:
+        from contextos.api.routes.agents import get_agent_draft, post_agent_validate, put_agent_draft
+        from contextos.api.routes.templates import post_template
+        from contextos.template.service import TemplateService
+
+        service = TemplateService()
+        post_template(manifest_payload(), service)
+        draft = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "draft"}})
+        invalid_request = manifest_payload({"id": "writer", "type": "output", "config": {"output_key": "answer", "output": "request-only"}})
+        invalid_request["graph"]["edges"] = [{"from": "START", "to": "missing"}]
+        put_agent_draft("research-agent", draft, service)
+        extension_registry, tool_registry = registries()
+
+        response = post_agent_validate(
+            "research-agent",
+            invalid_request,
+            service,
+            extension_registry=extension_registry,
+            tool_registry=tool_registry,
+        )
+        loaded_draft = get_agent_draft("research-agent", service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertFalse(response["body"]["valid"])
+        self.assertEqual(response["body"]["errors"][0]["code"], "unknown_node")
+        self.assertEqual(response["body"]["errors"][0]["field"], "graph.edges[0].to")
+        self.assertEqual(loaded_draft["body"]["draft_manifest"], draft)
+
+    def test_agent_validate_api_uses_current_draft_when_payload_is_empty(self) -> None:
+        from contextos.api.routes.agents import post_agent_validate, put_agent_draft
+        from contextos.api.routes.templates import post_template
+        from contextos.template.service import TemplateService
+
+        service = TemplateService()
+        post_template(manifest_payload(), service)
+        put_agent_draft("research-agent", manifest_payload(), service)
+        extension_registry, tool_registry = registries()
+
+        response = post_agent_validate(
+            "research-agent",
+            {},
+            service,
+            extension_registry=extension_registry,
+            tool_registry=tool_registry,
+        )
+
+        self.assertEqual(response["body"], {"valid": True, "errors": [], "warnings": []})
+
+    def test_agent_publish_and_version_routes_return_published_versions(self) -> None:
+        from contextos.api.routes.agents import get_agent_version, get_agent_versions, post_agent_publish, put_agent_draft
+        from contextos.api.routes.templates import post_template
+        from contextos.template.publish_service import PublishService
+        from contextos.template.service import TemplateService
+        from contextos.template.version.repository import InMemoryAgentVersionRepository
+        from contextos.template.version.service import AgentVersionService
+
+        template_service = TemplateService()
+        version_service = AgentVersionService(InMemoryAgentVersionRepository())
+        extension_registry, tool_registry = registries()
+        post_template(manifest_payload(), template_service)
+        put_agent_draft("research-agent", manifest_payload(), template_service)
+        publish_service = PublishService(template_service, version_service, extension_registry, tool_registry)
+
+        published = post_agent_publish("research-agent", publish_service)
+        listed = get_agent_versions("research-agent", version_service)
+        loaded = get_agent_version(published["body"]["id"], version_service)
+
+        self.assertEqual(published["status"], 200)
+        self.assertEqual(published["body"]["agent_template_id"], "research-agent")
+        self.assertEqual(published["body"]["status"], "published")
+        self.assertEqual(listed["body"]["versions"][0]["id"], published["body"]["id"])
+        self.assertEqual(loaded["body"]["id"], published["body"]["id"])
+
+    def test_list_agents_only_returns_templates_with_published_active_versions(self) -> None:
+        from contextos.api.routes.agents import list_agents, put_agent_draft
+        from contextos.api.routes.templates import post_template
+        from contextos.template.publish_service import PublishService
+        from contextos.template.service import TemplateService
+        from contextos.template.version.repository import InMemoryAgentVersionRepository
+        from contextos.template.version.service import AgentVersionService
+
+        template_service = TemplateService()
+        version_service = AgentVersionService(InMemoryAgentVersionRepository())
+        extension_registry, tool_registry = registries()
+        post_template(manifest_payload(), template_service)
+        put_agent_draft("research-agent", manifest_payload(), template_service)
+        draft_only = manifest_payload()
+        draft_only["template"] = {"id": "draft-only", "name": "Draft Only", "version": "1.0.0"}
+        post_template(draft_only, template_service)
+        version = PublishService(template_service, version_service, extension_registry, tool_registry).publish("research-agent")
+
+        response = list_agents(template_service, version_service)
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(response["body"]["agents"], [
+            {
+                "id": "research-agent",
+                "name": "Research Agent",
+                "active_version": version.to_dict(),
+            }
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,12 @@ class ContinueResult:
     execution: ExecutionResult
 
 
+class ContinueAgentVersionNotFound(Exception):
+    def __init__(self, agent_version_id: str) -> None:
+        super().__init__(agent_version_id)
+        self.agent_version_id = agent_version_id
+
+
 class ContinueService:
     def __init__(
         self,
@@ -25,12 +31,14 @@ class ContinueService:
         runtime_executor: RuntimeExecutor,
         message_service: MessageService | None = None,
         conversation_group_service: ConversationGroupService | None = None,
+        agent_version_loader: Callable[[str], object | None] | None = None,
     ) -> None:
         self._timeline_service = timeline_service
         self._checkpoint_service = checkpoint_service
         self._runtime_executor = runtime_executor
         self._message_service = message_service
         self._conversation_group_service = conversation_group_service
+        self._agent_version_loader = agent_version_loader
 
     def continue_from_revision(
         self,
@@ -45,6 +53,8 @@ class ContinueService:
     ) -> ContinueResult:
         del old_tool_replayer
         checkpoint = self._checkpoint_service.restore_checkpoint(checkpoint_id)
+        if checkpoint.agent_version_id is not None and self._agent_version_loader is not None and self._agent_version_loader(checkpoint.agent_version_id) is None:
+            raise ContinueAgentVersionNotFound(checkpoint.agent_version_id)
         revision = revision_service.get_revision(revision_id)
         timeline = self._timeline_service.fork_timeline(
             parent_timeline_id=parent_timeline_id,
@@ -71,6 +81,8 @@ class ContinueService:
                 message_id: revision.new_content,
             },
         }
+        if checkpoint.agent_version_id is not None:
+            graph_state["agent_version_id"] = checkpoint.agent_version_id
         execution = self._runtime_executor.run(
             session_id=checkpoint.session_id,
             timeline_id=timeline.id,
@@ -79,5 +91,7 @@ class ContinueService:
             message_cursor=checkpoint.message_cursor,
             context_revision=checkpoint.context_revision,
             parent_checkpoint_id=checkpoint.id,
+            agent_template_id=checkpoint.agent_template_id,
+            agent_version_id=checkpoint.agent_version_id,
         )
         return ContinueResult(timeline=timeline, execution=execution)

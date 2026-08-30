@@ -25,9 +25,8 @@ test("UI09-T04-TC02: demo ids and workflow graph are stable for reusable screens
       ["planner", "agent"],
       ["sales_search", "tool"],
       ["region_condition", "condition"],
-      ["analysis_subgraph", "subgraph"],
+      ["region_router", "router"],
       ["writer", "output"],
-      ["context_review", "context_operator"],
     ],
   );
   assert.deepEqual(demoFixtures.templateManifest.template.id, "demo-template");
@@ -38,7 +37,7 @@ test("UI09-T04-TC03: demo covers chat impact template policy and does not allow 
   assert.equal(demoFixtures.messages[1].editable, true);
   assert.equal(demoFixtures.impact.issues[0].issue_type, "message_context_drift");
   assert.equal(demoFixtures.templateManifest.context.policy, "balanced");
-  assert.ok(demoFixtures.templateManifest.graph.nodes.find((node) => node.id === "sales_search").config.tool_id === "sales.search");
+  assert.ok(demoFixtures.templateManifest.graph.nodes.find((node) => node.id === "sales_search").config.tool_name === "sales.search");
 
   const toolCall = demoFixtures.replay.sideEffectToolCall;
   assert.equal(toolCall.tool_id, "send_report_email");

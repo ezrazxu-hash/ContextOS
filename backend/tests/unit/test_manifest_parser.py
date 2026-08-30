@@ -30,6 +30,44 @@ def golden_manifest_payload():
     }
 
 
+def runtime_manifest_payload():
+    return {
+        "schema_version": "1.0",
+        "runtime": {
+            "nodes": [
+                {
+                    "id": "planner",
+                    "type": "llm",
+                    "name": "Planner LLM",
+                    "config": {"prompt_template": "{{input}}", "output_key": "answer"},
+                }
+            ],
+            "edges": [
+                {
+                    "id": "edge-start-planner",
+                    "source": "START",
+                    "target": "planner",
+                    "source_handle": None,
+                    "target_handle": None,
+                    "route": None,
+                },
+                {
+                    "id": "edge-planner-end",
+                    "source": "planner",
+                    "target": "END",
+                    "source_handle": None,
+                    "target_handle": None,
+                    "route": None,
+                },
+            ],
+        },
+        "ui": {
+            "nodes": {"planner": {"x": 120, "y": 80, "width": 180, "height": 96}},
+            "viewport": {"x": 0, "y": 0, "zoom": 1},
+        },
+    }
+
+
 class ManifestParserTests(unittest.TestCase):
     def test_golden_research_agent_manifest_parses(self) -> None:
         from contextos.template.manifest.parser import parse_manifest
@@ -65,6 +103,54 @@ class ManifestParserTests(unittest.TestCase):
             parse_manifest(payload)
 
         self.assertEqual(error.exception.field_path, "graph.nodes[0].dynamic_import")
+
+    def test_v1_runtime_manifest_round_trips_runtime_and_ui_separately(self) -> None:
+        from contextos.template.manifest.parser import parse_manifest
+
+        payload = runtime_manifest_payload()
+
+        manifest = parse_manifest(payload)
+        restored = manifest.to_dict()
+
+        self.assertEqual(manifest.schema_version, "1.0")
+        self.assertEqual(restored["runtime"], payload["runtime"])
+        self.assertEqual(restored["ui"], payload["ui"])
+        self.assertIsNone(manifest.graph.nodes[0].position)
+
+    def test_v1_runtime_manifest_rejects_ui_fields_inside_runtime_node(self) -> None:
+        from contextos.template.manifest.parser import ManifestParseError, parse_manifest
+
+        payload = runtime_manifest_payload()
+        payload["runtime"]["nodes"][0]["x"] = 10
+
+        with self.assertRaises(ManifestParseError) as error:
+            parse_manifest(payload)
+
+        self.assertEqual(error.exception.field_path, "runtime.nodes[0].x")
+
+    def test_v1_runtime_manifest_rejects_unknown_schema_version(self) -> None:
+        from contextos.template.manifest.parser import ManifestParseError, parse_manifest
+
+        payload = runtime_manifest_payload()
+        payload["schema_version"] = "2.0"
+
+        with self.assertRaises(ManifestParseError) as error:
+            parse_manifest(payload)
+
+        self.assertEqual(error.exception.field_path, "schema_version")
+
+    def test_v1_runtime_manifest_rejects_duplicate_node_id(self) -> None:
+        from contextos.template.manifest.parser import ManifestParseError, parse_manifest
+
+        payload = runtime_manifest_payload()
+        payload["runtime"]["nodes"].append(
+            {"id": "planner", "type": "output", "name": "Duplicate", "config": {"output_key": "answer"}}
+        )
+
+        with self.assertRaises(ManifestParseError) as error:
+            parse_manifest(payload)
+
+        self.assertEqual(error.exception.field_path, "runtime.nodes[1].id")
 
 
 if __name__ == "__main__":

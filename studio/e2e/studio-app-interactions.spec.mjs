@@ -195,6 +195,15 @@ test("Workflow page lists saves reloads and preserves dragged node positions", a
     await page.getByTestId("workflow-name").fill("My Workflow A");
     await page.getByRole("button", { name: "agent", exact: true }).click();
     await page.getByRole("button", { name: "tool", exact: true }).click();
+    await page.locator(".workflow-edge", { hasText: "agent-1 -> END" }).getByRole("button", { name: /Delete edge/ }).click();
+    await page.locator("#workflow-edge-source").selectOption("agent-1");
+    await page.locator("#workflow-edge-target").selectOption("tool-2");
+    await page.getByTestId("workflow-connect-edge").click();
+    await page.locator("#workflow-edge-source").selectOption("tool-2");
+    await page.locator("#workflow-edge-target").selectOption("END");
+    await page.getByTestId("workflow-connect-edge").click();
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("agent-1 -> tool-2");
+    await expect(page.locator(".workflow-edge")).toHaveCount(3);
 
     const node = page.locator(".graph-node", { hasText: "agent" }).first();
     const otherNode = page.locator(".graph-node", { hasText: "tool" }).first();
@@ -212,6 +221,12 @@ test("Workflow page lists saves reloads and preserves dragged node positions", a
     expect(otherAfter?.x).toBe(otherBefore?.x);
     expect(otherAfter?.y).toBe(otherBefore?.y);
 
+    await page.getByTestId("workflow-preview").click();
+    await expect(page.getByTestId("workflow-graph-preview")).toContainText("START");
+    await expect(page.getByTestId("workflow-graph-preview")).toContainText("agent-1");
+    await expect(page.getByTestId("workflow-graph-preview")).toContainText("tool-2");
+    await expect(page.getByTestId("workflow-graph-preview")).toContainText("END");
+
     await page.getByTestId("workflow-save").click();
     await expect(page.getByTestId("status-toast")).toContainText("Workflow saved");
     await expect(page.getByTestId("workflow-list")).toContainText("My Workflow A");
@@ -220,14 +235,26 @@ test("Workflow page lists saves reloads and preserves dragged node positions", a
     const saved = templates.templates.find((template) => template.name === "My Workflow A");
     expect(saved).toBeTruthy();
     const loaded = await (await page.request.get(`${studio.url}/api/templates/${saved.id}`)).json();
-    expect(loaded.manifest.graph.nodes[0].position.x).toBeGreaterThan(120);
-    expect(loaded.manifest.graph.nodes[0].position.y).toBeGreaterThan(80);
+    const loadedNodes = loaded.manifest.graph?.nodes ?? loaded.manifest.runtime.nodes.map((node) => ({
+      ...node,
+      position: loaded.manifest.ui?.nodes?.[node.id]?.position,
+    }));
+    expect(loadedNodes[0].position.x).toBeGreaterThan(120);
+    expect(loadedNodes[0].position.y).toBeGreaterThan(80);
+    const loadedEdges = (loaded.manifest.graph?.edges ?? loaded.manifest.runtime?.edges).map((edge) => ({
+      source: edge.source ?? edge.from,
+      target: edge.target ?? edge.to,
+    }));
+    expect(loadedEdges).toContainEqual({ source: "START", target: "agent-1" });
+    expect(loadedEdges).toContainEqual({ source: "agent-1", target: "tool-2" });
+    expect(loadedEdges).toContainEqual({ source: "tool-2", target: "END" });
 
     await page.reload();
     await expect(page.getByTestId("workflow-list")).toContainText("My Workflow A");
     await page.getByRole("button", { name: /My Workflow A/ }).click();
     const reopened = page.locator(".graph-node", { hasText: "agent" });
     await expect(reopened).toBeVisible();
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("agent-1 -> tool-2");
     const reopenedBox = await reopened.boundingBox();
     expect(reopenedBox?.x).toBeCloseTo(after?.x ?? 0, 1);
     expect(reopenedBox?.y).toBeCloseTo(after?.y ?? 0, 1);

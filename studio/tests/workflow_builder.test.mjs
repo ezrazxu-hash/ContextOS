@@ -24,18 +24,12 @@ test("Agent Tool Output graph serializes to V1 Manifest", async () => {
   const manifest = builder.serializeManifest({ id: "research-agent", name: "Research Agent", version: "1.0.0" });
 
   assert.deepEqual(builder.nodeLibrary().map((node) => node.type), [
-    "agent",
     "llm",
-    "prompt",
+    "agent",
     "tool",
     "condition",
     "router",
-    "subgraph",
-    "human_approval",
-    "context_operator",
-    "memory",
     "output",
-    "custom",
   ]);
   assert.deepEqual(manifest.graph.edges, [
     { from: "START", to: "agent" },

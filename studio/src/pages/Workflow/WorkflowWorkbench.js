@@ -1,38 +1,88 @@
 import { createWorkbenchLayout } from "../../design-system/layout/workbenchLayout.js";
 import { createWorkflowBuilder } from "../../features/workflow-builder/WorkflowBuilder.js";
+import { serializeGraph } from "../../workflow/manifest/model.js";
 
 const DEFAULT_VIEWPORT_WIDTH = 1280;
 const NODE_LIBRARY = [
-  { type: "agent", label: "Agent", category: "Core" },
   { type: "llm", label: "LLM", category: "Model" },
-  { type: "prompt", label: "Prompt", category: "Model" },
+  { type: "agent", label: "Agent", category: "Core" },
   { type: "tool", label: "Tool", category: "Tools" },
   { type: "condition", label: "Condition", category: "Flow" },
   { type: "router", label: "Router", category: "Flow" },
-  { type: "subgraph", label: "SubGraph", category: "Flow" },
-  { type: "human_approval", label: "Human Approval", category: "Control" },
-  { type: "context_operator", label: "Context Operator", category: "Context" },
-  { type: "memory", label: "Memory", category: "Context" },
   { type: "output", label: "Output", category: "Output" },
-  { type: "custom", label: "Custom Node", category: "Extension" },
 ];
 const CANVAS_TOOLS = ["pointer", "pan", "zoom", "fit", "grid"];
 const NODE_CONFIG_SCHEMAS = {
+  llm: [
+    { id: "model", fields: [{ path: "model", label: "Model", required: true }] },
+    {
+      id: "prompt",
+      fields: [
+        { path: "system_prompt", label: "System Prompt" },
+        { path: "prompt_template", label: "Prompt Template", required: true },
+        { path: "temperature", label: "Temperature" },
+      ],
+    },
+    {
+      id: "io",
+      fields: [
+        { path: "input_mapping", label: "Input Mapping" },
+        { path: "output_key", label: "Output Key", required: true },
+      ],
+    },
+  ],
   agent: [
     { id: "model", fields: [{ path: "model", label: "Model", required: true }] },
-    { id: "tool_bindings", fields: [{ path: "tools", label: "Tool Bindings" }] },
-    { id: "context_policy", fields: [{ path: "context.policy", label: "Context Policy" }] },
-    { id: "retry", fields: [{ path: "retry.max_attempts", label: "Retry Attempts" }] },
-    { id: "checkpoint", fields: [{ path: "checkpoint.enabled", label: "Checkpoint" }] },
+    { id: "instruction", fields: [{ path: "instruction", label: "Instruction", required: true }] },
+    {
+      id: "io",
+      fields: [
+        { path: "input", label: "Input" },
+        { path: "output_key", label: "Output Key", required: true },
+      ],
+    },
+    {
+      id: "tools",
+      fields: [
+        { path: "tools", label: "Tools" },
+        { path: "max_steps", label: "Max Steps" },
+      ],
+    },
+    { id: "policy", fields: [{ path: "context_policy", label: "Context Policy" }] },
   ],
   tool: [
-    { id: "tool", fields: [{ path: "tool_id", label: "Tool", required: true }] },
-    { id: "args", fields: [{ path: "args_schema", label: "Args Schema" }] },
-    { id: "retry", fields: [{ path: "retry.max_attempts", label: "Retry Attempts" }] },
+    { id: "tool", fields: [{ path: "tool_name", label: "Tool", required: true }] },
+    {
+      id: "io",
+      fields: [
+        { path: "args", label: "Arguments" },
+        { path: "output_key", label: "Output Key", required: true },
+      ],
+    },
   ],
-  subgraph: [
-    { id: "subgraph", fields: [{ path: "label", label: "Label" }, { path: "internal_node_ids", label: "Internal Nodes" }] },
+  condition: [
+    {
+      id: "condition",
+      fields: [
+        { path: "source", label: "Source", required: true },
+        { path: "operator", label: "Operator" },
+        { path: "value", label: "Value" },
+      ],
+    },
+    { id: "route", fields: [{ path: "state_key", label: "Route State Key", required: true }] },
   ],
+  router: [
+    {
+      id: "router",
+      fields: [
+        { path: "source", label: "Source", required: true },
+        { path: "routes", label: "Routes", required: true },
+        { path: "default_route", label: "Default Route" },
+      ],
+    },
+    { id: "route", fields: [{ path: "state_key", label: "Route State Key", required: true }] },
+  ],
+  output: [{ id: "output", fields: [{ path: "source", label: "Source", required: true }] }],
 };
 const FALLBACK_PLATFORM = {
   readUiState() {
@@ -62,11 +112,20 @@ export function createWorkflowWorkbench(options = {}) {
       lastValidated: false,
       changeSummary: null,
     },
+    testRun: {
+      status: "idle",
+      runId: null,
+      output: null,
+      error: null,
+    },
     nodeLibraryQuery: "",
     nextNodeNumber: 1,
     activeCanvasTool: "pointer",
     canvasViewport: { mode: "manual", bounds: null },
     edgeErrors: new Map(),
+    runtimeNodeStatus: new Map(),
+    runtimeEvents: [],
+    selectedRuntimeNodeId: null,
     validationIssues: [],
     configFieldErrors: new Map(),
     nodeConfigValidation: { valid: true, errors: [] },
@@ -124,6 +183,29 @@ export function createWorkflowWorkbench(options = {}) {
       state.validationIssues = [];
       markDirty();
       return { deleted: true };
+    },
+    reconnectCanvasEdge(edgeId, nextEndpoint) {
+      const parsed = parseEdgeId(edgeId);
+      const workflowView = builder.view();
+      const edge = workflowView.edges[parsed.index];
+      if (!edge || edgeIdFor(edge, parsed.index) !== edgeId) {
+        return { accepted: false, issue: { code: "edge_not_found", message: "Workflow edge was not found" } };
+      }
+      const nextEdge = {
+        from: nextEndpoint.source,
+        to: nextEndpoint.target,
+        ...(nextEndpoint.branch ? { condition: nextEndpoint.branch } : {}),
+      };
+      const localIssue = validateEdgeDraft(workflowView, nextEdge);
+      if (localIssue) {
+        state.validationIssues = [localIssue];
+        return { accepted: false, issue: localIssue };
+      }
+      builder.replaceEdge(edge, nextEdge);
+      state.edgeErrors.delete(parsed.index);
+      state.validationIssues = [];
+      markDirty();
+      return { accepted: true, edge: canvasEdge(nextEdge, parsed.index, state.edgeErrors) };
     },
     toggleSubGraphCollapse(nodeId) {
       const node = selectedNode(builder.view(), nodeId);
@@ -191,6 +273,35 @@ export function createWorkflowWorkbench(options = {}) {
         },
       };
     },
+    moveCanvasNode(nodeId, position) {
+      const result = builder.updateNodePosition(nodeId, { x: position.x, y: position.y });
+      markDirty();
+      return { node: selectedNode(result, nodeId) };
+    },
+    duplicateSelectedNode(offset = {}) {
+      if (!state.selectedNodeId) {
+        return { node: null };
+      }
+      const workflowView = builder.view();
+      const source = selectedNode(workflowView, state.selectedNodeId);
+      if (!source) {
+        return { node: null };
+      }
+      const sourcePosition = source.position ?? { x: 0, y: 0 };
+      const node = {
+        id: nextNodeId(source.type, state),
+        type: source.type,
+        config: { ...(source.config ?? {}) },
+        position: {
+          x: sourcePosition.x + Number(offset.x ?? 32),
+          y: sourcePosition.y + Number(offset.y ?? 32),
+        },
+      };
+      builder.addNode(node);
+      state.selectedNodeId = node.id;
+      markDirty();
+      return { node };
+    },
     selectNode(nodeId) {
       state.selectedNodeId = nodeId;
       return this.view();
@@ -225,14 +336,17 @@ export function createWorkflowWorkbench(options = {}) {
       return this.validateWithBackend(template);
     },
     async validateWithBackend(template) {
-      const manifest = builder.serializeManifest(template);
-      const validation = apiClient.validateTemplate
-        ? await apiClient.validateTemplate(manifest)
-        : { valid: true, issues: [] };
+      const workflowView = builder.view();
+      const manifest = apiClient.validateAgentDraft && template ? runtimeManifest(workflowView, template) : builder.serializeManifest(template);
+      const validation = apiClient.validateAgentDraft && template
+        ? await apiClient.validateAgentDraft(template.id, manifest)
+        : apiClient.validateTemplate
+          ? await apiClient.validateTemplate(manifest)
+          : { valid: true, issues: [] };
       state.edgeErrors = new Map();
-      state.validationIssues = normalizeValidationIssues(validation, builder.view());
-      state.configFieldErrors = configErrorsByNode(state.validationIssues, builder.view());
-      state.nodeConfigValidation = selectedConfigValidation(state.selectedNodeId, state.configFieldErrors, builder.view());
+      state.validationIssues = normalizeValidationIssues(validation, workflowView);
+      state.configFieldErrors = configErrorsByNode(state.validationIssues, workflowView);
+      state.nodeConfigValidation = selectedConfigValidation(state.selectedNodeId, state.configFieldErrors, workflowView);
       state.lastValidation = validation;
       state.status = validation.valid ? (state.dirty ? "dirty" : "saved") : "validation";
       state.publish.lastValidated = Boolean(validation.valid);
@@ -252,9 +366,90 @@ export function createWorkflowWorkbench(options = {}) {
       state.preview = "idle";
       return response;
     },
+    async startTestRun(payload = {}) {
+      const versionId = state.publish.version?.id;
+      if (!versionId || !apiClient.startAgentTestRun) {
+        return { status: "blocked", reason: "published_version_required" };
+      }
+      state.runtimeNodeStatus = new Map();
+      state.runtimeEvents = [];
+      state.selectedRuntimeNodeId = null;
+      state.testRun = { status: "running", runId: null, output: null, error: null };
+      try {
+        const response = await apiClient.startAgentTestRun(versionId, payload);
+        state.testRun = {
+          status: response.status ?? "completed",
+          runId: response.run_id ?? null,
+          output: response.output ?? null,
+          error: null,
+        };
+        return response;
+      } catch (error) {
+        state.testRun = {
+          status: "failed",
+          runId: null,
+          output: null,
+          error: { message: error.message },
+        };
+        return { status: "failed", error };
+      }
+    },
+    async startAndStreamTestRun(payload = {}) {
+      const started = await this.startTestRun(payload);
+      if (!started.run_id || !apiClient.streamAgentTestRunEvents) {
+        return started;
+      }
+      for await (const event of apiClient.streamAgentTestRunEvents(started.run_id)) {
+        this.applyTestRunEvent(event);
+        if (event.type === "graph_finished") {
+          state.testRun.status = "completed";
+          state.testRun.output = event.data?.output ?? state.testRun.output;
+        }
+        if (event.type === "graph_failed" || event.type === "error") {
+          state.testRun.status = "failed";
+          state.testRun.error = { message: event.data?.message ?? event.data?.error ?? "Agent test run failed" };
+        }
+      }
+      return { ...started, status: state.testRun.status, output: state.testRun.output };
+    },
+    applyTestRunEvent(event) {
+      const nodeId = event?.data?.node_id;
+      if (!nodeId) {
+        return this.view().canvas;
+      }
+      state.runtimeEvents.push({ type: event.type, data: { ...(event.data ?? {}) } });
+      if (event.type === "node_started") {
+        state.runtimeNodeStatus.set(nodeId, "running");
+      }
+      if (event.type === "node_finished") {
+        state.runtimeNodeStatus.set(nodeId, "success");
+      }
+      if (event.type === "node_failed" || event.type === "graph_failed") {
+        state.runtimeNodeStatus.set(nodeId, "error");
+      }
+      return this.view().canvas;
+    },
+    inspectRuntimeNode(nodeId) {
+      state.selectedRuntimeNodeId = nodeId;
+      return runtimeInspectorView(state);
+    },
     async publishDraft(template) {
       if (!state.publish.lastValidated || state.status === "validation") {
         return { status: "blocked", reason: "validation_failed" };
+      }
+      if (apiClient.publishAgent && template?.id) {
+        state.publish.status = "publishing";
+        const response = await apiClient.publishAgent(template.id);
+        state.publish.status = "published";
+        state.publish.version = response;
+        state.publish.changeSummary = {
+          templateId: template.id,
+          version: response.version,
+          checksum: response.checksum,
+        };
+        state.dirty = false;
+        state.status = "saved";
+        return response;
       }
       const manifest = builder.serializeManifest(template);
       state.publish.status = "publishing";
@@ -279,8 +474,62 @@ export function createWorkflowWorkbench(options = {}) {
     async saveDraft(template) {
       return this.save(template);
     },
+    async loadDraft(agentId) {
+      if (!apiClient.fetchAgentDraft) {
+        throw new Error("apiClient.fetchAgentDraft is required to load an agent draft");
+      }
+      state.status = "loading";
+      try {
+        const response = await apiClient.fetchAgentDraft(agentId);
+        const manifest = response.draft_manifest ?? response.manifest;
+        builder.loadManifest(manifest);
+        configDrafts.clear();
+        draftDirty.clear();
+        state.selectedNodeId = null;
+        state.dirty = false;
+        state.status = "saved";
+        return { status: "loaded", manifest };
+      } catch (error) {
+        state.status = "error";
+        state.lastValidation = { valid: false, error: { code: "load_failed", message: error.message } };
+        return { status: "failed", error };
+      }
+    },
+    requestNavigation(target) {
+      if (state.dirty) {
+        return {
+          allowed: false,
+          target,
+          reason: "unsaved_changes",
+          message: "You have unsaved workflow changes.",
+        };
+      }
+      return { allowed: true, target };
+    },
     async save(template) {
       state.status = "saving";
+      if (apiClient.saveAgentDraft) {
+        const manifest = runtimeManifest(builder.view(), template);
+        try {
+          if (apiClient.validateAgentDraft) {
+            const validation = await apiClient.validateAgentDraft(template.id, manifest);
+            if (!validation.valid) {
+              state.status = "validation";
+              state.lastValidation = validation;
+              return { status: "rejected", authority: "backend", error: validation.error ?? validation.errors?.[0] };
+            }
+          }
+          const result = await apiClient.saveAgentDraft(template.id, manifest);
+          state.dirty = false;
+          state.status = "saved";
+          return result?.status ? result : { status: "saved", manifest };
+        } catch (error) {
+          state.dirty = true;
+          state.status = "error";
+          state.lastValidation = { valid: false, error: { code: "save_failed", message: error.message } };
+          return { status: "failed", error };
+        }
+      }
       let result;
       try {
         result = await builder.save(template);
@@ -349,6 +598,7 @@ export function createWorkflowWorkbench(options = {}) {
             mode: state.canvasViewport.mode,
             bounds: state.canvasViewport.bounds ? { ...state.canvasViewport.bounds } : null,
           },
+          boundaryNodes: boundaryNodes(),
           nodes: workflowView.nodes.map((node) => canvasNode(node, state)),
           edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, state.edgeErrors)),
         },
@@ -367,6 +617,11 @@ export function createWorkflowWorkbench(options = {}) {
         validationPanel: {
           issues: state.validationIssues,
         },
+        testRun: {
+          ...state.testRun,
+          error: state.testRun.error ? { ...state.testRun.error } : null,
+        },
+        runtimeInspector: runtimeInspectorView(state),
       };
     },
   };
@@ -374,6 +629,36 @@ export function createWorkflowWorkbench(options = {}) {
 
 function selectedNodeConfig(workflowView, nodeId) {
   return { ...(workflowView.nodes.find((node) => node.id === nodeId)?.config ?? {}) };
+}
+
+function runtimeManifest(workflowView, template) {
+  return serializeGraph({
+    template,
+    nodes: workflowView.nodes,
+    edges: workflowView.edges,
+    viewport: workflowView.canvas?.viewport ?? {},
+  });
+}
+
+function runtimeInspectorView(state) {
+  const events = state.runtimeEvents.filter((event) => event.data?.node_id === state.selectedRuntimeNodeId);
+  return {
+    selectedNodeId: state.selectedRuntimeNodeId,
+    events: events.map((event) => ({ type: event.type, data: { ...event.data } })),
+    latestOutput: latestRuntimeOutput(events),
+  };
+}
+
+function latestRuntimeOutput(events) {
+  for (const event of [...events].reverse()) {
+    if (event.data?.output !== undefined) {
+      return event.data.output;
+    }
+    if (event.data?.result !== undefined) {
+      return event.data.result;
+    }
+  }
+  return null;
 }
 
 function selectedNode(workflowView, nodeId) {
@@ -467,13 +752,15 @@ function validateEdgeDraft(workflowView, edge) {
 }
 
 function canvasNode(node, state) {
+  const runtimeStatus = state.runtimeNodeStatus.get(node.id);
   if (node.type !== "subgraph") {
-    return node;
+    return runtimeStatus ? { ...node, runtimeStatus } : node;
   }
   const internalNodeIds = Array.isArray(node.config?.internal_node_ids) ? node.config.internal_node_ids : [];
   const collapsed = state.collapsedSubgraphs.has(node.id);
   return {
     ...node,
+    ...(runtimeStatus ? { runtimeStatus } : {}),
     visualRole: "subgraph-container",
     collapsed,
     summary: {
@@ -510,6 +797,13 @@ function canvasEdge(edge, index, edgeErrors) {
   };
 }
 
+function boundaryNodes() {
+  return [
+    { id: "START", type: "START", label: "Start", locked: true },
+    { id: "END", type: "END", label: "End", locked: true },
+  ];
+}
+
 function edgeIdFor(edge, index) {
   return `${index}:${edge.from}->${edge.to}${edge.condition ? `:${edge.condition}` : ""}`;
 }
@@ -529,13 +823,17 @@ function branchLabel(condition) {
 }
 
 function normalizeValidationIssues(validation, workflowView) {
-  const rawIssues = validation.issues ?? (validation.error ? [validation.error] : []);
+  const rawIssues = validation.issues ?? validation.errors ?? (validation.error ? [validation.error] : []);
   return rawIssues.map((issue) => {
-    const fieldPath = issue.fieldPath ?? issue.field_path ?? "";
+    const fieldPath = issue.fieldPath ?? issue.field_path ?? issue.field ?? "";
     const edgeIndex = edgeIndexFromFieldPath(fieldPath);
     const edge = Number.isInteger(edgeIndex) ? workflowView.edges[edgeIndex] : null;
     const nodeIndex = nodeIndexFromFieldPath(fieldPath);
-    const node = Number.isInteger(nodeIndex) ? workflowView.nodes[nodeIndex] : null;
+    const node = issue.node_id
+      ? workflowView.nodes.find((item) => item.id === issue.node_id)
+      : Number.isInteger(nodeIndex)
+        ? workflowView.nodes[nodeIndex]
+        : null;
     const configPath = configPathFromFieldPath(fieldPath);
     return {
       fieldPath,
@@ -557,13 +855,13 @@ function normalizeValidationIssues(validation, workflowView) {
 }
 
 function edgeIndexFromFieldPath(fieldPath) {
-  const match = /^graph\.edges\[(\d+)\]/.exec(fieldPath);
-  return match ? Number(match[1]) : null;
+  const match = /^(graph|runtime)\.edges\[(\d+)\]/.exec(fieldPath);
+  return match ? Number(match[2]) : null;
 }
 
 function nodeIndexFromFieldPath(fieldPath) {
-  const match = /^graph\.nodes\[(\d+)\]/.exec(fieldPath);
-  return match ? Number(match[1]) : null;
+  const match = /^(graph|runtime)\.nodes\[(\d+)\]/.exec(fieldPath);
+  return match ? Number(match[2]) : null;
 }
 
 function configPathFromFieldPath(fieldPath) {

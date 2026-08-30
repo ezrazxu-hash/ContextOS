@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+from time import perf_counter
 import unittest
 
 
@@ -68,6 +69,58 @@ class RuntimeTargetPerformanceTests(unittest.TestCase):
         self.assertEqual(message_service.calls, [{"session_id": session.id, "after_cursor": 100, "limit": 50}])
         self.assertEqual(len(body["messages"]), 50)
         self.assertEqual(body["message_page"], {"after_cursor": 100, "limit": 50, "next_cursor": 150})
+
+    def test_medium_workflow_graph_compile_and_run_stays_within_baseline(self) -> None:
+        from contextos.performance.benchmark import benchmark_report
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.compiler.compile_service import GraphCompileService
+        from contextos.template.manifest.parser import parse_manifest
+
+        manifest = parse_manifest(linear_manifest_payload(node_count=120))
+        started = perf_counter()
+        graph = GraphCompileService().compile(manifest, node_executor_registry=step_registry())
+        state = graph.run({}, RuntimeContext("session-1", "timeline-1", "trace-1"))
+        duration_ms = (perf_counter() - started) * 1000
+        report = benchmark_report("workflow-120-node-compile-run", [duration_ms], target_ms=2000)
+
+        self.assertEqual(len(state["visited_nodes"]), 120)
+        self.assertEqual(report["status"], "pass", report)
+
+
+def linear_manifest_payload(node_count: int) -> dict[str, object]:
+    nodes = [{"id": f"step-{index}", "type": "step", "config": {}} for index in range(node_count)]
+    edges = [{"id": "start-step-0", "source": "START", "target": "step-0"}]
+    edges.extend(
+        {"id": f"step-{index}-step-{index + 1}", "source": f"step-{index}", "target": f"step-{index + 1}"}
+        for index in range(node_count - 1)
+    )
+    edges.append({"id": f"step-{node_count - 1}-end", "source": f"step-{node_count - 1}", "target": "END"})
+    return {
+        "schema_version": "1.0",
+        "runtime": {"nodes": nodes, "edges": edges},
+        "ui": {"nodes": {}, "viewport": {}},
+    }
+
+
+def step_registry():
+    class Executor:
+        node_type = "step"
+
+        def build(self, node, runtime_context):
+            del runtime_context
+
+            def run(state):
+                return {**state, "visited_nodes": [*state.get("visited_nodes", []), node.id]}
+
+            return run
+
+    class Registry:
+        def get(self, node_type: str):
+            if node_type != "step":
+                raise AssertionError(f"Unexpected executor lookup: {node_type}")
+            return Executor()
+
+    return Registry()
 
 
 if __name__ == "__main__":

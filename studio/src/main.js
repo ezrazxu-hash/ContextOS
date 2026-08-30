@@ -1,5 +1,12 @@
 import { demoFixtures, demoTemplateManifest } from "./test/fixtures/demoRuntime.js";
 import { streamSseEvents } from "./client/sseStream.js";
+import { deserializeGraph, serializeGraph } from "./workflow/manifest/model.js";
+import {
+  createSessionWithSelectedAgent,
+  fetchPublishedAgentOptions,
+  sessionAgentLabel,
+  switchSessionAgent,
+} from "./session/agentSelector.js";
 
 const ROUTES = ["/chat", "/workflow", "/template", "/debug"];
 const DEFAULT_SESSION_ID = "demo-session";
@@ -32,6 +39,9 @@ const state = {
   rightTab: "context",
   messages: [],
   sessions: [demoFixtures.session],
+  agentOptions: [{ id: "legacy", label: "Legacy / Default", agentVersionId: null, agentTemplateId: null }],
+  selectedAgentOptionId: "legacy",
+  switchingAgent: false,
   debugIndex: null,
   contextItems: [],
   workflowNodes: demoTemplateManifest.graph.nodes.slice(0, 4).map((node, index) => ({
@@ -46,6 +56,9 @@ const state = {
   workflowSaving: false,
   workflowDrag: null,
   workflowSelectedNodeId: "planner",
+  workflowEdgeSourceId: null,
+  workflowGraphPreview: null,
+  workflowPreviewing: false,
   templateTab: "basic",
   sending: false,
   chatDraft: "",
@@ -93,13 +106,16 @@ async function loadRouteData() {
   try {
     const client = runtimeClient();
     if (requestedRoute === "/chat") {
-      const [debugIndex, sessions] = await Promise.all([
+      const [debugIndex, sessions, agentOptions] = await Promise.all([
         client.fetchDebugIndex(requestedSessionId),
         fetchWorkspaceSessions(client),
+        loadAgentOptions(client),
       ]);
       if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
       state.debugIndex = debugIndex;
+      state.agentOptions = agentOptions;
       updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session, { replace: true });
+      state.selectedAgentOptionId = agentOptionIdForSession(debugIndex.session);
       state.selection.timelineId = resolveTimelineId(debugIndex, state.selection.timelineId);
 
       if (!state.selection.timelineId) {
@@ -115,16 +131,19 @@ async function loadRouteData() {
         state.contextItems = contextItems;
       }
     } else if (requestedRoute === "/debug") {
-      const [debugIndex, sessions] = await Promise.all([
+      const [debugIndex, sessions, agentOptions] = await Promise.all([
         client.fetchDebugIndex(requestedSessionId, {
           traceId: state.selection.traceId,
           messageId: state.selection.messageId,
         }),
         fetchWorkspaceSessions(client),
+        loadAgentOptions(client),
       ]);
       if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
       state.debugIndex = debugIndex;
+      state.agentOptions = agentOptions;
       updateWorkspaceSessions(sessions?.sessions ?? [], debugIndex.session, { replace: true });
+      state.selectedAgentOptionId = agentOptionIdForSession(debugIndex.session);
       state.messages = state.debugIndex.messages ?? state.messages;
       state.contextItems = contextFromDebug(state.debugIndex);
     } else if (requestedRoute === "/workflow") {
@@ -263,11 +282,17 @@ function renderMainPane() {
 
 function renderChat() {
   const canChat = Boolean(state.selection.sessionId && state.selection.timelineId);
+  const session = state.sessions.find((item) => item.id === state.selection.sessionId) ?? state.debugIndex?.session ?? {};
+  const agentLabel = sessionAgentLabel(session, state.agentOptions);
   return `
     <section class="chat-workbench" data-testid="chat-workbench">
       <div class="page-head">
-        <div><h1 data-testid="main-title">Chat Workbench</h1><p>Session ${escapeHtml(state.selection.sessionId ?? "none")} / ${escapeHtml(state.selection.timelineId ?? "timeline")}</p></div>
-        <button class="secondary" data-action="refresh-route" ${state.loading ? "disabled" : ""}>Refresh</button>
+        <div><h1 data-testid="main-title">Chat Workbench</h1><p>Session ${escapeHtml(state.selection.sessionId ?? "none")} / ${escapeHtml(state.selection.timelineId ?? "timeline")} / Agent ${escapeHtml(agentLabel)}</p></div>
+        <div class="page-actions">
+          ${renderAgentSelector()}
+          <button class="secondary" data-action="switch-session-agent" ${state.loading || state.switchingAgent || !state.selection.sessionId ? "disabled" : ""}>${state.switchingAgent ? "Switching" : "Apply"}</button>
+          <button class="secondary" data-action="refresh-route" ${state.loading ? "disabled" : ""}>Refresh</button>
+        </div>
       </div>
       <div class="messages" data-testid="message-list">${state.messages.filter((message) => !isDeletedMessage(message)).map(renderMessage).join("")}</div>
       <form class="composer" data-action="send-chat">
@@ -275,6 +300,14 @@ function renderChat() {
         <button data-testid="send-message" type="submit" ${state.sending || !canChat ? "disabled" : ""}>${state.sending ? "Sending" : "Send"}</button>
       </form>
     </section>
+  `;
+}
+
+function renderAgentSelector() {
+  return `
+    <select data-action="select-agent-option" aria-label="Agent">
+      ${state.agentOptions.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === state.selectedAgentOptionId ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+    </select>
   `;
 }
 
@@ -318,11 +351,16 @@ function renderToolRelations(message) {
 
 function renderWorkflow() {
   const selected = state.workflowNodes.find((node) => node.id === state.workflowSelectedNodeId) ?? state.workflowNodes[0];
+  const edgeSource = state.workflowEdgeSourceId ?? state.workflowSelectedNodeId ?? "START";
   return `
     <section class="workflow-page">
       <div class="page-head">
         <div><h1 data-testid="main-title">Workflow Builder</h1><p>Workflow manifests from Runtime.</p></div>
-        <div class="actions"><button class="secondary" data-action="add-workflow-node">Add Agent</button><button data-action="save-workflow" data-testid="workflow-save" ${state.workflowSaving ? "disabled" : ""}>${state.workflowSaving ? "Saving" : "Save"}</button></div>
+        <div class="actions">
+          <button class="secondary" data-action="add-workflow-node">Add Agent</button>
+          <button class="secondary" data-action="preview-workflow-graph" data-testid="workflow-preview" ${state.workflowPreviewing ? "disabled" : ""}>${state.workflowPreviewing ? "Previewing" : "Preview Graph"}</button>
+          <button data-action="save-workflow" data-testid="workflow-save" ${state.workflowSaving ? "disabled" : ""}>${state.workflowSaving ? "Saving" : "Save"}</button>
+        </div>
       </div>
       <div class="workflow-surface" data-testid="workflow-workbench">
         <div class="node-palette">
@@ -335,14 +373,144 @@ function renderWorkflow() {
           </section>
           <section>
             <h2>Node Library</h2>
-            ${["agent", "tool", "condition", "context_operator", "output"].map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.replace(/_/g, " ")}</button>`).join("")}
+            ${["llm", "agent", "tool", "condition", "router", "output"].map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.replace(/_/g, " ")}</button>`).join("")}
           </section>
         </div>
-        <div class="graph-canvas" data-testid="workflow-canvas">${state.workflowNodes.map((node) => `<button data-action="select-workflow-node" data-node-id="${escapeAttr(node.id)}" data-drag-workflow-node-id="${escapeAttr(node.id)}" class="graph-node ${state.workflowSelectedNodeId === node.id ? "selected" : ""}" style="left:${node.position.x}px;top:${node.position.y}px">${escapeHtml(node.type)}</button>`).join("")}</div>
-        <div class="node-config"><h2>Node Config</h2><label>Name<input data-testid="workflow-name" value="${escapeAttr(state.workflowName)}" /></label>${selected ? `<dl><dt>ID</dt><dd>${escapeHtml(selected.id)}</dd><dt>Type</dt><dd>${escapeHtml(selected.type)}</dd></dl>` : "<p>Select a node.</p>"}<button class="secondary" data-action="not-implemented">Apply Config</button></div>
+        <div class="graph-canvas" data-testid="workflow-canvas">
+          ${renderWorkflowEdgesSvg()}
+          ${state.workflowNodes.map((node) => `
+            <div class="graph-node-wrap ${state.workflowSelectedNodeId === node.id ? "selected" : ""} ${state.workflowEdgeSourceId === node.id ? "edge-source" : ""}" style="left:${node.position.x}px;top:${node.position.y}px">
+              <button data-action="select-workflow-node" data-node-id="${escapeAttr(node.id)}" data-drag-workflow-node-id="${escapeAttr(node.id)}" class="graph-node" title="${escapeAttr(node.id)}">${escapeHtml(node.type)}<small>${escapeHtml(node.id)}</small></button>
+              <button class="node-port" data-action="select-edge-source" data-edge-source-id="${escapeAttr(node.id)}" title="Use as edge source" aria-label="Use ${escapeAttr(node.id)} as edge source">+</button>
+            </div>
+          `).join("")}
+        </div>
+        <div class="node-config">
+          <section>
+            <h2>Node Config</h2>
+            <label>Name<input data-testid="workflow-name" value="${escapeAttr(state.workflowName)}" /></label>
+            ${selected ? `<dl><dt>ID</dt><dd>${escapeHtml(selected.id)}</dd><dt>Type</dt><dd>${escapeHtml(selected.type)}</dd></dl>` : "<p>Select a node.</p>"}
+            <button class="secondary" data-action="not-implemented">Apply Config</button>
+          </section>
+          <section>
+            <h2>Edge Builder</h2>
+            <label>Source${renderWorkflowEndpointSelect("workflow-edge-source", "select-edge-source", edgeSource, workflowSourceOptions())}</label>
+            <label>Target${renderWorkflowEndpointSelect("workflow-edge-target", "select-edge-target", workflowDefaultTarget(edgeSource), workflowTargetOptions())}</label>
+            <button data-action="connect-workflow-edge" data-testid="workflow-connect-edge">Connect</button>
+            <div class="edge-list" data-testid="workflow-edge-list">
+              ${state.workflowEdges.length === 0 ? "<p>No edges yet.</p>" : state.workflowEdges.map((edge, index) => `
+                <div class="workflow-edge" data-testid="workflow-edge">
+                  <span>${escapeHtml(edge.from ?? edge.source)} -> ${escapeHtml(edge.to ?? edge.target)}${edge.condition || edge.route ? ` (${escapeHtml(edge.condition ?? edge.route)})` : ""}</span>
+                  <button class="secondary" data-action="delete-workflow-edge" data-edge-index="${index}" aria-label="Delete edge ${index + 1}">Delete</button>
+                </div>
+              `).join("")}
+            </div>
+          </section>
+          <section>
+            <h2>Graph Preview</h2>
+            ${renderWorkflowGraphPreview()}
+          </section>
+        </div>
       </div>
     </section>
   `;
+}
+
+function renderWorkflowEdgesSvg() {
+  const size = workflowCanvasSize();
+  const lines = state.workflowEdges.map((edge) => {
+    const normalized = normalizeWorkflowEdge(edge);
+    const source = workflowEndpointPosition(normalized.source, size);
+    const target = workflowEndpointPosition(normalized.target, size);
+    return `<line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" />`;
+  }).join("");
+  return `
+    <svg class="workflow-edges" width="${size.width}" height="${size.height}" aria-hidden="true">
+      <defs>
+        <marker id="workflow-edge-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L0,6 L9,3 z" fill="#64748b"></path>
+        </marker>
+      </defs>
+      ${lines}
+    </svg>
+    <span class="workflow-boundary workflow-boundary-start">START</span>
+    <span class="workflow-boundary workflow-boundary-end">END</span>
+  `;
+}
+
+function renderWorkflowEndpointSelect(id, action, value, options) {
+  return `
+    <select id="${escapeAttr(id)}" data-action="${escapeAttr(action)}" value="${escapeAttr(value)}">
+      ${options.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+    </select>
+  `;
+}
+
+function renderWorkflowGraphPreview() {
+  const preview = state.workflowGraphPreview;
+  if (!preview) {
+    return `<p class="muted">Preview uses the backend manifest compiler to show the runnable graph.</p>`;
+  }
+  if (!preview.valid) {
+    const error = preview.error ?? {};
+    return `<div class="graph-preview error"><strong>Invalid graph</strong><p>${escapeHtml(error.message ?? "Graph validation failed")}</p>${error.field_path ? `<small>${escapeHtml(error.field_path)}</small>` : ""}</div>`;
+  }
+  const nodes = preview.nodes ?? [];
+  const edges = preview.edges ?? [];
+  return `
+    <div class="graph-preview" data-testid="workflow-graph-preview">
+      <pre>${escapeHtml(workflowTopologyText(preview))}</pre>
+      <dl>
+        <dt>Nodes</dt><dd>${nodes.length ? nodes.map((node) => escapeHtml(node.id)).join(", ") : "None"}</dd>
+        <dt>Edges</dt><dd>${edges.length ? edges.map((edge) => `${escapeHtml(edge.source)} -> ${escapeHtml(edge.target)}${edge.route ? ` (${escapeHtml(edge.route)})` : ""}`).join("<br>") : "None"}</dd>
+        <dt>Execution order</dt><dd>${(preview.execution_order ?? []).length ? preview.execution_order.map(escapeHtml).join(" -> ") : "No executable nodes"}</dd>
+      </dl>
+    </div>
+  `;
+}
+
+function workflowSourceOptions() {
+  return [{ id: "START", label: "START" }, ...state.workflowNodes.map((node) => ({ id: node.id, label: node.id }))];
+}
+
+function workflowTargetOptions() {
+  return [...state.workflowNodes.map((node) => ({ id: node.id, label: node.id })), { id: "END", label: "END" }];
+}
+
+function workflowDefaultTarget(sourceId) {
+  const firstNonSource = state.workflowNodes.find((node) => node.id !== sourceId)?.id;
+  if (sourceId === "START") return state.workflowNodes[0]?.id ?? "END";
+  return firstNonSource ?? "END";
+}
+
+function workflowCanvasSize() {
+  const maxX = Math.max(900, ...state.workflowNodes.map((node) => (node.position?.x ?? 0) + 180));
+  const maxY = Math.max(520, ...state.workflowNodes.map((node) => (node.position?.y ?? 0) + 120));
+  return { width: maxX, height: maxY };
+}
+
+function workflowEndpointPosition(id, size = workflowCanvasSize()) {
+  if (id === "START") return { x: 40, y: 34 };
+  if (id === "END") return { x: size.width - 48, y: size.height - 34 };
+  const node = state.workflowNodes.find((item) => item.id === id);
+  if (!node) return { x: 40, y: 34 };
+  return { x: (node.position?.x ?? 0) + 56, y: (node.position?.y ?? 0) + 28 };
+}
+
+function normalizeWorkflowEdge(edge) {
+  return {
+    source: edge.source ?? edge.from,
+    target: edge.target ?? edge.to,
+    route: edge.route ?? edge.condition ?? null,
+  };
+}
+
+function workflowTopologyText(preview) {
+  const order = preview.execution_order ?? [];
+  if (order.length) return ["START", ...order, "END"].join("\n↓\n");
+  const edges = preview.edges ?? [];
+  if (edges.length) return edges.map((edge) => `${edge.source} -> ${edge.target}${edge.route ? ` (${edge.route})` : ""}`).join("\n");
+  return "START\n↓\nEND";
 }
 
 function renderTemplate() {
@@ -426,7 +594,9 @@ function renderMessageMenuOverlay() {
 }
 
 function bindEvents() {
-  document.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", handleAction));
+  document.querySelectorAll("[data-action]").forEach((element) => {
+    if (element.tagName !== "SELECT") element.addEventListener("click", handleAction);
+  });
   document.querySelectorAll("[data-drag-workflow-node-id]").forEach((element) => element.addEventListener("pointerdown", handleWorkflowNodePointerDown));
   const composer = document.querySelector(".composer");
   composer?.addEventListener("submit", handleChatSubmit);
@@ -439,6 +609,10 @@ function bindEvents() {
   });
   input?.addEventListener("input", () => {
     state.chatDraft = input.value;
+  });
+  const agentSelector = document.querySelector("[data-action='select-agent-option']");
+  agentSelector?.addEventListener("change", () => {
+    state.selectedAgentOptionId = agentSelector.value;
   });
   document.querySelectorAll("[data-message-edit-input]").forEach((element) => {
     element.addEventListener("click", (event) => {
@@ -461,6 +635,12 @@ function bindEvents() {
   workflowName?.addEventListener("input", () => {
     state.workflowName = workflowName.value;
     state.workflowDirty = true;
+    state.workflowGraphPreview = null;
+  });
+  const workflowEdgeSource = document.querySelector("#workflow-edge-source");
+  workflowEdgeSource?.addEventListener("change", () => {
+    state.workflowEdgeSourceId = workflowEdgeSource.value;
+    render();
   });
 }
 
@@ -559,7 +739,11 @@ async function handleAction(event) {
     state.toast = { tone: "loading", text: "Creating session" };
     render();
     try {
-      const session = await runtimeClient().createSession();
+      const session = await createSessionWithSelectedAgent(runtimeClient(), {
+        workspaceId: "studio",
+        defaultAgentTemplateId: "research-agent",
+        selectedAgent: selectedAgentOption(),
+      });
       updateWorkspaceSessions([session]);
       const timelineId = session.current_timeline_id ?? session.currentTimelineId ?? DEFAULT_TIMELINE_ID;
       await navigate(`/chat?sessionId=${encodeURIComponent(session.id)}&timelineId=${encodeURIComponent(timelineId)}`);
@@ -571,6 +755,29 @@ async function handleAction(event) {
       render();
     } finally {
       state.creatingSession = false;
+      render();
+    }
+  } else if (action === "switch-session-agent") {
+    if (state.switchingAgent || !state.selection.sessionId) return;
+    state.switchingAgent = true;
+    state.toast = { tone: "loading", text: "Switching session agent" };
+    render();
+    try {
+      const updated = await switchSessionAgent(runtimeClient(), {
+        sessionId: state.selection.sessionId,
+        selectedAgent: selectedAgentOption(),
+      });
+      updateWorkspaceSessions([updated]);
+      if (state.debugIndex?.session?.id === updated.id) {
+        state.debugIndex = { ...state.debugIndex, session: updated };
+      }
+      state.toast = { tone: "success", text: "Agent switched" };
+      render();
+    } catch (error) {
+      state.toast = { tone: "error", text: error.message };
+      render();
+    } finally {
+      state.switchingAgent = false;
       render();
     }
   } else if (action === "toggle-session-menu") {
@@ -883,6 +1090,17 @@ async function handleAction(event) {
   } else if (action === "add-workflow-node") {
     addWorkflowNode(target.dataset.nodeType ?? "agent");
     render();
+  } else if (action === "select-edge-source") {
+    state.workflowEdgeSourceId = target.dataset.edgeSourceId ?? target.value ?? null;
+    render();
+  } else if (action === "connect-workflow-edge") {
+    connectWorkflowEdge();
+    render();
+  } else if (action === "delete-workflow-edge") {
+    deleteWorkflowEdge(Number(target.dataset.edgeIndex));
+    render();
+  } else if (action === "preview-workflow-graph") {
+    await previewWorkflowGraph();
   } else if (action === "create-workflow") {
     createWorkflowDraft();
     render();
@@ -929,6 +1147,7 @@ function handleWorkflowNodePointerMove(event) {
     y: Math.max(0, Math.round(event.clientY - rect.top - state.workflowDrag.offsetY)),
   };
   state.workflowDirty = true;
+  state.workflowGraphPreview = null;
   render();
 }
 
@@ -1095,6 +1314,8 @@ function createWorkflowDraft() {
   state.workflowNodes = [];
   state.workflowEdges = [];
   state.workflowSelectedNodeId = null;
+  state.workflowEdgeSourceId = null;
+  state.workflowGraphPreview = null;
   state.workflowDirty = true;
 }
 
@@ -1120,6 +1341,7 @@ async function saveWorkflow() {
     const saved = await runtimeClient().saveTemplate(serializeWorkflowManifest());
     updateWorkflowTemplates(saved);
     loadWorkflowManifest(saved.manifest, saved.id);
+    state.workflowGraphPreview = null;
     state.toast = { tone: "success", text: "Workflow saved" };
   } catch (error) {
     state.toast = { tone: "error", text: error.message };
@@ -1137,43 +1359,128 @@ function addWorkflowNode(type) {
     state.workflowEdges = [{ from: "START", to: id }, { from: id, to: "END" }];
   }
   state.workflowSelectedNodeId = id;
+  state.workflowEdgeSourceId = id;
+  state.workflowGraphPreview = null;
   state.workflowDirty = true;
   state.toast = { tone: "success", text: `${titleCase(type.replace(/_/g, " "))} node added` };
 }
 
+function connectWorkflowEdge() {
+  const source = document.querySelector("#workflow-edge-source")?.value ?? state.workflowEdgeSourceId ?? "START";
+  const target = document.querySelector("#workflow-edge-target")?.value ?? workflowDefaultTarget(source);
+  if (!isValidWorkflowEndpoint(source, "source") || !isValidWorkflowEndpoint(target, "target")) {
+    state.toast = { tone: "error", text: "Select valid edge endpoints" };
+    return;
+  }
+  if (source === target) {
+    state.toast = { tone: "warning", text: "Source and target must be different" };
+    return;
+  }
+  const duplicate = state.workflowEdges.some((edge) => {
+    const normalized = normalizeWorkflowEdge(edge);
+    return normalized.source === source && normalized.target === target;
+  });
+  if (duplicate) {
+    state.toast = { tone: "warning", text: "Edge already exists" };
+    return;
+  }
+  state.workflowEdges = [...state.workflowEdges, { source, target }];
+  state.workflowEdgeSourceId = source;
+  state.workflowDirty = true;
+  state.workflowGraphPreview = null;
+  state.toast = { tone: "success", text: `Connected ${source} -> ${target}` };
+}
+
+function deleteWorkflowEdge(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.workflowEdges.length) return;
+  const removed = normalizeWorkflowEdge(state.workflowEdges[index]);
+  state.workflowEdges = state.workflowEdges.filter((_, edgeIndex) => edgeIndex !== index);
+  state.workflowDirty = true;
+  state.workflowGraphPreview = null;
+  state.toast = { tone: "success", text: `Removed ${removed.source} -> ${removed.target}` };
+}
+
+async function previewWorkflowGraph() {
+  if (state.workflowPreviewing) return;
+  state.workflowPreviewing = true;
+  state.toast = { tone: "loading", text: "Building graph preview" };
+  render();
+  try {
+    const preview = await runtimeClient().previewAgentGraph(state.workflowSelectedTemplateId || "workflow", serializeWorkflowManifest());
+    state.workflowGraphPreview = preview;
+    state.toast = preview.valid
+      ? { tone: "success", text: "Graph preview ready" }
+      : { tone: "error", text: preview.error?.message ?? "Graph validation failed" };
+  } catch (error) {
+    state.workflowGraphPreview = {
+      valid: false,
+      error: { code: "request.failed", message: error.message },
+    };
+    state.toast = { tone: "error", text: error.message };
+  } finally {
+    state.workflowPreviewing = false;
+    render();
+  }
+}
+
+function isValidWorkflowEndpoint(id, role) {
+  if (role === "source" && id === "START") return true;
+  if (role === "target" && id === "END") return true;
+  return state.workflowNodes.some((node) => node.id === id);
+}
+
+function previewExecutionOrder(nodes, edges) {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const outgoing = new Map();
+  edges.forEach((edge) => {
+    if (!outgoing.has(edge.source)) outgoing.set(edge.source, []);
+    outgoing.get(edge.source).push(edge.target);
+  });
+  const order = [];
+  const seen = new Set(["START"]);
+  const queue = [...(outgoing.get("START") ?? [])];
+  while (queue.length) {
+    const id = queue.shift();
+    if (!id || id === "END" || seen.has(id)) continue;
+    seen.add(id);
+    if (nodeIds.has(id)) order.push(id);
+    queue.push(...(outgoing.get(id) ?? []));
+  }
+  return order;
+}
+
+function isPreviewEndpointValid(id, nodes, role) {
+  if (role === "source" && id === "START") return true;
+  if (role === "target" && id === "END") return true;
+  return nodes.some((node) => node.id === id);
+}
+
 function serializeWorkflowManifest() {
-  return {
+  return serializeGraph({
     template: {
       id: state.workflowSelectedTemplateId || `workflow_${Date.now()}`,
       name: state.workflowName.trim() || "Untitled Workflow",
       version: "1.0.0",
     },
-    graph: {
-      state_schema: "default_chat_state",
-      nodes: state.workflowNodes.map((node) => ({
-        id: node.id,
-        type: node.type,
-        config: { ...(node.config ?? {}) },
-        position: { ...(node.position ?? { x: 0, y: 0 }) },
-      })),
-      edges: state.workflowEdges.map(clone),
-    },
-    context: clone(demoTemplateManifest.context),
-    checkpoint: clone(demoTemplateManifest.checkpoint),
-    ui: clone(demoTemplateManifest.ui),
-  };
+    nodes: state.workflowNodes,
+    edges: state.workflowEdges,
+    viewport: {},
+  });
 }
 
 function loadWorkflowManifest(manifest, templateId = null) {
-  state.workflowSelectedTemplateId = templateId ?? manifest.template.id;
-  state.workflowName = manifest.template.name;
-  state.workflowNodes = (manifest.graph?.nodes ?? []).map((node, index) => ({
+  const graph = deserializeGraph(manifest);
+  state.workflowSelectedTemplateId = templateId ?? graph.template.id;
+  state.workflowName = graph.template.name;
+  state.workflowNodes = graph.nodes.map((node, index) => ({
     ...node,
     config: { ...(node.config ?? {}) },
     position: node.position ? { ...node.position } : defaultWorkflowPosition(index),
   }));
-  state.workflowEdges = (manifest.graph?.edges ?? []).map(clone);
+  state.workflowEdges = graph.edges.map(clone);
   state.workflowSelectedNodeId = state.workflowNodes[0]?.id ?? null;
+  state.workflowEdgeSourceId = null;
+  state.workflowGraphPreview = null;
   state.workflowDirty = false;
 }
 
@@ -1207,15 +1514,18 @@ function runtimeClient() {
 
 function realClient() {
   return {
+    listAgents: () => getJson("/api/agents"),
     fetchSessions: () => getJson("/api/sessions"),
     fetchTemplates: () => getJson("/api/templates"),
     fetchTemplate: (templateId) => getJson(`/api/templates/${encodeURIComponent(templateId)}`),
     saveTemplate: (manifest) => postJson("/api/templates", manifest),
+    previewAgentGraph: (agentId, manifest) => postJson(`/api/agents/${encodeURIComponent(agentId)}/graph-preview`, manifest),
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
-    createSession: () => postJson("/api/sessions", { agent_template_id: "research-agent", workspace_id: "studio" }),
+    createSession: (payload = { agent_template_id: "research-agent", workspace_id: "studio" }) => postJson("/api/sessions", payload),
     deleteSession: (sessionId) => deleteJson(`/api/sessions/${encodeURIComponent(sessionId)}`),
     deleteTimeline: (timelineId) => deleteJson(`/api/timelines/${encodeURIComponent(timelineId)}`),
     patchSession: (sessionId, title) => patchJson(`/api/sessions/${encodeURIComponent(sessionId)}`, { title }),
+    patchSessionAgent: (sessionId, payload) => patchJson(`/api/sessions/${encodeURIComponent(sessionId)}/agent`, payload),
     patchTimeline: (timelineId, title) => patchJson(`/api/timelines/${encodeURIComponent(timelineId)}`, { title }),
     patchMessage: (messageId, content, options = {}) => patchJson(`/api/messages/${encodeURIComponent(messageId)}`, { new_content: content, semantic: Boolean(options.semantic) }),
     deleteMessage: (messageId) => deleteJson(`/api/messages/${encodeURIComponent(messageId)}`),
@@ -1243,6 +1553,9 @@ function mockClient() {
     async fetchSessions() {
       return { sessions: state.sessions.map(clone) };
     },
+    async listAgents() {
+      return { agents: [] };
+    },
     async fetchTemplates() {
       return { templates: state.workflowTemplates.length ? state.workflowTemplates.map(clone) : [workflowTemplateSummary({ id: demoTemplateManifest.template.id, manifest: demoTemplateManifest })] };
     },
@@ -1253,12 +1566,41 @@ function mockClient() {
     async saveTemplate(manifest) {
       return { id: manifest.template.id, manifest: clone(manifest) };
     },
+    async previewAgentGraph(agentId, manifest) {
+      const graph = deserializeGraph(manifest);
+      const edges = graph.edges.map(normalizeWorkflowEdge);
+      const executionOrder = previewExecutionOrder(graph.nodes, edges);
+      const unknownEdge = edges.find((edge) => !isPreviewEndpointValid(edge.source, graph.nodes, "source") || !isPreviewEndpointValid(edge.target, graph.nodes, "target"));
+      if (unknownEdge) {
+        return {
+          valid: false,
+          error: { code: "unknown_node", message: `Unknown endpoint in edge ${unknownEdge.source} -> ${unknownEdge.target}` },
+        };
+      }
+      return {
+        valid: true,
+        start: "START",
+        end: "END",
+        nodes: graph.nodes.map(({ id, type, config }) => ({ id, type, config: clone(config ?? {}) })),
+        edges,
+        execution_order: executionOrder,
+        graph_state: { visited_nodes: executionOrder, agent_id: agentId },
+      };
+    },
     async fetchSessionMessages() {
       const messages = state.messages.length ? state.messages : demoFixtures.messages;
       return { messages: messages.filter((message) => !isDeletedMessage(message)).map(clone), next_cursor: null };
     },
-    async createSession() {
-      return { ...clone(demoFixtures.session), id: `local-session-${Date.now()}`, current_timeline_id: demoFixtures.timeline.id };
+    async createSession(payload = {}) {
+      return {
+        ...clone(demoFixtures.session),
+        id: `local-session-${Date.now()}`,
+        current_timeline_id: demoFixtures.timeline.id,
+        workspace_id: payload.workspace_id ?? "studio",
+        agent_template_id: payload.agent_template_id ?? "research-agent",
+        agent_version_id: payload.agent_version_id ?? null,
+        title: payload.title,
+      };
     },
     async deleteSession() {
       return {};
@@ -1268,6 +1610,10 @@ function mockClient() {
     },
     async patchSession(sessionId, title) {
       return { ...clone(demoFixtures.session), id: sessionId, title };
+    },
+    async patchSessionAgent(sessionId, payload = {}) {
+      const session = state.sessions.find((item) => item.id === sessionId) ?? demoFixtures.session;
+      return { ...clone(session), id: sessionId, agent_version_id: payload.agent_version_id ?? null };
     },
     async patchTimeline(timelineId, title) {
       return { ...clone(demoFixtures.timeline), id: timelineId, title };
@@ -1392,6 +1738,27 @@ async function fetchWorkspaceSessions(client) {
     return null;
   }
   return client.fetchSessions();
+}
+
+async function loadAgentOptions(client) {
+  if (typeof client.listAgents !== "function") {
+    return state.agentOptions;
+  }
+  try {
+    return await fetchPublishedAgentOptions(client);
+  } catch {
+    return state.agentOptions;
+  }
+}
+
+function selectedAgentOption() {
+  return state.agentOptions.find((option) => option.id === state.selectedAgentOptionId) ?? state.agentOptions[0];
+}
+
+function agentOptionIdForSession(session) {
+  const agentVersionId = session?.agent_version_id ?? session?.agentVersionId ?? null;
+  if (!agentVersionId) return "legacy";
+  return state.agentOptions.find((option) => option.agentVersionId === agentVersionId || option.id === agentVersionId)?.id ?? "legacy";
 }
 
 function updateWorkspaceSessions(sessions, currentSession = null, options = {}) {
@@ -1612,12 +1979,28 @@ function styleTag() {
     .node-palette, .node-config, .template-fields, .debug-grid section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
     .node-palette button { width: 100%; margin-bottom: 8px; text-align: left; }
     .graph-canvas { position: relative; min-height: 0; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(#e8edf3 1px, transparent 1px), linear-gradient(90deg, #e8edf3 1px, transparent 1px), #fff; background-size: 28px 28px; overflow: auto; }
-    .graph-node { position: absolute; min-width: 112px; height: 56px; background: #fff; cursor: grab; user-select: none; touch-action: none; }
+    .workflow-edges { position: absolute; inset: 0 auto auto 0; overflow: visible; pointer-events: none; }
+    .workflow-edges line { stroke: #64748b; stroke-width: 2; marker-end: url(#workflow-edge-arrow); }
+    .workflow-boundary { position: absolute; z-index: 1; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--line); background: #f8fafc; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .workflow-boundary-start { left: 12px; top: 14px; }
+    .workflow-boundary-end { right: 14px; bottom: 14px; }
+    .graph-node-wrap { position: absolute; z-index: 2; width: 128px; height: 64px; }
+    .graph-node { width: 112px; height: 56px; background: #fff; cursor: grab; user-select: none; touch-action: none; display: grid; align-content: center; gap: 2px; text-align: left; }
+    .graph-node-wrap.selected .graph-node { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+    .graph-node-wrap.edge-source .graph-node { border-color: var(--success); }
+    .graph-node small { color: var(--muted); font-size: 11px; }
     .graph-node:active { cursor: grabbing; }
+    .node-port { position: absolute; top: 18px; right: 0; width: 24px; height: 24px; min-height: 24px; padding: 0; border-radius: 50%; font-weight: 700; }
+    .edge-list { display: grid; gap: 8px; margin-top: 10px; }
+    .workflow-edge { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; }
+    .workflow-edge span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .graph-preview { display: grid; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; }
+    .graph-preview.error { border-color: #fecaca; background: #fff1f0; color: var(--error); }
+    .graph-preview pre { margin: 0; white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text); }
     .template-layout { display: flex; gap: 14px; min-height: 0; }
     .template-fields { flex: 1; display: grid; align-content: start; gap: 12px; }
     label { display: grid; gap: 6px; color: var(--muted); }
-    input { border: 1px solid var(--line); border-radius: 7px; padding: 9px 10px; color: var(--text); background: #f8fafc; }
+    input, select { border: 1px solid var(--line); border-radius: 7px; padding: 9px 10px; color: var(--text); background: #f8fafc; }
     .debug-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, .9fr) 1.2fr; gap: 12px; }
     .trace-row, .debug-message { width: 100%; display: flex; justify-content: space-between; gap: 12px; text-align: left; margin-bottom: 8px; }
     .toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; padding: 10px 12px; border-radius: 9px; background: #111a27; color: #fff; box-shadow: 0 8px 24px rgba(16, 24, 40, .16); }

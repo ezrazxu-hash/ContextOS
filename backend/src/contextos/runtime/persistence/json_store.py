@@ -78,4 +78,5 @@ def _empty_state() -> dict[str, dict[str, Any]]:
         "conversation_groups": {},
         "checkpoints": {},
         "templates": {},
+        "agent_versions": {},
     }

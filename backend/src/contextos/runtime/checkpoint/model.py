@@ -12,6 +12,8 @@ class Checkpoint:
     context_revision: str
     created_at: datetime
     parent_checkpoint_id: str | None = None
+    agent_template_id: str | None = None
+    agent_version_id: str | None = None
 
 
 def utc_now() -> datetime:

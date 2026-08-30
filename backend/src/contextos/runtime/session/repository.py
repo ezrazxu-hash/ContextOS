@@ -47,4 +47,5 @@ def _session_from_dict(record: dict[str, object]) -> Session:
         status=SessionStatus(str(record["status"])),
         title=str(record["title"]) if record.get("title") is not None else None,
         metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        agent_version_id=str(record["agent_version_id"]) if record.get("agent_version_id") is not None else None,
     )

@@ -20,6 +20,7 @@ class SessionService:
         workspace_id: str | None = None,
         title: str | None = None,
         metadata: dict[str, Any] | None = None,
+        agent_version_id: str | None = None,
     ) -> Session:
         session = Session(
             id=f"session_{uuid4().hex}",
@@ -30,6 +31,7 @@ class SessionService:
             status=SessionStatus.ACTIVE,
             title=title,
             metadata=metadata or {},
+            agent_version_id=agent_version_id,
         )
         return self._repository.save(session)
 
@@ -62,3 +64,7 @@ class SessionService:
             metadata=metadata if metadata is not None else session.metadata,
         )
         return self._repository.save(updated)
+
+    def update_session_agent_version(self, session_id: str, agent_version_id: str | None) -> Session:
+        session = self.get_session(session_id)
+        return self._repository.save(replace(session, agent_version_id=agent_version_id))

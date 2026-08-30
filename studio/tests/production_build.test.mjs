@@ -53,9 +53,12 @@ test("UI09-T03-TC03: refreshing deep links can rehydrate from Runtime config", a
 });
 
 async function runNpm(...args) {
-  const child = spawn("npm.cmd", ["--prefix", "studio", ...args], {
+  const command = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "npm";
+  const commandArgs = process.platform === "win32"
+    ? ["/d", "/s", "/c", "npm", "--prefix", "studio", ...args]
+    : ["--prefix", "studio", ...args];
+  const child = spawn(command, commandArgs, {
     cwd: repoRoot,
-    shell: true,
     stdio: "ignore",
   });
   const [code] = await once(child, "exit");

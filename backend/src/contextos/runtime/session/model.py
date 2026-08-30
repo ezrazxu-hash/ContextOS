@@ -18,6 +18,7 @@ class Session:
     status: SessionStatus
     title: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    agent_version_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -29,6 +30,7 @@ class Session:
             "status": self.status.value,
             "title": self.title,
             "metadata": dict(self.metadata),
+            "agent_version_id": self.agent_version_id,
         }
 
 

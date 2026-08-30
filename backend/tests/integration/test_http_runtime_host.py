@@ -53,6 +53,142 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(created["content"], "Run the Studio interaction smoke.")
         self.assertIn("Run the Studio interaction smoke.", [message["content"] for message in messages["messages"]])
 
+    def test_host_runs_agent_version_test_run_over_http_without_formal_messages(self) -> None:
+        from contextos.api.server import HttpRuntimeHost, create_demo_services
+
+        services = create_demo_services(llm_client=RecordingLlmClient("test run ok"))
+        version = services.agent_version_service.create_published_version("research-agent", agent_test_run_manifest_payload())
+        host = HttpRuntimeHost(host="127.0.0.1", port=0, services=services)
+        host.start()
+        try:
+            before = get_json(f"{host.url}/api/sessions/demo-session/messages")
+            created = post_json(f"{host.url}/api/agent-versions/{version.id}/test-runs", {"input": "hello"})
+            sse = get_text(f"{host.url}/sse/agent-test-runs/{created['run_id']}")
+            status = get_json(f"{host.url}/api/agent-test-runs/{created['run_id']}")
+            after = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertEqual(created["status"], "completed")
+        self.assertEqual(status["status"], "completed")
+        self.assertIn("event: token", sse)
+        self.assertEqual([message["id"] for message in after["messages"]], [message["id"] for message in before["messages"]])
+
+    def test_host_publishes_agent_draft_and_serves_versions_over_http(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient("publish ok"))
+        host.start()
+        try:
+            draft = agent_test_run_manifest_payload()
+            draft["template"] = {"id": "research-agent", "name": "Research Agent", "version": "draft"}
+            post_json(f"{host.url}/api/templates", draft)
+            put_json(f"{host.url}/api/agents/research-agent/draft", draft)
+            published = post_json(f"{host.url}/api/agents/research-agent/publish", {})
+            versions = get_json(f"{host.url}/api/agents/research-agent/versions")
+            loaded = get_json(f"{host.url}/api/agent-versions/{published['id']}")
+        finally:
+            host.stop()
+
+        self.assertEqual(published["agent_template_id"], "research-agent")
+        self.assertEqual(published["status"], "published")
+        self.assertEqual(versions["versions"][0]["id"], published["id"])
+        self.assertEqual(loaded["id"], published["id"])
+        self.assertEqual(loaded["manifest"]["schema_version"], "1.0")
+
+    def test_host_lists_only_published_agents_for_session_selector(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient("selector ok"))
+        host.start()
+        try:
+            draft = agent_test_run_manifest_payload()
+            draft["template"] = {"id": "research-agent", "name": "Research Agent", "version": "draft"}
+            post_json(f"{host.url}/api/templates", draft)
+            put_json(f"{host.url}/api/agents/research-agent/draft", draft)
+            published = post_json(f"{host.url}/api/agents/research-agent/publish", {})
+            agents = get_json(f"{host.url}/api/agents")
+        finally:
+            host.stop()
+
+        self.assertEqual(agents["agents"][0]["id"], "research-agent")
+        self.assertEqual(agents["agents"][0]["name"], "Research Agent")
+        self.assertEqual(agents["agents"][0]["active_version"]["id"], published["id"])
+
+    def test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works(self) -> None:
+        from contextos.api.server import HttpRuntimeHost, create_demo_services
+
+        llm_client = RecordingLlmClient("workflow chat ok")
+        services = create_demo_services(llm_client=llm_client)
+        version = services.agent_version_service.create_published_version("research-agent", agent_test_run_manifest_payload())
+        host = HttpRuntimeHost(host="127.0.0.1", port=0, services=services)
+        host.start()
+        try:
+            workflow_session = post_json(
+                f"{host.url}/api/sessions",
+                {"agent_template_id": "research-agent", "agent_version_id": version.id},
+            )
+            post_json(
+                f"{host.url}/api/sessions/{workflow_session['id']}/messages",
+                {"role": "user", "content": "Hello workflow", "token_count": 2, "timeline_id": workflow_session["current_timeline_id"]},
+            )
+            workflow_sse = get_text(f"{host.url}/sse/sessions/{workflow_session['id']}/chat?timelineId={workflow_session['current_timeline_id']}")
+            workflow_messages = get_json(f"{host.url}/api/sessions/{workflow_session['id']}/messages?timelineId={workflow_session['current_timeline_id']}")
+            legacy_sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+        finally:
+            host.stop()
+
+        self.assertEqual(sse_token_text(workflow_sse), "workflow chat ok")
+        self.assertEqual(workflow_messages["messages"][-1]["role"], "assistant")
+        self.assertEqual(workflow_messages["messages"][-1]["content"], "workflow chat ok")
+        self.assertEqual(llm_client.calls[0][-1]["content"], "Hello workflow")
+        self.assertIn("event: done", legacy_sse)
+
+    def test_session_switch_agent_uses_new_version_for_future_chat_and_preserves_history(self) -> None:
+        from contextos.api.server import HttpRuntimeHost, create_demo_services
+
+        llm_client = PromptEchoLlmClient()
+        services = create_demo_services(llm_client=llm_client)
+        v1_payload = agent_test_run_manifest_payload()
+        v1_payload["runtime"]["nodes"][0]["config"]["prompt_template"] = "v1 {{input}}"
+        v2_payload = agent_test_run_manifest_payload()
+        v2_payload["runtime"]["nodes"][0]["config"]["prompt_template"] = "v2 {{input}}"
+        v1 = services.agent_version_service.create_published_version("research-agent", v1_payload)
+        v2 = services.agent_version_service.create_published_version("research-agent", v2_payload)
+        host = HttpRuntimeHost(host="127.0.0.1", port=0, services=services)
+        host.start()
+        try:
+            session = post_json(
+                f"{host.url}/api/sessions",
+                {"agent_template_id": "research-agent", "agent_version_id": v1.id},
+            )
+            timeline_id = session["current_timeline_id"]
+            post_json(
+                f"{host.url}/api/sessions/{session['id']}/messages",
+                {"role": "user", "content": "first", "token_count": 1, "timeline_id": timeline_id},
+            )
+            get_text(f"{host.url}/sse/sessions/{session['id']}/chat?timelineId={timeline_id}")
+            switched = patch_json(f"{host.url}/api/sessions/{session['id']}/agent", {"agent_version_id": v2.id})
+            post_json(
+                f"{host.url}/api/sessions/{session['id']}/messages",
+                {"role": "user", "content": "second", "token_count": 1, "timeline_id": timeline_id},
+            )
+            get_text(f"{host.url}/sse/sessions/{session['id']}/chat?timelineId={timeline_id}")
+            messages = get_json(f"{host.url}/api/sessions/{session['id']}/messages?timelineId={timeline_id}")["messages"]
+            debug = get_json(f"{host.url}/api/debug/sessions/{session['id']}")
+        finally:
+            host.stop()
+
+        self.assertEqual(switched["agent_version_id"], v2.id)
+        self.assertEqual([message["content"] for message in messages], ["first", "v1 first", "second", "v2 second"])
+        self.assertEqual(messages[1]["group_id"], messages[0]["group_id"])
+        self.assertEqual(messages[3]["group_id"], messages[2]["group_id"])
+        workflow_checkpoints = [
+            checkpoint for checkpoint in debug["checkpoints"]
+            if checkpoint["timeline_id"] == timeline_id and checkpoint["agent_version_id"] in {v1.id, v2.id}
+        ]
+        self.assertEqual([checkpoint["agent_version_id"] for checkpoint in workflow_checkpoints], [v1.id, v2.id])
+
     def test_host_persists_message_edit_and_soft_delete_across_restart(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -427,6 +563,76 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(run["graph_state"]["visited_nodes"], ["agent"])
         self.assertIn("workflow-http", [item["id"] for item in reloaded_list["templates"]])
 
+    def test_host_serves_workflow_node_catalog(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            catalog = get_json(f"{host.url}/api/workflow/node-catalog")
+        finally:
+            host.stop()
+
+        self.assertEqual(
+            [node["type"] for node in catalog["nodes"]],
+            ["START", "END", "llm", "agent", "tool", "condition", "router", "output"],
+        )
+        self.assertFalse({"prompt", "subgraph", "memory", "custom"} & {node["type"] for node in catalog["nodes"]})
+
+    def test_host_saves_and_loads_agent_draft_without_modifying_template_manifest(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            active_manifest = workflow_payload("draft-http", "Draft HTTP", "active", {"x": 120, "y": 90})
+            draft_manifest = workflow_payload("draft-http", "Draft HTTP", "draft", {"x": 220, "y": 190})
+            post_json(f"{host.url}/api/templates", active_manifest)
+            saved = put_json(f"{host.url}/api/agents/draft-http/draft", draft_manifest)
+            loaded_draft = get_json(f"{host.url}/api/agents/draft-http/draft")
+            loaded_template = get_json(f"{host.url}/api/templates/draft-http")
+        finally:
+            host.stop()
+
+        self.assertEqual(saved["draft_manifest"], draft_manifest)
+        self.assertEqual(loaded_draft["draft_manifest"], draft_manifest)
+        self.assertEqual(loaded_template["manifest"], active_manifest)
+
+    def test_host_validates_agent_manifest_with_structured_errors(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            active_manifest = workflow_payload("validate-http", "Validate HTTP", "active", {"x": 120, "y": 90})
+            invalid_manifest = workflow_payload("validate-http", "Validate HTTP", "invalid", {"x": 220, "y": 190})
+            invalid_manifest["graph"]["edges"] = [{"from": "START", "to": "missing"}]
+            post_json(f"{host.url}/api/templates", active_manifest)
+            response = post_json(f"{host.url}/api/agents/validate-http/validate", invalid_manifest)
+        finally:
+            host.stop()
+
+        self.assertFalse(response["valid"])
+        self.assertEqual(response["errors"][0]["code"], "unknown_node")
+        self.assertEqual(response["errors"][0]["field"], "graph.edges[0].to")
+
+    def test_host_previews_agent_graph_using_runtime_compiler(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            manifest = workflow_payload("preview-http", "Preview HTTP", "preview", {"x": 120, "y": 90})
+            response = post_json(f"{host.url}/api/agents/preview-http/graph-preview", manifest)
+        finally:
+            host.stop()
+
+        self.assertTrue(response["valid"])
+        self.assertEqual(response["start"], "START")
+        self.assertEqual(response["end"], "END")
+        self.assertEqual(response["edges"], [{"source": "START", "target": "agent"}, {"source": "agent", "target": "END"}])
+        self.assertEqual(response["execution_order"], ["agent"])
+
     def test_deleted_demo_session_is_not_reseeded_after_restart(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -468,6 +674,40 @@ class HttpRuntimeHostTests(unittest.TestCase):
         assistant_messages = [message for message in messages["messages"] if message["role"] == "assistant"]
         self.assertEqual(assistant_messages[-1]["content"], "OK")
         self.assertEqual(assistant_messages[-1]["trace_id"], "trace-chat-response")
+
+    def test_chat_stream_persists_checkpoint_and_trace_for_assistant_response(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            post_json(
+                f"{host.url}/api/sessions/demo-session/messages",
+                {"role": "user", "content": "Please persist debug state", "token_count": 4},
+            )
+            sse = get_text(f"{host.url}/sse/sessions/demo-session/chat?timelineId=demo-timeline")
+            debug = get_json(f"{host.url}/api/debug/sessions/demo-session?traceId=trace-chat-response")
+        finally:
+            host.stop()
+
+        self.assertIn("event: checkpoint", sse)
+        self.assertIn("event: done", sse)
+        checkpoints = [
+            checkpoint
+            for checkpoint in debug["checkpoints"]
+            if checkpoint["timeline_id"] == "demo-timeline" and checkpoint["graph_state"].get("node") == "chat"
+        ]
+        self.assertEqual(len(checkpoints), 1)
+        assistant_messages = [
+            message
+            for message in debug["messages"]
+            if message["role"] == "assistant" and message["trace_id"] == "trace-chat-response"
+        ]
+        self.assertEqual(len(assistant_messages), 1)
+        self.assertEqual(assistant_messages[0]["checkpoint_id"], checkpoints[0]["id"])
+        self.assertEqual(debug["traces"]["total"], 1)
+        self.assertEqual(debug["traces"]["items"][0]["message_id"], assistant_messages[0]["id"])
+        self.assertEqual(debug["traces"]["items"][0]["checkpoint_id"], checkpoints[0]["id"])
 
     def test_chat_stream_calls_configured_llm_client_with_persisted_context_and_persists_response(self) -> None:
         from contextos.api.server import create_http_runtime_host
@@ -674,6 +914,17 @@ def post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
     return post_raw_json(url, json.dumps(payload).encode("utf-8"))
 
 
+def put_json(url: str, payload: dict[str, object]) -> dict[str, object]:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def patch_json(url: str, payload: dict[str, object]) -> dict[str, object]:
     request = Request(
         url,
@@ -763,7 +1014,12 @@ def workflow_payload(template_id: str, name: str, output: str, position: dict[st
                 {
                     "id": "agent",
                     "type": "agent",
-                    "config": {"output_key": "answer", "output": output},
+                    "config": {
+                        "model": "default",
+                        "instruction": "Return the configured output.",
+                        "output_key": "answer",
+                        "output": output,
+                    },
                     "position": position,
                 }
             ],
@@ -779,14 +1035,48 @@ def workflow_payload(template_id: str, name: str, output: str, position: dict[st
     }
 
 
+def agent_test_run_manifest_payload() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "runtime": {
+            "nodes": [
+                {
+                    "id": "planner",
+                    "type": "llm",
+                    "config": {
+                        "model": "default",
+                        "prompt_template": "{{input}}",
+                        "input_mapping": {"input": "$state.input"},
+                        "output_key": "answer",
+                    },
+                },
+                {"id": "final", "type": "output", "config": {"source": "$state.answer"}},
+            ],
+            "edges": [
+                {"id": "start-planner", "source": "START", "target": "planner"},
+                {"id": "planner-final", "source": "planner", "target": "final"},
+                {"id": "final-end", "source": "final", "target": "END"},
+            ],
+        },
+        "ui": {"nodes": {}, "viewport": {}},
+    }
+
+
 class RecordingLlmClient:
     def __init__(self, response: str) -> None:
         self.response = response
         self.user_messages: list[str] = []
+        self.calls: list[list[dict[str, str]]] = []
 
     def complete(self, messages: list[dict[str, str]]) -> str:
+        self.calls.append(messages)
         self.user_messages = [message["content"] for message in messages if message["role"] == "user"]
         return self.response
+
+
+class PromptEchoLlmClient:
+    def complete(self, messages: list[dict[str, str]]) -> str:
+        return messages[-1]["content"]
 
 
 class StreamingLlmClient:

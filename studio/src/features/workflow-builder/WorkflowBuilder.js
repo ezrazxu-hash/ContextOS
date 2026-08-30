@@ -1,16 +1,12 @@
+import { deserializeGraph } from "../../workflow/manifest/model.js";
+
 const V1_NODE_TYPES = [
-  "agent",
   "llm",
-  "prompt",
+  "agent",
   "tool",
   "condition",
   "router",
-  "subgraph",
-  "human_approval",
-  "context_operator",
-  "memory",
   "output",
-  "custom",
 ];
 
 const BOUNDARY_NODES = new Set(["START", "END"]);
@@ -44,6 +40,14 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
       node.config = { ...(node.config ?? {}), ...patch };
       return this.view();
     },
+    updateNodePosition(nodeId, position) {
+      const node = state.nodes.find((item) => item.id === nodeId);
+      if (!node) {
+        throw new Error(`Unknown workflow node: ${nodeId}`);
+      }
+      node.position = { x: position.x, y: position.y };
+      return this.view();
+    },
     connect(source, target, condition = null) {
       state.edges.push(condition ? { from: source, to: target, condition } : { from: source, to: target });
       return this.view();
@@ -55,6 +59,21 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
           edge.to === edgeToRemove.to &&
           (edge.condition ?? null) === (edgeToRemove.condition ?? null)
         );
+      });
+      return this.view();
+    },
+    replaceEdge(edgeToReplace, nextEdge) {
+      state.edges = state.edges.map((edge) => {
+        const matches =
+          edge.from === edgeToReplace.from &&
+          edge.to === edgeToReplace.to &&
+          (edge.condition ?? null) === (edgeToReplace.condition ?? null);
+        if (!matches) {
+          return edge;
+        }
+        return nextEdge.condition
+          ? { from: nextEdge.from, to: nextEdge.to, condition: nextEdge.condition }
+          : { from: nextEdge.from, to: nextEdge.to };
       });
       return this.view();
     },
@@ -133,6 +152,14 @@ export function createWorkflowBuilder(apiClient = {}, initialManifest = null) {
       state.edges = loaded.edges;
       return this;
     },
+    loadManifest(manifest) {
+      const loaded = stateFromManifest(manifest);
+      state.template = loaded.template;
+      state.nodes = loaded.nodes;
+      state.edges = loaded.edges;
+      state.selectedNodeId = null;
+      return this.view();
+    },
   };
 }
 
@@ -146,6 +173,20 @@ function emptyState() {
 }
 
 function stateFromManifest(manifest) {
+  if (manifest.runtime) {
+    const graph = deserializeGraph(manifest);
+    return {
+      template: { ...graph.template },
+      nodes: graph.nodes.map(cloneNode),
+      edges: graph.edges.map((edge) => ({
+        from: edge.source,
+        to: edge.target,
+        ...(edge.route ? { condition: edge.route } : {}),
+      })),
+      selectedNodeId: null,
+    };
+  }
+
   return {
     template: { ...manifest.template },
     nodes: manifest.graph.nodes.map(cloneNode),

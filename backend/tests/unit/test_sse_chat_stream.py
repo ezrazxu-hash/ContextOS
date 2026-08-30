@@ -98,6 +98,39 @@ class SseChatStreamTests(unittest.TestCase):
         self.assertEqual(restored.graph_state, {"answer": "Hello"})
         self.assertEqual(done_data["message_id"], messages[0].id)
 
+    def test_checkpoint_event_persists_agent_version_binding(self) -> None:
+        from contextos.api.routes.chat import stream_chat_events
+
+        message_service, trace_collector, checkpoint_service = self.create_services()
+        stream_chat_events(
+            session_id="session-1",
+            timeline_id="timeline-1",
+            trace_id="trace-1",
+            runtime_events=[
+                {"type": "token", "data": {"content": "Hello"}},
+                {
+                    "type": "checkpoint",
+                    "data": {
+                        "graph_state": {"answer": "Hello"},
+                        "message_cursor": 1,
+                        "context_revision": "ctx-1",
+                        "agent_template_id": "research-agent",
+                        "agent_version_id": "research-agent_v1",
+                    },
+                },
+                {"type": "done", "data": {}},
+            ],
+            message_service=message_service,
+            trace_collector=trace_collector,
+            checkpoint_service=checkpoint_service,
+        )
+
+        messages, _ = message_service.list_messages("session-1")
+        restored = checkpoint_service.restore_checkpoint(messages[0].checkpoint_id)
+
+        self.assertEqual(restored.agent_template_id, "research-agent")
+        self.assertEqual(restored.agent_version_id, "research-agent_v1")
+
 
 if __name__ == "__main__":
     unittest.main()

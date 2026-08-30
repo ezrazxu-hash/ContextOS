@@ -120,6 +120,8 @@ def checkpoint_to_debug_dict(checkpoint: Checkpoint) -> dict[str, object]:
         "context_revision": checkpoint.context_revision,
         "created_at": checkpoint.created_at.isoformat(),
         "parent_checkpoint_id": checkpoint.parent_checkpoint_id,
+        "agent_template_id": checkpoint.agent_template_id,
+        "agent_version_id": checkpoint.agent_version_id,
     }
 
 

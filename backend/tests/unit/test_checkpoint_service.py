@@ -45,6 +45,41 @@ class CheckpointServiceTests(unittest.TestCase):
 
         self.assertEqual(restored.graph_state, {"messages": ["hello"], "cursor": 1})
 
+    def test_new_checkpoint_can_store_agent_version_binding(self) -> None:
+        from contextos.runtime.checkpoint.service import CheckpointService
+        from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
+
+        service = CheckpointService(InMemoryCheckpointStore())
+
+        saved = service.save_checkpoint(
+            session_id="session-1",
+            timeline_id="timeline-1",
+            graph_state={"answer": "ok"},
+            message_cursor=1,
+            context_revision="ctx-rev-1",
+            agent_template_id="research-agent",
+            agent_version_id="research-agent_v1",
+        )
+        restored = service.restore_checkpoint(saved.id)
+
+        self.assertEqual(restored.agent_template_id, "research-agent")
+        self.assertEqual(restored.agent_version_id, "research-agent_v1")
+
+    def test_legacy_checkpoint_agent_version_fields_are_null(self) -> None:
+        from contextos.runtime.checkpoint.service import CheckpointService
+        from contextos.runtime.checkpoint.store import InMemoryCheckpointStore
+
+        checkpoint = CheckpointService(InMemoryCheckpointStore()).save_checkpoint(
+            session_id="session-1",
+            timeline_id="timeline-1",
+            graph_state={"answer": "ok"},
+            message_cursor=1,
+            context_revision="ctx-rev-1",
+        )
+
+        self.assertIsNone(checkpoint.agent_template_id)
+        self.assertIsNone(checkpoint.agent_version_id)
+
     def test_reading_old_checkpoint_does_not_modify_snapshot(self) -> None:
         from contextos.runtime.checkpoint.service import CheckpointService
         from contextos.runtime.checkpoint.store import InMemoryCheckpointStore

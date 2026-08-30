@@ -149,6 +149,122 @@ class ContinueFromMessageRevisionTests(unittest.TestCase):
         self.assertNotIn("old tool answer", [message.content for message in child_messages])
         self.assertFalse(any(message.tool_call_ids or message.tool_result_ids for message in child_messages if message.content == "edited user"))
 
+    def test_continue_uses_checkpoint_agent_version_not_current_session_version(self) -> None:
+        from contextos.runtime.graph.executor import RuntimeExecutor
+        from contextos.runtime.timeline.continue_service import ContinueService
+
+        session_service, timeline_service, checkpoint_service, message_service, revision_service, _group_service = self.create_services()
+        session = session_service.create_session("agent", agent_version_id="agent_v2")
+        parent = timeline_service.create_initial_timeline(session.id)
+        checkpoint = checkpoint_service.save_checkpoint(
+            session.id,
+            parent.id,
+            {"answer": "v1"},
+            1,
+            "ctx-1",
+            agent_template_id="agent",
+            agent_version_id="agent_v1",
+        )
+        message = message_service.create_message(session.id, "assistant", "v1", checkpoint_id=checkpoint.id)
+        revision = revision_service.append_revision(message, "edited", "user", "continue")
+
+        class Runner:
+            def __init__(self) -> None:
+                self.seen_state = None
+
+            def run(self, graph_state, runtime_context):
+                del runtime_context
+                self.seen_state = graph_state
+                return graph_state
+
+        runner = Runner()
+        result = ContinueService(
+            timeline_service,
+            checkpoint_service,
+            RuntimeExecutor(runner, checkpoint_service),
+            agent_version_loader=lambda version_id: {"id": version_id, "status": "published"},
+        ).continue_from_revision(
+            parent_timeline_id=parent.id,
+            message_id=message.id,
+            revision_id=revision.id,
+            checkpoint_id=checkpoint.id,
+            trace_id="trace-new",
+            revision_service=revision_service,
+        )
+        restored = checkpoint_service.restore_checkpoint(result.execution.checkpoint_id)
+
+        self.assertEqual(runner.seen_state["agent_version_id"], "agent_v1")
+        self.assertEqual(restored.agent_version_id, "agent_v1")
+
+    def test_continue_legacy_checkpoint_has_no_agent_version(self) -> None:
+        from contextos.runtime.graph.executor import RuntimeExecutor
+        from contextos.runtime.timeline.continue_service import ContinueService
+
+        session_service, timeline_service, checkpoint_service, message_service, revision_service, _group_service = self.create_services()
+        session = session_service.create_session("agent", agent_version_id="agent_v2")
+        parent = timeline_service.create_initial_timeline(session.id)
+        checkpoint = checkpoint_service.save_checkpoint(session.id, parent.id, {"answer": "legacy"}, 1, "ctx-1")
+        message = message_service.create_message(session.id, "assistant", "legacy", checkpoint_id=checkpoint.id)
+        revision = revision_service.append_revision(message, "edited", "user", "continue")
+
+        class Runner:
+            def run(self, graph_state, runtime_context):
+                del runtime_context
+                return graph_state
+
+        result = ContinueService(timeline_service, checkpoint_service, RuntimeExecutor(Runner(), checkpoint_service)).continue_from_revision(
+            parent_timeline_id=parent.id,
+            message_id=message.id,
+            revision_id=revision.id,
+            checkpoint_id=checkpoint.id,
+            trace_id="trace-new",
+            revision_service=revision_service,
+        )
+        restored = checkpoint_service.restore_checkpoint(result.execution.checkpoint_id)
+
+        self.assertIsNone(restored.agent_version_id)
+
+    def test_continue_missing_checkpoint_agent_version_fails_explicitly(self) -> None:
+        from contextos.runtime.graph.executor import RuntimeExecutor
+        from contextos.runtime.timeline.continue_service import ContinueAgentVersionNotFound, ContinueService
+
+        session_service, timeline_service, checkpoint_service, message_service, revision_service, _group_service = self.create_services()
+        session = session_service.create_session("agent", agent_version_id="agent_v2")
+        parent = timeline_service.create_initial_timeline(session.id)
+        checkpoint = checkpoint_service.save_checkpoint(
+            session.id,
+            parent.id,
+            {"answer": "v1"},
+            1,
+            "ctx-1",
+            agent_template_id="agent",
+            agent_version_id="missing_v1",
+        )
+        message = message_service.create_message(session.id, "assistant", "v1", checkpoint_id=checkpoint.id)
+        revision = revision_service.append_revision(message, "edited", "user", "continue")
+
+        class Runner:
+            def run(self, graph_state, runtime_context):
+                del graph_state, runtime_context
+                return {}
+
+        with self.assertRaises(ContinueAgentVersionNotFound) as error:
+            ContinueService(
+                timeline_service,
+                checkpoint_service,
+                RuntimeExecutor(Runner(), checkpoint_service),
+                agent_version_loader=lambda version_id: None,
+            ).continue_from_revision(
+                parent_timeline_id=parent.id,
+                message_id=message.id,
+                revision_id=revision.id,
+                checkpoint_id=checkpoint.id,
+                trace_id="trace-new",
+                revision_service=revision_service,
+            )
+
+        self.assertEqual(error.exception.agent_version_id, "missing_v1")
+
 
 if __name__ == "__main__":
     unittest.main()
