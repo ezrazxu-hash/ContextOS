@@ -46,3 +46,16 @@ test("main Workflow page renders saved edges instead of hiding the graph topolog
   assert.match(renderer, /START/);
   assert.match(renderer, /END/);
 });
+
+test("main Workflow page exposes a selected Node delete action that clears connected edges", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const renderer = source.slice(source.indexOf("function renderWorkflow()"), source.indexOf("function renderTemplate()"));
+  const handler = source.slice(source.indexOf("async function handleAction"), source.indexOf("function handleWorkflowNodePointerDown"));
+  const deleteFunction = source.slice(source.indexOf("function deleteWorkflowNode"), source.indexOf("function selectWorkflowEdge"));
+
+  assert.match(renderer, /data-action="delete-workflow-node"/);
+  assert.match(handler, /delete-workflow-node/);
+  assert.match(deleteFunction, /workflowNodes\.filter/);
+  assert.match(deleteFunction, /workflowEdges\.filter/);
+  assert.match(deleteFunction, /workflowSelectedNodeId = null/);
+});

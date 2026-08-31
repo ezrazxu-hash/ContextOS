@@ -36,8 +36,8 @@ class DeepSeekAnthropicClient:
         self._config = config
         self._timeout = timeout
 
-    def complete(self, messages: list[dict[str, str]]) -> str:
-        request = self._request(messages, stream=False)
+    def complete(self, messages: list[dict[str, str]], options: dict[str, object] | None = None) -> str:
+        request = self._request(messages, stream=False, options=options)
         try:
             with urlopen(request, timeout=self._timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
@@ -81,15 +81,18 @@ class DeepSeekAnthropicClient:
         except OSError as error:
             raise LlmProviderError(f"DeepSeek stream failed: {error}") from error
 
-    def _request(self, messages: list[dict[str, str]], *, stream: bool) -> Request:
+    def _request(self, messages: list[dict[str, str]], *, stream: bool, options: dict[str, object] | None = None) -> Request:
+        options = options or {}
         payload = {
-            "model": self._config.model,
-            "max_tokens": self._config.max_tokens,
+            "model": str(options.get("model") or self._config.model),
+            "max_tokens": int(options.get("max_tokens") or self._config.max_tokens),
             "thinking": {"type": "disabled"},
             "messages": [{"role": item["role"], "content": item["content"]} for item in messages],
         }
         if stream:
             payload["stream"] = True
+        if options.get("temperature") is not None:
+            payload["temperature"] = float(options["temperature"])
         return Request(
             _messages_url(self._config.base_url),
             data=json.dumps(payload).encode("utf-8"),

@@ -3,7 +3,7 @@ from typing import Callable
 from contextos.api.errors import ApiError
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.extension.registry import ExtensionRegistry
-from contextos.template.service import TemplateNotFound, TemplateService
+from contextos.template.service import TemplateNodeNotFound, TemplateNotFound, TemplateService
 from contextos.template.validator.validator import ManifestValidationError
 from contextos.tool.registry.registry import ToolRegistry
 
@@ -55,6 +55,28 @@ def delete_template(template_id: str, template_service: TemplateService) -> dict
     except TemplateNotFound:
         return _not_found(template_id)
     return {"status": 200, "body": record.to_dict()}
+
+
+def delete_template_node(template_id: str, node_id: str, template_service: TemplateService) -> dict[str, object]:
+    try:
+        record, removed_edge_count = template_service.remove_node(template_id, node_id)
+    except TemplateNotFound:
+        return _not_found(template_id)
+    except TemplateNodeNotFound:
+        return {
+            "status": 404,
+            "body": {
+                "error": {
+                    "code": "template.node_not_found",
+                    "message": f"Template node not found: {node_id}",
+                    "status": 404,
+                }
+            },
+        }
+    body = record.to_dict()
+    body["deleted_node_id"] = node_id
+    body["removed_edge_count"] = removed_edge_count
+    return {"status": 200, "body": body}
 
 
 def post_template_validate(

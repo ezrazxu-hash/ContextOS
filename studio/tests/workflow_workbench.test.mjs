@@ -341,6 +341,42 @@ test("UI05-T03-TC03: deleting a selected node removes connected edges from the d
   assert.equal(workbench.view().nodeConfig.selectedNodeId, null);
 });
 
+test("T94 Node Config delete action removes the selected node and clears the panel", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const prompt = workbench.dropLibraryNode("prompt", { x: 100, y: 100 }).node;
+  const tool = workbench.dropLibraryNode("tool", { x: 300, y: 100 }).node;
+  const output = workbench.dropLibraryNode("output", { x: 500, y: 100 }).node;
+  workbench.connect("START", prompt.id);
+  workbench.connect(prompt.id, tool.id);
+  workbench.connect(tool.id, output.id);
+  workbench.connect(output.id, "END");
+  workbench.selectNode(tool.id);
+
+  const before = workbench.view().nodeConfig;
+  const deleted = workbench.deleteSelectedNode();
+  const view = workbench.view();
+  const manifest = workbench.serializeManifest();
+
+  assert.equal(before.actions.delete.enabled, true);
+  assert.equal(before.actions.delete.tone, "danger");
+  assert.equal(deleted.deleted, true);
+  assert.equal(deleted.nodeId, tool.id);
+  assert.equal(deleted.removedEdgeCount, 2);
+  assert.deepEqual(manifest.runtime.nodes.map((node) => node.id), [prompt.id, output.id]);
+  assert.deepEqual(manifest.runtime.edges, [
+    { source: "START", target: prompt.id },
+    { source: output.id, target: "END" },
+  ]);
+  assert.equal(view.nodeConfig.selectedNodeId, null);
+  assert.equal(view.nodeConfig.actions.delete.enabled, false);
+});
+
 test("UI05-T04-TC04: Delete removes only the selected canvas edge", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
@@ -572,7 +608,7 @@ test("T85 Prompt node config exposes template assembly fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["template", "input_mapping", "output_key"],
+    ["role", "template", "variables", "input_mapping", "output_key"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
@@ -622,7 +658,7 @@ test("T84 LLM node config exposes backend executable fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["model", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"],
+    ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
@@ -718,7 +754,7 @@ test("T87 Condition node config exposes branch condition fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["source", "operator", "value"],
+    ["source", "operator", "value", "state_key"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
@@ -804,7 +840,7 @@ test("UI05-T05-TC03: backend field errors map back to concrete config controls",
 
   const local = workbench.validateSelectedNodeConfig();
   const backend = await workbench.validateWithBackend();
-  const field = workbench.view().nodeConfig.sections[0].fields[0];
+  const field = workbench.view().nodeConfig.sections.flatMap((section) => section.fields).find((item) => item.path === "model");
 
   assert.equal(local.valid, false);
   assert.equal(backend.valid, false);
@@ -1154,6 +1190,98 @@ test("T90 Test Run starts from published AgentVersion and records run status", a
   assert.equal(view.testRun.output, "OK");
 });
 
+test("T90 Workflow node config schemas expose executable business fields", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
+  workbench.selectNode(llm.id);
+  const llmFields = workbench.view().nodeConfig.sections.flatMap((section) => section.fields.map((field) => field.path));
+
+  const prompt = workbench.dropLibraryNode("prompt", { x: 240, y: 100 }).node;
+  workbench.selectNode(prompt.id);
+  const promptFields = workbench.view().nodeConfig.sections.flatMap((section) => section.fields.map((field) => field.path));
+
+  const condition = workbench.dropLibraryNode("condition", { x: 380, y: 100 }).node;
+  workbench.selectNode(condition.id);
+  const conditionFields = workbench.view().nodeConfig.sections.flatMap((section) => section.fields.map((field) => field.path));
+
+  assert.ok(llmFields.includes("provider"));
+  assert.ok(llmFields.includes("max_tokens"));
+  assert.ok(promptFields.includes("role"));
+  assert.ok(promptFields.includes("variables"));
+  assert.ok(conditionFields.includes("state_key"));
+});
+
+test("T90 Tool catalog loads registered tool metadata for Tool node config", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+    apiClient: {
+      async listTools() {
+        return {
+          tools: [
+            {
+              id: "context.echo",
+              name: "Context Echo",
+              description: "Echoes query",
+              input_schema: { type: "object", required: ["query"] },
+              output_schema: { type: "object" },
+              configurable: false,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  const loaded = await workbench.loadToolCatalog();
+  const tool = workbench.dropLibraryNode("tool", { x: 100, y: 100 }).node;
+  workbench.selectNode(tool.id);
+  const toolField = workbench.view().nodeConfig.sections.flatMap((section) => section.fields).find((field) => field.path === "tool_name");
+
+  assert.equal(loaded.tools[0].id, "context.echo");
+  assert.deepEqual(toolField.options, [{ value: "context.echo", label: "Context Echo" }]);
+  assert.equal(toolField.metadata.description, "Echoes query");
+  assert.deepEqual(toolField.metadata.input_schema, { type: "object", required: ["query"] });
+});
+
+test("T90 Use Agent creates a formal session bound to the published workflow version", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const created = [];
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+    publishedVersion: { id: "research-agent_v1", version: 1, status: "published" },
+    apiClient: {
+      async createSessionForWorkflow(payload) {
+        created.push(payload);
+        return { id: "session-1", current_timeline_id: "timeline-1", agent_version_id: payload.agent_version_id };
+      },
+    },
+  });
+
+  const result = await workbench.useAgent({ id: "research-agent", name: "Research Agent", version: "draft" });
+
+  assert.deepEqual(created, [
+    {
+      agent_template_id: "research-agent",
+      agent_version_id: "research-agent_v1",
+      title: "Research Agent",
+      workspace_id: "studio",
+      metadata: { source: "workflow-builder" },
+    },
+  ]);
+  assert.deepEqual(result.navigation, { route: "/chat", sessionId: "session-1", timelineId: "timeline-1" });
+});
+
 test("T90 Test Run failure exposes error without clearing published version", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
@@ -1298,4 +1426,33 @@ test("T93 Builder Publish TestRun vertical slice updates canvas and inspector fr
   assert.equal(planner.runtimeStatus, "success");
   assert.deepEqual(inspector.latestOutput, { answer: "OK" });
   assert.equal(workbench.view().testRun.output, "OK");
+});
+
+test("T93 Test Run trace keeps graph and node events in order", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+    publishedVersion: { id: "research-agent_v1", version: 1, status: "published" },
+    apiClient: {
+      async startAgentTestRun() {
+        return { run_id: "run-1", status: "running" };
+      },
+      async *streamAgentTestRunEvents() {
+        yield { type: "graph_started", data: { trace_id: "trace-1" } };
+        yield { type: "node_started", data: { node_id: "planner", input: { input: "Hello" } } };
+        yield { type: "condition_route", data: { node_id: "branch", route: "true" } };
+        yield { type: "graph_finished", data: { trace_id: "trace-1", output: "OK" } };
+      },
+    },
+  });
+
+  await workbench.startAndStreamTestRun({ input: "Hello" });
+
+  assert.deepEqual(
+    workbench.view().testRun.trace.map((event) => event.type),
+    ["graph_started", "node_started", "condition_route", "graph_finished"],
+  );
+  assert.equal(workbench.view().testRun.trace[2].data.route, "true");
 });

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 from typing import Any
 
@@ -29,7 +30,7 @@ class LLMNodeExecutor:
             messages = _messages_for_node(node, state)
 
             try:
-                content = self._provider.complete(messages)
+                content = _complete_with_node_options(self._provider, messages, node.config)
             except LlmProviderError as error:
                 raise LLMNodeExecutionError("llm.request_failed", node.id, str(error)) from error
 
@@ -52,6 +53,27 @@ def _messages_for_node(node: NodeSpec, state: dict[str, object]) -> list[dict[st
     prompt_template = str(node.config.get("prompt", node.config.get("prompt_template", "")))
     messages.append({"role": "user", "content": _render_template(prompt_template, values)})
     return messages
+
+
+def _complete_with_node_options(provider: ChatCompletionClient, messages: list[dict[str, str]], config: dict[str, Any]) -> str:
+    options = _node_call_options(config)
+    complete = provider.complete
+    try:
+        parameters = inspect.signature(complete).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()) or len(parameters) >= 2:
+        return complete(messages, options)
+    return complete(messages)
+
+
+def _node_call_options(config: dict[str, Any]) -> dict[str, object]:
+    options: dict[str, object] = {}
+    for key in ("provider", "model", "temperature", "max_tokens"):
+        value = config.get(key)
+        if value is not None and value != "":
+            options[key] = value
+    return options
 
 
 def _mapped_values(mapping: object, state: dict[str, object]) -> dict[str, object]:

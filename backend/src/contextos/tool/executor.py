@@ -20,6 +20,8 @@ class FakeReadOnlyTool:
 
     def as_executor(self) -> ToolExecutor:
         async def run(args: dict[str, object]) -> object:
+            if "query" in args:
+                return {"echo": args["query"]}
             return {"tool": self.tool_name, "args": dict(args)}
 
         return ToolExecutor(tool_name=self.tool_name, run=run)

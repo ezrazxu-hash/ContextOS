@@ -50,6 +50,37 @@ class LlmNodeExecutorTests(unittest.TestCase):
         self.assertEqual([event["type"] for event in state["runtime_events"]], ["node_started", "token", "node_finished"])
         self.assertEqual(state["runtime_events"][1]["data"]["content"], "planned")
 
+    def test_node_model_options_are_passed_to_provider(self) -> None:
+        from contextos.runtime.graph.nodes.llm import LLMNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+
+        provider = OptionsProvider("ok")
+        node = NodeSpec(
+            id="planner",
+            type="llm",
+            config=llm_config(
+                provider="openai-compatible",
+                model="gpt-workflow",
+                temperature=0.3,
+                max_tokens=512,
+            ),
+        )
+
+        LLMNodeExecutor(provider).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"input": "hello"})
+
+        self.assertEqual(
+            provider.options,
+            [
+                {
+                    "provider": "openai-compatible",
+                    "model": "gpt-workflow",
+                    "temperature": 0.3,
+                    "max_tokens": 512,
+                }
+            ],
+        )
+
     def test_provider_error_becomes_structured_node_error(self) -> None:
         from contextos.provider.base.chat_client import LlmProviderError
         from contextos.runtime.graph.nodes.llm import LLMNodeExecutionError, LLMNodeExecutor
@@ -77,6 +108,17 @@ class FakeProvider:
 
     def complete(self, messages):
         self.messages.append(messages)
+        return self.response
+
+
+class OptionsProvider:
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.options = []
+
+    def complete(self, messages, options=None):
+        del messages
+        self.options.append(dict(options or {}))
         return self.response
 
 

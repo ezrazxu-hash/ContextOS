@@ -8,6 +8,10 @@ export function createWorkflowApiClient(httpClient) {
       return httpClient.request("GET", "/agents", options);
     },
 
+    listTools(options = {}) {
+      return httpClient.request("GET", "/tools", options);
+    },
+
     fetchAgentDraft(agentId, options = {}) {
       return httpClient.request("GET", `/agents/${encodeURIComponent(agentId)}/draft`, options);
     },
@@ -18,6 +22,10 @@ export function createWorkflowApiClient(httpClient) {
 
     deleteTemplate(templateId, options = {}) {
       return httpClient.request("DELETE", `/templates/${encodeURIComponent(templateId)}`, options);
+    },
+
+    deleteTemplateNode(templateId, nodeId, options = {}) {
+      return httpClient.request("DELETE", `/templates/${encodeURIComponent(templateId)}/nodes/${encodeURIComponent(nodeId)}`, options);
     },
 
     saveAgentDraft(agentId, manifest, options = {}) {
@@ -50,6 +58,10 @@ export function createWorkflowApiClient(httpClient) {
 
     fetchAgentTestRun(runId, options = {}) {
       return httpClient.request("GET", `/agent-test-runs/${encodeURIComponent(runId)}`, options);
+    },
+
+    createSessionForWorkflow(payload, options = {}) {
+      return httpClient.request("POST", "/sessions", { ...options, body: payload });
     },
 
     streamAgentTestRunEvents(runId, options = {}) {

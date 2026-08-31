@@ -19,7 +19,8 @@ from contextos.api.routes.messages import patch_message, soft_delete_message
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
 from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, patch_session, patch_session_agent, post_session, post_session_message, remove_session
-from contextos.api.routes.templates import delete_template, get_template, list_templates, patch_template, post_template, post_template_compile, post_template_run, post_template_validate, put_template
+from contextos.api.routes.templates import delete_template, delete_template_node, get_template, list_templates, patch_template, post_template, post_template_compile, post_template_run, post_template_validate, put_template
+from contextos.api.routes.tools import list_tools
 from contextos.api.routes.timelines import activate_timeline, list_session_timelines, patch_timeline, remove_timeline
 from contextos.api.routes.workflow import get_node_catalog
 from contextos.provider.base.chat_client import ChatCompletionClient
@@ -63,7 +64,9 @@ from contextos.template.publish_service import PublishService
 from contextos.template.service import TemplateService
 from contextos.template.version.repository import InMemoryAgentVersionRepository
 from contextos.template.version.service import AgentVersionService
+from contextos.tool.executor import FakeReadOnlyTool
 from contextos.tool.executor_registry import ToolExecutorRegistry
+from contextos.tool.registry.metadata import SideEffect, ToolMetadata
 from contextos.tool.registry.registry import ToolRegistry
 
 
@@ -145,10 +148,14 @@ class RuntimeServices:
         registry.register(PromptNodeExecutor())
         if self.llm_client is not None:
             registry.register(LLMNodeExecutor(self.llm_client))
-        registry.register(ToolNodeExecutor(ToolExecutorRegistry()))
+        registry.register(ToolNodeExecutor(self.tool_executor_registry))
         registry.register(ConditionNodeExecutor())
         registry.register(OutputNodeExecutor())
         return registry
+
+    @property
+    def tool_executor_registry(self) -> ToolExecutorRegistry:
+        return ToolExecutorRegistry([FakeReadOnlyTool("context.echo").as_executor()])
 
     @cached_property
     def workflow_agent_runtime(self) -> WorkflowAgentRuntime:
@@ -172,7 +179,19 @@ class RuntimeServices:
 
     @property
     def tool_registry(self) -> ToolRegistry:
-        return ToolRegistry()
+        return ToolRegistry(
+            [
+                ToolMetadata(
+                    tool_id="context.echo",
+                    name="Context Echo",
+                    description="Echoes the query argument for workflow smoke tests.",
+                    side_effect=SideEffect.READ,
+                    idempotent=True,
+                    input_schema={"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}}},
+                    output_schema={"type": "object", "properties": {"echo": {"type": "string"}}},
+                )
+            ]
+        )
 
     @property
     def debug_projection(self) -> DebugProjection:
@@ -402,6 +421,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 3 and segments == ["api", "workflow", "node-catalog"]:
                 self._send_route_response(get_node_catalog())
+                return
+
+            if len(segments) == 2 and segments == ["api", "tools"]:
+                self._send_route_response(list_tools(services.tool_registry))
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "draft":
@@ -700,6 +723,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                         services.checkpoint_store,
                     )
                 )
+                return
+
+            if len(segments) == 5 and segments[:2] == ["api", "templates"] and segments[3] == "nodes":
+                self._send_route_response(delete_template_node(segments[2], segments[4], services.template_service))
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "templates"]:

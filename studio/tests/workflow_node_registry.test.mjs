@@ -33,8 +33,8 @@ test("T72 config renderer exposes concrete fields for supported nodes", async ()
   const { createWorkflowNodeRegistry } = await import(moduleUrl("src/workflow/nodes/registry.js"));
   const registry = createWorkflowNodeRegistry();
 
-  assert.deepEqual(registry.get("prompt").renderConfig().fields.map((field) => field.path), ["template", "input_mapping", "output_key"]);
-  assert.deepEqual(registry.get("llm").renderConfig().fields.map((field) => field.path), ["model", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"]);
+  assert.deepEqual(registry.get("prompt").renderConfig().fields.map((field) => field.path), ["role", "template", "variables", "input_mapping", "output_key"]);
+  assert.deepEqual(registry.get("llm").renderConfig().fields.map((field) => field.path), ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"]);
   assert.deepEqual(registry.get("tool").renderConfig().fields.map((field) => field.path), ["tool_name", "args", "output_key"]);
-  assert.deepEqual(registry.get("condition").renderConfig().fields.map((field) => field.path), ["source", "operator", "value"]);
+  assert.deepEqual(registry.get("condition").renderConfig().fields.map((field) => field.path), ["source", "operator", "value", "state_key"]);
 });

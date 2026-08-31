@@ -386,6 +386,108 @@ test("Workflow canvas edge selection deletes only the selected edge and persists
   }
 });
 
+test("Workflow node delete removes connected edges and persists after reload", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("workflow-name").fill("Node Delete Workflow");
+    await page.locator("[data-node-type='prompt']").click();
+    await page.locator("[data-node-type='tool']").click();
+    await page.locator("[data-node-type='output']").click();
+    await page.locator(".workflow-edge", { hasText: "prompt-1 -> END" }).getByRole("button", { name: /Delete edge/ }).click();
+    await page.locator("#workflow-edge-source").selectOption("prompt-1");
+    await page.locator("#workflow-edge-target").selectOption("tool-2");
+    await page.getByTestId("workflow-connect-edge").click();
+    await page.locator("#workflow-edge-source").selectOption("tool-2");
+    await page.locator("#workflow-edge-target").selectOption("output-3");
+    await page.getByTestId("workflow-connect-edge").click();
+    await page.locator("#workflow-edge-source").selectOption("output-3");
+    await page.locator("#workflow-edge-target").selectOption("END");
+    await page.getByTestId("workflow-connect-edge").click();
+
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("prompt-1 -> tool-2");
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("tool-2 -> output-3");
+    await page.locator(".graph-node", { hasText: "tool" }).click();
+    await expect(page.getByTestId("workflow-delete-node")).toBeVisible();
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("tool-2");
+      await dialog.accept();
+    });
+    await page.getByTestId("workflow-delete-node").click();
+
+    await expect(page.locator(".graph-node", { hasText: "tool" })).toHaveCount(0);
+    await expect(page.getByTestId("workflow-edge-list")).not.toContainText("prompt-1 -> tool-2");
+    await expect(page.getByTestId("workflow-edge-list")).not.toContainText("tool-2 -> output-3");
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("START -> prompt-1");
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("output-3 -> END");
+    await expect(page.locator(".node-config")).toContainText("Select a node.");
+
+    await page.getByTestId("workflow-save").click();
+    await expect(page.getByTestId("status-toast")).toContainText("Workflow saved");
+    await page.reload();
+    await expect(page.getByTestId("workflow-list")).toContainText("Node Delete Workflow");
+    await page.getByTestId("workflow-list").getByRole("button", { name: /Node Delete Workflow/ }).click();
+    await expect(page.locator(".graph-node", { hasText: "tool" })).toHaveCount(0);
+    await expect(page.locator(".graph-node")).toHaveCount(2);
+    await expect(page.getByTestId("workflow-edge-list")).not.toContainText("tool-2");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Workflow Builder validates publishes tests and opens a workflow agent session", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("workflow-name").fill("Agent Graph Workflow");
+
+    await page.getByTestId("workflow-workbench").getByRole("button", { name: "PROMPT" }).click();
+    await page.getByTestId("workflow-config-template").fill("Hello from workflow");
+    await page.getByTestId("workflow-config-output_key").fill("prompt_result");
+
+    await page.getByTestId("workflow-workbench").getByRole("button", { name: "OUTPUT" }).click();
+    await page.getByTestId("workflow-config-source").fill("$state.prompt_result");
+
+    await page.locator(".workflow-edge", { hasText: "prompt-1 -> END" }).getByRole("button", { name: /Delete edge/ }).click();
+    await page.locator("#workflow-edge-source").selectOption("prompt-1");
+    await page.locator("#workflow-edge-target").selectOption("output-2");
+    await page.getByTestId("workflow-connect-edge").click();
+    await page.locator("#workflow-edge-source").selectOption("output-2");
+    await page.locator("#workflow-edge-target").selectOption("END");
+    await page.getByTestId("workflow-connect-edge").click();
+
+    await page.getByTestId("workflow-validate").click();
+    await expect(page.getByTestId("status-toast")).toContainText("Workflow validation passed");
+
+    await page.getByTestId("workflow-publish").click();
+    await expect(page.getByTestId("status-toast")).toContainText("Published");
+
+    await page.getByTestId("workflow-test-input").fill("Hello");
+    await page.getByTestId("workflow-test").click();
+    await expect(page.getByTestId("workflow-test-run")).toContainText("Hello from workflow");
+    await expect(page.getByTestId("workflow-test-trace")).toContainText("node_started");
+    await expect(page.getByTestId("workflow-test-trace")).toContainText("graph_finished");
+
+    await page.getByTestId("workflow-use-agent").click();
+    await expect(page.getByTestId("main-title")).toHaveText("Chat Workbench");
+    await expect(page.locator(".left-rail")).toContainText("Agent Graph Workflow");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
 test("Workflow rename and delete menu updates persisted list and current selection", async ({ page }) => {
   const backendPort = await freePort();
   const studioPort = await freePort();

@@ -23,3 +23,6 @@ class ToolRegistry:
                 replay_policy=ReplayPolicy.ASK,
             )
         return self._tools[tool_id]
+
+    def list(self) -> list[ToolMetadata]:
+        return [self._tools[tool_id] for tool_id in sorted(self._tools)]

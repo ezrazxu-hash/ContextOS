@@ -43,6 +43,38 @@ class DeepSeekAnthropicClientTests(unittest.TestCase):
 
         self.assertEqual(captured_payloads[0]["thinking"], {"type": "disabled"})
 
+    def test_complete_applies_node_level_model_options_to_payload(self) -> None:
+        from contextos.provider.deepseek_anthropic import DeepSeekAnthropicClient, DeepSeekAnthropicConfig
+
+        captured_payloads: list[dict[str, object]] = []
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            captured_payloads.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse({"content": [{"type": "text", "text": "ok"}]})
+
+        client = DeepSeekAnthropicClient(
+            DeepSeekAnthropicConfig(
+                base_url="https://api.deepseek.com/anthropic",
+                api_key="test-key",
+                model="default-model",
+                max_tokens=1000,
+            )
+        )
+
+        with patch("contextos.provider.deepseek_anthropic.urlopen", fake_urlopen):
+            self.assertEqual(
+                client.complete(
+                    [{"role": "user", "content": "hello"}],
+                    {"model": "workflow-model", "max_tokens": 256, "temperature": 0.4},
+                ),
+                "ok",
+            )
+
+        self.assertEqual(captured_payloads[0]["model"], "workflow-model")
+        self.assertEqual(captured_payloads[0]["max_tokens"], 256)
+        self.assertEqual(captured_payloads[0]["temperature"], 0.4)
+
     def test_complete_reports_unexpected_response_shape(self) -> None:
         from contextos.provider.deepseek_anthropic import (
             DeepSeekAnthropicClient,

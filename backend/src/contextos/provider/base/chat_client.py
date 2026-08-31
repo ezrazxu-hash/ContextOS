@@ -22,7 +22,7 @@ class LlmTimeoutError(LlmProviderError):
 
 
 class ChatCompletionClient(Protocol):
-    def complete(self, messages: list[dict[str, str]]) -> str:
+    def complete(self, messages: list[dict[str, str]], options: dict[str, object] | None = None) -> str:
         ...
 
     def stream_complete(self, messages: list[dict[str, str]]):

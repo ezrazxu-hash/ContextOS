@@ -16,7 +16,14 @@ const NODE_LIBRARY = [
 const CANVAS_TOOLS = ["pointer", "pan", "zoom", "fit", "grid"];
 const NODE_CONFIG_SCHEMAS = {
   prompt: [
-    { id: "template", fields: [{ path: "template", label: "Template", required: true }] },
+    {
+      id: "template",
+      fields: [
+        { path: "role", label: "Role" },
+        { path: "template", label: "Template", required: true },
+        { path: "variables", label: "Variables" },
+      ],
+    },
     {
       id: "io",
       fields: [
@@ -26,7 +33,14 @@ const NODE_CONFIG_SCHEMAS = {
     },
   ],
   llm: [
-    { id: "model", fields: [{ path: "model", label: "Model", required: true }] },
+    {
+      id: "model",
+      fields: [
+        { path: "provider", label: "Provider" },
+        { path: "model", label: "Model", required: true },
+        { path: "max_tokens", label: "Max Tokens" },
+      ],
+    },
     {
       id: "prompt",
       fields: [
@@ -60,6 +74,7 @@ const NODE_CONFIG_SCHEMAS = {
         { path: "source", label: "Source", required: true },
         { path: "operator", label: "Operator", required: true },
         { path: "value", label: "Value" },
+        { path: "state_key", label: "State Key" },
       ],
     },
   ],
@@ -109,6 +124,8 @@ export function createWorkflowWorkbench(options = {}) {
     runtimeNodeStatus: new Map(),
     runtimeEvents: [],
     selectedRuntimeNodeId: null,
+    toolCatalog: [],
+    toolCatalogStatus: "idle",
     validationIssues: [],
     configFieldErrors: new Map(),
     nodeConfigValidation: { valid: true, errors: [] },
@@ -117,6 +134,34 @@ export function createWorkflowWorkbench(options = {}) {
   function markDirty() {
     state.dirty = true;
     state.status = "dirty";
+  }
+
+  function deleteSelectedNode() {
+    const nodeId = state.selectedNodeId;
+    if (!nodeId) {
+      return { deleted: false, nodeId: null, removedEdgeCount: 0 };
+    }
+    const workflowView = builder.view();
+    const node = selectedNode(workflowView, nodeId);
+    if (!node) {
+      state.selectedNodeId = null;
+      return { deleted: false, nodeId, removedEdgeCount: 0 };
+    }
+    const removedEdgeCount = workflowView.edges.filter((edge) => edge.from === nodeId || edge.to === nodeId).length;
+    builder.removeNode(nodeId);
+    configDrafts.delete(nodeId);
+    draftDirty.delete(nodeId);
+    state.configFieldErrors.delete(nodeId);
+    state.runtimeNodeStatus.delete(nodeId);
+    if (state.selectedRuntimeNodeId === nodeId) {
+      state.selectedRuntimeNodeId = null;
+    }
+    state.selectedNodeId = null;
+    state.selectedEdgeId = null;
+    state.validationIssues = [];
+    state.nodeConfigValidation = { valid: true, errors: [] };
+    markDirty();
+    return { deleted: true, nodeId, removedEdgeCount };
   }
 
   return {
@@ -285,13 +330,8 @@ export function createWorkflowWorkbench(options = {}) {
       if (!state.selectedNodeId) {
         return { handled: false };
       }
-      builder.removeNode(state.selectedNodeId);
-      configDrafts.delete(state.selectedNodeId);
-      draftDirty.delete(state.selectedNodeId);
-      state.configFieldErrors.delete(state.selectedNodeId);
-      state.selectedNodeId = null;
-      markDirty();
-      return { handled: true };
+      const result = deleteSelectedNode();
+      return { handled: result.deleted, ...result };
     },
     resizePanel(panel, size) {
       layout.resizePanel(panel, size);
@@ -300,6 +340,23 @@ export function createWorkflowWorkbench(options = {}) {
     searchNodeLibrary(query) {
       state.nodeLibraryQuery = query ?? "";
       return this.view().nodeLibrary;
+    },
+    async loadToolCatalog() {
+      if (!apiClient.listTools) {
+        state.toolCatalog = [];
+        state.toolCatalogStatus = "unavailable";
+        return { tools: [] };
+      }
+      state.toolCatalogStatus = "loading";
+      try {
+        const response = await apiClient.listTools();
+        state.toolCatalog = Array.isArray(response.tools) ? response.tools.map(cloneToolMetadata) : [];
+        state.toolCatalogStatus = "loaded";
+        return { tools: state.toolCatalog.map(cloneToolMetadata) };
+      } catch (error) {
+        state.toolCatalogStatus = "error";
+        return { tools: [], error };
+      }
     },
     dropLibraryNode(type, position) {
       ensureSupportedType(type, builder, options.manifestSchema);
@@ -348,6 +405,9 @@ export function createWorkflowWorkbench(options = {}) {
       state.selectedNodeId = node.id;
       markDirty();
       return { node };
+    },
+    deleteSelectedNode() {
+      return deleteSelectedNode();
     },
     selectNode(nodeId) {
       if (nodeId === "START" || nodeId === "END") {
@@ -466,11 +526,11 @@ export function createWorkflowWorkbench(options = {}) {
       return { ...started, status: state.testRun.status, output: state.testRun.output };
     },
     applyTestRunEvent(event) {
+      state.runtimeEvents.push({ type: event.type, data: { ...(event.data ?? {}) } });
       const nodeId = event?.data?.node_id;
       if (!nodeId) {
         return this.view().canvas;
       }
-      state.runtimeEvents.push({ type: event.type, data: { ...(event.data ?? {}) } });
       if (event.type === "node_started") {
         state.runtimeNodeStatus.set(nodeId, "running");
       }
@@ -485,6 +545,28 @@ export function createWorkflowWorkbench(options = {}) {
     inspectRuntimeNode(nodeId) {
       state.selectedRuntimeNodeId = nodeId;
       return runtimeInspectorView(state);
+    },
+    async useAgent(template) {
+      const versionId = state.publish.version?.id;
+      if (!versionId || !apiClient.createSessionForWorkflow) {
+        return { status: "blocked", reason: "published_version_required" };
+      }
+      const session = await apiClient.createSessionForWorkflow({
+        agent_template_id: template.id,
+        agent_version_id: versionId,
+        title: template.name,
+        workspace_id: "studio",
+        metadata: { source: "workflow-builder" },
+      });
+      return {
+        status: "created",
+        session,
+        navigation: {
+          route: "/chat",
+          sessionId: session.id,
+          timelineId: session.current_timeline_id ?? session.currentTimelineId ?? null,
+        },
+      };
     },
     async publishDraft(template) {
       if (!state.publish.lastValidated || state.status === "validation") {
@@ -665,7 +747,15 @@ export function createWorkflowWorkbench(options = {}) {
           selectedNodeId: state.selectedNodeId,
           draft: selectedDraft,
           schemaDriven: true,
-          sections: nodeConfigSections(selected, selectedDraft, configErrors),
+          actions: {
+            delete: {
+              label: "Delete Node",
+              tone: "danger",
+              enabled: Boolean(state.selectedNodeId),
+              confirmRequired: true,
+            },
+          },
+          sections: nodeConfigSections(selected, selectedDraft, configErrors, state),
           validation: state.nodeConfigValidation,
           hasUncommittedChanges: state.selectedNodeId ? draftDirty.has(state.selectedNodeId) : false,
         },
@@ -679,6 +769,7 @@ export function createWorkflowWorkbench(options = {}) {
         testRun: {
           ...state.testRun,
           error: state.testRun.error ? { ...state.testRun.error } : null,
+          trace: state.runtimeEvents.map(cloneRuntimeEvent),
         },
         runtimeInspector: runtimeInspectorView(state),
       };
@@ -734,24 +825,50 @@ function latestRuntimeOutput(events) {
   return null;
 }
 
+function cloneRuntimeEvent(event) {
+  return { type: event.type, data: { ...(event.data ?? {}) } };
+}
+
+function cloneToolMetadata(tool) {
+  return {
+    ...tool,
+    input_schema: { ...(tool.input_schema ?? {}) },
+    output_schema: { ...(tool.output_schema ?? {}) },
+    config_schema: { ...(tool.config_schema ?? {}) },
+  };
+}
+
 function selectedNode(workflowView, nodeId) {
   return workflowView.nodes.find((node) => node.id === nodeId) ?? null;
 }
 
-function nodeConfigSections(node, draft, fieldErrors) {
+function nodeConfigSections(node, draft, fieldErrors, state) {
   if (!node) {
     return [];
   }
   return (NODE_CONFIG_SCHEMAS[node.type] ?? []).map((section) => ({
     id: section.id,
-    fields: section.fields.map((field) => ({
-      path: field.path,
-      label: field.label,
-      required: Boolean(field.required),
-      value: valueAtPath(draft, field.path),
-      error: fieldErrors.get(field.path) ?? null,
-    })),
+    fields: section.fields.map((field) => nodeConfigFieldView(field, draft, fieldErrors, state)),
   }));
+}
+
+function nodeConfigFieldView(field, draft, fieldErrors, state) {
+  const base = {
+    path: field.path,
+    label: field.label,
+    required: Boolean(field.required),
+    value: valueAtPath(draft, field.path),
+    error: fieldErrors.get(field.path) ?? null,
+  };
+  if (field.path !== "tool_name") {
+    return base;
+  }
+  const selectedTool = state.toolCatalog.find((tool) => tool.id === base.value) ?? state.toolCatalog[0] ?? null;
+  return {
+    ...base,
+    options: state.toolCatalog.map((tool) => ({ value: tool.id, label: tool.name || tool.id })),
+    metadata: selectedTool ? cloneToolMetadata(selectedTool) : null,
+  };
 }
 
 function validateNodeConfig(node, draft) {

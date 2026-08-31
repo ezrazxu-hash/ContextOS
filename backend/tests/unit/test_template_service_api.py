@@ -27,6 +27,35 @@ def manifest_payload(node_override=None):
     }
 
 
+def workflow_manifest_payload():
+    return {
+        "schema_version": "1.0",
+        "template": {"id": "research-agent", "name": "Research Agent", "version": "1.0.0"},
+        "runtime": {
+            "state_schema": "default_chat_state",
+            "nodes": [
+                {"id": "prompt", "type": "prompt", "config": {"template": "{{input}}", "output_key": "prompt_text"}},
+                {"id": "tool", "type": "tool", "config": {"tool_name": "context.echo", "output_key": "tool_result"}},
+                {"id": "final", "type": "output", "config": {"source": "$state.tool_result"}},
+            ],
+            "edges": [
+                {"source": "START", "target": "prompt"},
+                {"source": "prompt", "target": "tool"},
+                {"source": "tool", "target": "final"},
+                {"source": "final", "target": "END"},
+            ],
+        },
+        "ui": {
+            "nodes": {
+                "prompt": {"position": {"x": 10, "y": 20}},
+                "tool": {"position": {"x": 30, "y": 40}},
+                "final": {"position": {"x": 50, "y": 60}},
+            },
+            "viewport": {"zoom": 1},
+        },
+    }
+
+
 def registries():
     from contextos.template.extension.registry import ExtensionRegistry
     from contextos.tool.registry.registry import ToolRegistry
@@ -290,6 +319,43 @@ class TemplateServiceApiTests(unittest.TestCase):
             self.assertEqual(deleted["body"]["id"], "research-agent")
             self.assertEqual(list_templates(reloaded_service)["body"]["templates"], [])
             self.assertEqual(get_template("research-agent", reloaded_service)["status"], 404)
+
+    def test_template_node_delete_removes_node_edges_ui_and_draft_from_json_store(self) -> None:
+        from contextos.api.routes.agents import get_agent_draft, put_agent_draft
+        from contextos.api.routes.templates import delete_template_node, get_template, post_template
+        from contextos.runtime.persistence.json_store import JsonRuntimeStore
+        from contextos.template.service import TemplateService
+
+        with TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/runtime-state.json"
+            service = TemplateService(JsonRuntimeStore(path))
+            manifest = workflow_manifest_payload()
+            draft = workflow_manifest_payload()
+            draft["template"] = {**draft["template"], "name": "Draft Workflow"}
+            post_template(manifest, service)
+            put_agent_draft("research-agent", draft, service)
+
+            deleted = delete_template_node("research-agent", "tool", service)
+            duplicate = delete_template_node("research-agent", "tool", service)
+            reloaded_service = TemplateService(JsonRuntimeStore(path))
+            persisted = get_template("research-agent", reloaded_service)["body"]["manifest"]
+            persisted_draft = get_agent_draft("research-agent", reloaded_service)["body"]["draft_manifest"]
+
+            self.assertEqual(deleted["status"], 200)
+            self.assertEqual(deleted["body"]["deleted_node_id"], "tool")
+            self.assertEqual(deleted["body"]["removed_edge_count"], 2)
+            self.assertEqual([node["id"] for node in persisted["runtime"]["nodes"]], ["prompt", "final"])
+            self.assertEqual(
+                persisted["runtime"]["edges"],
+                [{"source": "START", "target": "prompt"}, {"source": "final", "target": "END"}],
+            )
+            self.assertNotIn("tool", persisted["ui"]["nodes"])
+            self.assertEqual([node["id"] for node in persisted_draft["runtime"]["nodes"]], ["prompt", "final"])
+            self.assertFalse(
+                any(edge["source"] == "tool" or edge["target"] == "tool" for edge in persisted_draft["runtime"]["edges"])
+            )
+            self.assertEqual(duplicate["status"], 404)
+            self.assertEqual(duplicate["body"]["error"]["code"], "template.node_not_found")
 
 
 if __name__ == "__main__":

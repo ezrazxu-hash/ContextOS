@@ -16,6 +16,10 @@ class TemplateNotFound(Exception):
     pass
 
 
+class TemplateNodeNotFound(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class TemplateRecord:
     template_id: str
@@ -82,6 +86,25 @@ class TemplateService:
         if record is None:
             raise TemplateNotFound(template_id)
         return record
+
+    def remove_node(self, template_id: str, node_id: str) -> tuple[TemplateRecord, int]:
+        record = self.get(template_id)
+        manifest_payload, active_found, removed_edge_count = _remove_node_from_manifest(record.manifest_payload, node_id)
+        draft_manifest_payload = None
+        draft_found = False
+        if record.draft_manifest_payload is not None:
+            draft_manifest_payload, draft_found, _ = _remove_node_from_manifest(record.draft_manifest_payload, node_id)
+        if not active_found and not draft_found:
+            raise TemplateNodeNotFound(node_id)
+        updated = TemplateRecord(
+            template_id=record.template_id,
+            manifest_payload=manifest_payload,
+            draft_manifest_payload=draft_manifest_payload,
+            draft_updated_at=record.draft_updated_at,
+            active_version_id=record.active_version_id,
+        )
+        self._save_record(updated)
+        return updated, removed_edge_count
 
     def list(self) -> list[TemplateRecord]:
         if self._store is not None:
@@ -190,3 +213,32 @@ class TemplateService:
             draft_updated_at=str(record["draft_updated_at"]) if record.get("draft_updated_at") is not None else None,
             active_version_id=str(record["active_version_id"]) if record.get("active_version_id") is not None else None,
         )
+
+
+def _remove_node_from_manifest(manifest_payload: dict[str, Any], node_id: str) -> tuple[dict[str, Any], bool, int]:
+    payload = deepcopy(manifest_payload)
+    graph = payload.get("runtime") if "runtime" in payload else payload.get("graph")
+    if not isinstance(graph, dict):
+        return payload, False, 0
+
+    nodes = list(graph.get("nodes", []))
+    found = any(isinstance(node, dict) and node.get("id") == node_id for node in nodes)
+    if not found:
+        return payload, False, 0
+
+    graph["nodes"] = [node for node in nodes if not (isinstance(node, dict) and node.get("id") == node_id)]
+    edges = list(graph.get("edges", []))
+    filtered_edges = [edge for edge in edges if not _edge_references_node(edge, node_id)]
+    graph["edges"] = filtered_edges
+    ui_nodes = payload.get("ui", {}).get("nodes")
+    if isinstance(ui_nodes, dict):
+        ui_nodes.pop(node_id, None)
+    return payload, True, len(edges) - len(filtered_edges)
+
+
+def _edge_references_node(edge: object, node_id: str) -> bool:
+    if not isinstance(edge, dict):
+        return False
+    source = edge.get("source", edge.get("from"))
+    target = edge.get("target", edge.get("to"))
+    return source == node_id or target == node_id

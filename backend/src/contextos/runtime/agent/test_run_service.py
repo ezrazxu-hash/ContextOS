@@ -15,6 +15,7 @@ class AgentTestRun:
     status: str
     trace_id: str
     events: list[RuntimeEvent]
+    output: object | None = None
 
 
 class AgentTestRunNotFound(Exception):
@@ -65,6 +66,7 @@ class AgentTestRunService:
 
         events: list[RuntimeEvent] = []
         status = "completed"
+        output: object | None = None
         try:
             context = AgentRunContext(
                 session_id=f"ephemeral_session_{run_id}",
@@ -77,11 +79,13 @@ class AgentTestRunService:
                 events.append(event)
                 if event.type == "graph_failed":
                     status = "failed"
+                if event.type == "graph_finished":
+                    output = event.data.get("output")
         except Exception as error:
             status = "failed"
             events.append(RuntimeEvent("graph_failed", {"code": "test_run.failed", "message": str(error), "trace_id": trace_id}))
 
-        return self._store.save(replace(run, status=status, events=events))
+        return self._store.save(replace(run, status=status, events=events, output=output))
 
     def get(self, run_id: str) -> AgentTestRun:
         return self._store.get(run_id)

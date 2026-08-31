@@ -32,5 +32,6 @@ def _run_body(run) -> dict[str, object]:
         "agent_version_id": run.agent_version_id,
         "status": run.status,
         "trace_id": run.trace_id,
+        "output": run.output,
         "events": [event.to_dict() for event in run.events],
     }

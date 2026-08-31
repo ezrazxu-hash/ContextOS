@@ -25,6 +25,7 @@ test("T70 Workflow API client maps agent draft validate publish version and test
 
   await api.fetchAgentDraft("research-agent");
   await api.listAgents();
+  await api.listTools();
   await api.saveAgentDraft("research-agent", { schema_version: "1.0" });
   await api.validateAgentDraft("research-agent", { schema_version: "1.0" });
   await api.previewAgentGraph("research-agent", { schema_version: "1.0" });
@@ -33,7 +34,9 @@ test("T70 Workflow API client maps agent draft validate publish version and test
   await api.fetchAgentVersion("research-agent_v1");
   await api.startAgentTestRun("research-agent_v1", { input: "hello" });
   await api.fetchAgentTestRun("test_run_1");
+  await api.createSessionForWorkflow({ agent_template_id: "research-agent", agent_version_id: "research-agent_v1", title: "Research Agent" });
   await api.renameTemplate("research-agent", "Renamed Workflow");
+  await api.deleteTemplateNode("research-agent", "tool-1");
   await api.deleteTemplate("research-agent");
   await collect(api.streamAgentTestRunEvents("test_run_1"));
 
@@ -42,6 +45,7 @@ test("T70 Workflow API client maps agent draft validate publish version and test
     [
       ["GET", "/agents/research-agent/draft"],
       ["GET", "/agents"],
+      ["GET", "/tools"],
       ["PUT", "/agents/research-agent/draft"],
       ["POST", "/agents/research-agent/validate"],
       ["POST", "/agents/research-agent/graph-preview"],
@@ -50,14 +54,21 @@ test("T70 Workflow API client maps agent draft validate publish version and test
       ["GET", "/agent-versions/research-agent_v1"],
       ["POST", "/agent-versions/research-agent_v1/test-runs"],
       ["GET", "/agent-test-runs/test_run_1"],
+      ["POST", "/sessions"],
       ["PATCH", "/templates/research-agent"],
+      ["DELETE", "/templates/research-agent/nodes/tool-1"],
       ["DELETE", "/templates/research-agent"],
       ["SSE", "/sse/agent-test-runs/test_run_1"],
     ],
   );
-  assert.deepEqual(calls[2].options.body, { schema_version: "1.0" });
+  assert.deepEqual(calls[3].options.body, { schema_version: "1.0" });
   assert.deepEqual(calls.find((call) => call.path === "/templates/research-agent" && call.method === "PATCH").options.body, { name: "Renamed Workflow" });
   assert.deepEqual(calls.find((call) => call.path === "/agent-versions/research-agent_v1/test-runs").options.body, { input: "hello" });
+  assert.deepEqual(calls.find((call) => call.path === "/sessions").options.body, {
+    agent_template_id: "research-agent",
+    agent_version_id: "research-agent_v1",
+    title: "Research Agent",
+  });
 });
 
 async function collect(iterable) {
