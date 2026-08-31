@@ -14,6 +14,9 @@ const DEFAULT_TIMELINE_ID = "demo-timeline";
 const WORKFLOW_MIN_ZOOM = 0.4;
 const WORKFLOW_MAX_ZOOM = 2;
 const WORKFLOW_ZOOM_STEP = 0.1;
+const WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH = 360;
+const WORKFLOW_CONFIG_PANEL_MIN_WIDTH = 320;
+const WORKFLOW_CONFIG_PANEL_MAX_WIDTH = 720;
 const app = document.querySelector("#app");
 let routeLoadVersion = 0;
 const demoWorkflowGraph = deserializeGraph(demoTemplateManifest);
@@ -78,6 +81,8 @@ const state = {
   workflowSaving: false,
   workflowDrag: null,
   workflowCanvasPan: null,
+  workflowConfigResize: null,
+  workflowConfigPanelWidth: WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH,
   workflowSelectedNodeId: "planner",
   workflowSelectedEdgeIndex: null,
   workflowEdgeSourceId: null,
@@ -397,6 +402,7 @@ function renderToolRelations(message) {
 function renderWorkflow() {
   const selected = state.workflowNodes.find((node) => node.id === state.workflowSelectedNodeId) ?? null;
   const edgeSource = state.workflowEdgeSourceId ?? state.workflowSelectedNodeId ?? "START";
+  const configPanelWidth = workflowConfigPanelWidth();
   return `
     <section class="workflow-page">
       <div class="page-head">
@@ -414,7 +420,7 @@ function renderWorkflow() {
           <button data-action="save-workflow" data-testid="workflow-save" ${state.workflowSaving ? "disabled" : ""}>${state.workflowSaving ? "Saving" : "Save"}</button>
         </div>
       </div>
-      <div class="workflow-surface" data-testid="workflow-workbench">
+      <div class="workflow-surface" data-testid="workflow-workbench" style="--workflow-config-panel-width:${configPanelWidth}px">
         <div class="node-palette">
           <section>
             <h2>Workflows</h2>
@@ -445,7 +451,8 @@ function renderWorkflow() {
           ${renderWorkflowCanvasContent()}
           <div class="workflow-zoom-indicator" aria-live="polite">${Math.round(state.workflowCanvasZoom * 100)}%</div>
         </div>
-        <div class="node-config">
+        <div class="workflow-config-resize-handle" data-testid="workflow-config-resize-handle" role="separator" tabindex="0" aria-label="Resize Basic Info panel" aria-orientation="vertical" aria-valuemin="${WORKFLOW_CONFIG_PANEL_MIN_WIDTH}" aria-valuemax="${WORKFLOW_CONFIG_PANEL_MAX_WIDTH}" aria-valuenow="${configPanelWidth}"></div>
+        <div class="node-config" data-testid="workflow-node-config">
           <section class="node-config-section basic-info">
             <h2>Basic Info</h2>
             <label class="config-field">Name<input data-testid="workflow-name" value="${escapeAttr(state.workflowName)}" /></label>
@@ -845,6 +852,9 @@ function bindEvents() {
   workflowCanvas?.addEventListener("wheel", handleWorkflowCanvasWheel, { passive: false });
   workflowCanvas?.addEventListener("pointerdown", handleWorkflowCanvasPointerDown);
   workflowCanvas?.addEventListener("contextmenu", handleWorkflowCanvasContextMenu);
+  const workflowConfigResizeHandle = document.querySelector("[data-testid='workflow-config-resize-handle']");
+  workflowConfigResizeHandle?.addEventListener("pointerdown", handleWorkflowConfigResizePointerDown);
+  workflowConfigResizeHandle?.addEventListener("keydown", handleWorkflowConfigResizeKeyDown);
   const composer = document.querySelector(".composer");
   composer?.addEventListener("submit", handleChatSubmit);
   const input = document.querySelector("[data-testid='composer-input']");
@@ -1497,6 +1507,45 @@ function handleWorkflowCanvasPointerUp() {
 
 function handleWorkflowCanvasContextMenu(event) {
   event.preventDefault();
+}
+
+function handleWorkflowConfigResizePointerDown(event) {
+  if (event.button !== 0) return;
+  const surface = event.currentTarget.closest(".workflow-surface");
+  const panel = surface?.querySelector(".node-config");
+  if (!surface || !panel) return;
+  event.preventDefault();
+  state.workflowConfigResize = {
+    surface,
+    startX: event.clientX,
+    startWidth: panel.getBoundingClientRect().width,
+  };
+  document.body.classList.add("workflow-config-resizing");
+  document.addEventListener("pointermove", handleWorkflowConfigResizePointerMove);
+  document.addEventListener("pointerup", handleWorkflowConfigResizePointerUp);
+  document.addEventListener("pointercancel", handleWorkflowConfigResizePointerUp);
+}
+
+function handleWorkflowConfigResizePointerMove(event) {
+  const resize = state.workflowConfigResize;
+  if (!resize) return;
+  event.preventDefault();
+  setWorkflowConfigPanelWidth(resize.startWidth - (event.clientX - resize.startX), resize.surface);
+}
+
+function handleWorkflowConfigResizePointerUp() {
+  state.workflowConfigResize = null;
+  document.body.classList.remove("workflow-config-resizing");
+  document.removeEventListener("pointermove", handleWorkflowConfigResizePointerMove);
+  document.removeEventListener("pointerup", handleWorkflowConfigResizePointerUp);
+  document.removeEventListener("pointercancel", handleWorkflowConfigResizePointerUp);
+}
+
+function handleWorkflowConfigResizeKeyDown(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const direction = event.key === "ArrowLeft" ? 1 : -1;
+  setWorkflowConfigPanelWidth(state.workflowConfigPanelWidth + direction * 24, event.currentTarget.closest(".workflow-surface"));
 }
 
 function handleWorkflowCanvasWheel(event) {
@@ -2197,6 +2246,22 @@ function clampWorkflowZoom(value) {
   return Math.max(WORKFLOW_MIN_ZOOM, Math.min(WORKFLOW_MAX_ZOOM, Number(numeric.toFixed(2))));
 }
 
+function workflowConfigPanelWidth() {
+  return clampWorkflowConfigPanelWidth(state.workflowConfigPanelWidth);
+}
+
+function setWorkflowConfigPanelWidth(value, surface) {
+  state.workflowConfigPanelWidth = clampWorkflowConfigPanelWidth(value);
+  surface?.style.setProperty("--workflow-config-panel-width", `${state.workflowConfigPanelWidth}px`);
+  surface?.querySelector("[data-testid='workflow-config-resize-handle']")?.setAttribute("aria-valuenow", String(state.workflowConfigPanelWidth));
+}
+
+function clampWorkflowConfigPanelWidth(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH;
+  return Math.max(WORKFLOW_CONFIG_PANEL_MIN_WIDTH, Math.min(WORKFLOW_CONFIG_PANEL_MAX_WIDTH, Math.round(numeric)));
+}
+
 function workflowZoomAttr() {
   return state.workflowCanvasZoom.toFixed(2).replace(/\.?0+$/, "");
 }
@@ -2768,9 +2833,13 @@ function styleTag() {
     .tabs.vertical { flex-direction: column; width: 180px; }
     .tabs .active { background: var(--accent-soft); border-color: #b9cdfa; color: #1d4ed8; }
     .context-item { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fbfcfe; }
-    .workflow-surface { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px minmax(320px, 1fr) minmax(320px, 28vw); gap: 12px; overflow: auto; }
+    .workflow-surface { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px minmax(320px, 1fr) 8px var(--workflow-config-panel-width); gap: 12px; overflow: auto; }
     .node-palette, .template-fields, .debug-grid section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
-    .node-config { min-width: 320px; max-width: min(540px, 34vw); display: grid; align-content: start; gap: 10px; overflow: auto; background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+    .workflow-config-resize-handle { position: relative; min-width: 8px; cursor: col-resize; border-radius: 999px; outline: 0; touch-action: none; }
+    .workflow-config-resize-handle::before { content: ""; position: absolute; inset: 8px 3px; border-radius: 999px; background: #cbd5e1; transition: background-color .12s ease, box-shadow .12s ease; }
+    .workflow-config-resize-handle:hover::before, .workflow-config-resize-handle:focus::before { background: var(--accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, .16); }
+    .workflow-config-resizing, .workflow-config-resizing * { cursor: col-resize !important; user-select: none; }
+    .node-config { min-width: 0; width: 100%; max-width: none; display: grid; align-content: start; gap: 10px; overflow: auto; background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
     .node-config-section { display: grid; gap: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
     .node-config-section h2 { margin-bottom: 0; }
     .node-config-fields { background: #fbfcfe; }
@@ -2838,6 +2907,7 @@ function styleTag() {
       .left-rail, .right-rail { border: 0; border-bottom: 1px solid var(--line); }
       .main-pane { min-height: 680px; }
       .workflow-surface, .debug-grid { grid-template-columns: 1fr; }
+      .workflow-config-resize-handle { display: none; }
       .message-card { width: 100%; }
     }
   </style>`;

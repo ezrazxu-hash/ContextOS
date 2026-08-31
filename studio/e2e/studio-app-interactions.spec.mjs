@@ -465,6 +465,22 @@ test("Workflow node config panel is compact and LLM editors have visible borders
     await expect(panel.locator(".node-config-section.danger-zone")).toBeVisible();
     expect((await panel.boundingBox())?.width).toBeGreaterThanOrEqual(320);
 
+    const handle = page.getByTestId("workflow-config-resize-handle");
+    await expect(handle).toBeVisible();
+    const beforeResizePanel = await panel.boundingBox();
+    const beforeResizeCanvas = await page.getByTestId("workflow-canvas").boundingBox();
+    const handleBox = await handle.boundingBox();
+    await page.mouse.move((handleBox?.x ?? 0) + 4, (handleBox?.y ?? 0) + 30);
+    await page.mouse.down();
+    await page.mouse.move((handleBox?.x ?? 0) - 90, (handleBox?.y ?? 0) + 30, { steps: 8 });
+    await page.mouse.up();
+    const afterResizePanel = await panel.boundingBox();
+    const afterResizeCanvas = await page.getByTestId("workflow-canvas").boundingBox();
+    expect(afterResizePanel?.width ?? 0).toBeGreaterThan((beforeResizePanel?.width ?? 0) + 40);
+    expect(afterResizePanel?.width ?? 0).toBeGreaterThanOrEqual(320);
+    expect(afterResizeCanvas?.width ?? 0).toBeGreaterThan(250);
+    expect(afterResizeCanvas?.x).toBeCloseTo(beforeResizeCanvas?.x ?? 0, 1);
+
     for (const testId of ["workflow-config-system_prompt", "workflow-config-prompt", "workflow-config-input_mapping"]) {
       const editor = page.getByTestId(testId);
       await expect(editor).toBeVisible();
