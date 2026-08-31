@@ -13,9 +13,9 @@ test("Prompt LLM Tool Output graph serializes to runtime/ui Manifest", async () 
   const { createWorkflowBuilder } = await import(moduleUrl("src/features/workflow-builder/WorkflowBuilder.js"));
 
   const builder = createWorkflowBuilder();
-  builder.addNode({ id: "prompt", type: "prompt", config: { template: "Question: {{input}}", output_key: "prompt_text" } });
-  builder.addNode({ id: "llm", type: "llm", config: { model: "default", prompt: "{{prompt}}", output_key: "answer" } });
-  builder.addNode({ id: "tool", type: "tool", config: { tool_name: "web_search", output_key: "tool_result" } });
+  builder.addNode({ id: "prompt", type: "prompt", config: { template: "Question: {{input}}" } });
+  builder.addNode({ id: "llm", type: "llm", config: { model: "default", prompt: "{{prompt}}" } });
+  builder.addNode({ id: "tool", type: "tool", config: { tool_name: "web_search" } });
   builder.addNode({ id: "output", type: "output", config: { source: "$state.tool_result" } });
   builder.connect("START", "prompt");
   builder.connect("prompt", "llm");

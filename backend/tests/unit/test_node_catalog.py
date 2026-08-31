@@ -35,9 +35,9 @@ class NodeCatalogTests(unittest.TestCase):
 
         by_type = {node["type"]: node for node in list_node_catalog()}
 
-        self.assertEqual(by_type["prompt"]["required_fields"], ["config.template", "config.output_key"])
-        self.assertEqual(by_type["llm"]["required_fields"], ["config.model", "config.prompt", "config.output_key"])
-        self.assertEqual(by_type["tool"]["required_fields"], ["config.tool_name", "config.output_key"])
+        self.assertEqual(by_type["prompt"]["required_fields"], ["config.template"])
+        self.assertEqual(by_type["llm"]["required_fields"], ["config.model", "config.prompt"])
+        self.assertEqual(by_type["tool"]["required_fields"], ["config.tool_name"])
         self.assertEqual(by_type["condition"]["required_fields"], ["config.source", "config.operator"])
         self.assertEqual(by_type["output"]["required_fields"], ["config.source"])
 

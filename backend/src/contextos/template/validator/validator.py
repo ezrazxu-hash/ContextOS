@@ -271,7 +271,7 @@ def _reachable_from_start(edges: list[EdgeSpec]) -> set[str]:
 
 
 def _prompt_config_issues(node: NodeSpec, index: int) -> list[ValidationIssue]:
-    return _required_config_issues(node, index, "prompt_config", ["template", "output_key"]) + _output_key_issues(
+    return _required_config_issues(node, index, "prompt_config", ["template"]) + _output_key_issues(
         node,
         index,
         "prompt_config",
@@ -279,7 +279,7 @@ def _prompt_config_issues(node: NodeSpec, index: int) -> list[ValidationIssue]:
 
 
 def _tool_config_issues(node: NodeSpec, index: int, tool_registry: ToolRegistry) -> list[ValidationIssue]:
-    issues = _required_config_issues(node, index, "tool_config", ["tool_name", "output_key"])
+    issues = _required_config_issues(node, index, "tool_config", ["tool_name"])
     issues.extend(_output_key_issues(node, index, "tool_config"))
     tool_name = node.config.get("tool_name")
     if tool_name and not tool_registry.has(str(tool_name)):

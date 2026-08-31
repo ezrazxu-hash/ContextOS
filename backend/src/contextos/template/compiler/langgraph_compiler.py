@@ -5,6 +5,7 @@ from langgraph.graph import END, START, StateGraph
 
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.runtime.graph.nodes.registry import NodeExecutorRegistry
+from contextos.runtime.graph.nodes.references import output_state_key, route_state_key
 from contextos.template.manifest.schema import EdgeSpec, NodeSpec, TemplateManifest
 from contextos.template.validator.validator import ManifestValidationError
 
@@ -78,14 +79,13 @@ def _node_handler(
 
 def _generic_node_update(state: dict[str, object], node: NodeSpec) -> dict[str, object]:
     update: dict[str, object] = {**state, "visited_nodes": _visited(state, node.id)}
-    output_key = node.config.get("output_key")
-    if output_key is not None:
-        update[str(output_key)] = node.config.get("output")
+    if node.type in {"prompt", "llm", "tool", "agent"} or node.config.get("output_key") is not None:
+        update[output_state_key(node)] = node.config.get("output")
     return update
 
 
 def _router_for(node: NodeSpec, path_map: dict[str, str]) -> Callable[[dict[str, object]], str]:
-    state_key = str(node.config.get("state_key", "route"))
+    state_key = route_state_key(node)
 
     def route(state: dict[str, object]) -> str:
         route_key = str(state.get(state_key, ""))

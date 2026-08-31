@@ -38,6 +38,17 @@ class OutputNodeExecutorTests(unittest.TestCase):
 
         self.assertEqual(state["output"], result)
 
+    def test_source_accepts_structured_node_output_reference(self) -> None:
+        from contextos.runtime.graph.nodes.output import OutputNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+
+        node = NodeSpec(id="final", type="output", config={"source": {"type": "node_output", "node_id": "planner", "port": "response"}})
+
+        state = OutputNodeExecutor().build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"__planner_response": "done"})
+
+        self.assertEqual(state["output"], "done")
+
     def test_runtime_events_are_appended(self) -> None:
         from contextos.runtime.graph.nodes.output import OutputNodeExecutor
         from contextos.runtime.graph.runtime_context import RuntimeContext

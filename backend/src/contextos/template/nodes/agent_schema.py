@@ -11,7 +11,7 @@ _STATE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def validate_agent_node_config(config: dict[str, Any], *, field_prefix: str, node_id: str | None = None) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
-    for field in ("model", "instruction", "output_key"):
+    for field in ("model", "instruction"):
         if not config.get(field):
             issues.append(
                 ValidationIssue(

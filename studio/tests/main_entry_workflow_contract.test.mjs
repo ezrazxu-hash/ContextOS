@@ -78,3 +78,25 @@ test("main Workflow node config panel uses compact sections and clear editor bor
   assert.match(styles, /\.node-config textarea:hover/s);
   assert.match(styles, /\.node-config textarea:focus/s);
 });
+
+test("main Workflow node config renderer applies visibility editability required and examples", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const renderer = source.slice(source.indexOf("function renderWorkflowNodeConfig"), source.indexOf("function renderSelectedToolMetadata"));
+  const listener = source.slice(source.indexOf("document.querySelectorAll(\"[data-workflow-config-path]\")"), source.indexOf("const workflowTestInput"));
+  const styles = source.slice(source.indexOf("function styleTag()"));
+
+  assert.match(source, /visibility:\s*"hidden"/);
+  assert.match(source, /editable:\s*false/);
+  assert.match(renderer, /workflow-config-required/);
+  assert.match(renderer, /workflow-config-label/);
+  assert.match(renderer, /aria-label="Required"/);
+  assert.match(renderer, />\*<\/span>/);
+  assert.doesNotMatch(renderer, />Required<\/span>/);
+  assert.match(styles, /\.workflow-config-label\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(styles, /\.workflow-config-required\s*\{[^}]*vertical-align:\s*super/s);
+  assert.match(styles, /\.workflow-config-required\s*\{[^}]*position:\s*relative/s);
+  assert.match(renderer, /placeholder="\$\{escapeAttr\(field\.example/);
+  assert.match(renderer, /readonly/);
+  assert.match(renderer, /disabled/);
+  assert.match(listener, /isEditableWorkflowConfigPath/);
+});

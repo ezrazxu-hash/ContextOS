@@ -1,10 +1,10 @@
 const NODE_DEFINITIONS = [
   definition("START", "Start", []),
   definition("END", "End", []),
-  definition("prompt", "PROMPT", ["role", "template", "variables", "input_mapping", "output_key"]),
-  definition("llm", "LLM", ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"]),
-  definition("tool", "Tool", ["tool_name", "args", "output_key"]),
-  definition("condition", "Condition", ["source", "operator", "value", "state_key"]),
+  definition("prompt", "PROMPT", ["role", "template", "variables", "input_mapping"]),
+  definition("llm", "LLM", ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping"]),
+  definition("tool", "Tool", ["tool_name", "args"]),
+  definition("condition", "Condition", ["source", "operator", "value"]),
   definition("output", "Output", ["source"]),
 ];
 

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
-
 from contextos.runtime.graph.nodes.protocol import NodeCallable
+from contextos.runtime.graph.nodes.references import resolve_reference, route_state_key
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.manifest.schema import NodeSpec
 
@@ -19,14 +18,13 @@ class ConditionNodeExecutor:
 
     def build(self, node: NodeSpec, runtime_context: RuntimeContext) -> NodeCallable:
         def execute(state: dict[str, object]) -> dict[str, object]:
-            source = str(node.config.get("source", ""))
-            found, source_value = _resolve_state_path(source, state)
+            source = node.config.get("source", "")
+            found, source_value = resolve_reference(source, state)
             if not found:
                 raise ConditionNodeExecutionError("condition.source_missing", node.id, f"Condition source not found: {source}")
 
             route = "true" if _evaluate(node, source_value) else "false"
-            state_key = str(node.config.get("state_key", "route"))
-            next_state = {**state, state_key: route}
+            next_state = {**state, route_state_key(node): route}
             _append_event(next_state, node, runtime_context, route)
             return next_state
 
@@ -63,22 +61,6 @@ def _evaluate(node: NodeSpec, source_value: object) -> bool:
         raise ConditionNodeExecutionError("condition.type_incompatible", node.id, f"Incompatible values for condition operator: {operator}") from error
 
     raise ConditionNodeExecutionError("condition.operator_unknown", node.id, f"Unknown condition operator: {operator}")
-
-
-def _resolve_state_path(expression: str, state: dict[str, object]) -> tuple[bool, object]:
-    if not expression.startswith("$state."):
-        return True, expression
-
-    value: Any = state
-    for part in expression.removeprefix("$state.").split("."):
-        if isinstance(value, dict) and part in value:
-            value = value[part]
-        elif hasattr(value, part):
-            value = getattr(value, part)
-        else:
-            return False, None
-    return True, value
-
 
 def _append_event(
     state: dict[str, object],

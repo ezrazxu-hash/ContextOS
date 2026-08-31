@@ -38,6 +38,41 @@ class LlmNodeExecutorTests(unittest.TestCase):
 
         self.assertEqual(state["planner_result"], "planned")
 
+    def test_response_is_written_to_generated_node_output_key_without_output_key(self) -> None:
+        from contextos.runtime.graph.nodes.llm import LLMNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+
+        node = NodeSpec(id="planner-1", type="llm", config={"model": "default", "prompt": "{{input}}"})
+
+        state = LLMNodeExecutor(FakeProvider("planned")).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))(
+            {"input": "hello"}
+        )
+
+        self.assertEqual(state["__planner_1_response"], "planned")
+
+    def test_prompt_mapping_accepts_structured_node_output_reference(self) -> None:
+        from contextos.runtime.graph.nodes.llm import LLMNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+
+        provider = FakeProvider("ok")
+        node = NodeSpec(
+            id="planner",
+            type="llm",
+            config={
+                "model": "default",
+                "prompt": "Previous: {{draft}}",
+                "input_mapping": {"draft": {"type": "node_output", "node_id": "compose-prompt", "port": "out"}},
+            },
+        )
+
+        LLMNodeExecutor(provider).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))(
+            {"__compose_prompt_out": "hello"}
+        )
+
+        self.assertEqual(provider.messages[0][0], {"role": "user", "content": "Previous: hello"})
+
     def test_runtime_events_are_appended_in_order(self) -> None:
         from contextos.runtime.graph.nodes.llm import LLMNodeExecutor
         from contextos.runtime.graph.runtime_context import RuntimeContext

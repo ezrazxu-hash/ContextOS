@@ -39,6 +39,38 @@ class ConditionNodeExecutorTests(unittest.TestCase):
 
         self.assertEqual(state["route"], "false")
 
+    def test_route_is_written_to_generated_state_key_without_state_key(self) -> None:
+        from contextos.runtime.graph.nodes.condition import ConditionNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+
+        node = NodeSpec(id="check-status", type="condition", config={"source": "$state.source", "operator": "eq", "value": "ok"})
+
+        state = ConditionNodeExecutor().build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"source": "ok"})
+
+        self.assertEqual(state["__check_status_route"], "true")
+
+    def test_source_accepts_structured_node_output_reference(self) -> None:
+        from contextos.runtime.graph.nodes.condition import ConditionNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+
+        node = NodeSpec(
+            id="check",
+            type="condition",
+            config={
+                "source": {"type": "node_output", "node_id": "lookup", "port": "result"},
+                "operator": "eq",
+                "value": "approved",
+            },
+        )
+
+        state = ConditionNodeExecutor().build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))(
+            {"__lookup_result": "approved"}
+        )
+
+        self.assertEqual(state["__check_route"], "true")
+
     def test_missing_source_raises_structured_error(self) -> None:
         from contextos.runtime.graph.nodes.condition import ConditionNodeExecutionError, ConditionNodeExecutor
         from contextos.runtime.graph.runtime_context import RuntimeContext

@@ -12,9 +12,16 @@ class LlmNodeSchemaTests(unittest.TestCase):
             [
                 ("llm_config.required", "graph.nodes[0].config.model"),
                 ("llm_config.required", "graph.nodes[0].config.prompt"),
-                ("llm_config.required", "graph.nodes[0].config.output_key"),
             ],
         )
+
+    def test_output_key_is_optional_for_system_generated_runtime_key(self) -> None:
+        from contextos.template.nodes.llm_schema import validate_llm_node_config
+
+        config = valid_config()
+        del config["output_key"]
+
+        self.assertEqual(validate_llm_node_config(config, field_prefix="config"), [])
 
     def test_legacy_prompt_template_is_still_accepted(self) -> None:
         from contextos.template.nodes.llm_schema import validate_llm_node_config

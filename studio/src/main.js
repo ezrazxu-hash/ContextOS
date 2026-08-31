@@ -22,14 +22,50 @@ let routeLoadVersion = 0;
 const demoWorkflowGraph = deserializeGraph(demoTemplateManifest);
 const WORKFLOW_NODE_TYPES = ["prompt", "llm", "tool", "condition", "output"];
 const WORKFLOW_CONFIG_FIELDS = {
-  prompt: ["role", "template", "variables", "input_mapping", "output_key"],
-  llm: ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"],
-  tool: ["tool_name", "args", "output_key"],
-  condition: ["source", "operator", "value", "state_key"],
-  output: ["source"],
+  prompt: [
+    workflowConfigField("role", "Role", { example: "user" }),
+    workflowConfigField("template", "Template", { required: true, example: "Summarize {{input}}" }),
+    workflowConfigField("variables", "Variables", { example: "{\"input\":\"string\"}" }),
+    workflowConfigField("input_mapping", "Input Mapping", { example: "{\"input\":\"$state.input\"}" }),
+    workflowConfigField("output_key", "Output Key", { visibility: "hidden", editable: false }),
+  ],
+  llm: [
+    workflowConfigField("provider", "Provider", { example: "openai-compatible" }),
+    workflowConfigField("model", "Model", { required: true, example: "default" }),
+    workflowConfigField("max_tokens", "Max Tokens", { example: "512" }),
+    workflowConfigField("system_prompt", "System Prompt", { example: "You are helpful." }),
+    workflowConfigField("prompt", "Prompt", { required: true, example: "Summarize {{input}}" }),
+    workflowConfigField("temperature", "Temperature", { example: "0.2" }),
+    workflowConfigField("input_mapping", "Input Mapping", { example: "{\"input\":\"$state.input\"}" }),
+    workflowConfigField("output_key", "Output Key", { visibility: "hidden", editable: false }),
+  ],
+  tool: [
+    workflowConfigField("tool_name", "Tool", { required: true, example: "context.echo" }),
+    workflowConfigField("args", "Arguments", { example: "{\"query\":\"$state.input\"}" }),
+    workflowConfigField("output_key", "Output Key", { visibility: "hidden", editable: false }),
+  ],
+  condition: [
+    workflowConfigField("source", "Source", { required: true, example: "$state.score" }),
+    workflowConfigField("operator", "Operator", { required: true, example: "gte" }),
+    workflowConfigField("value", "Value", { example: "80" }),
+    workflowConfigField("state_key", "State Key", { visibility: "hidden", editable: false }),
+  ],
+  output: [workflowConfigField("source", "Source", { required: true, example: "$state.answer" })],
 };
 const WORKFLOW_JSON_CONFIG_FIELDS = new Set(["variables", "input_mapping", "args"]);
 const WORKFLOW_NUMBER_CONFIG_FIELDS = new Set(["temperature", "max_tokens"]);
+
+function workflowConfigField(path, label, options = {}) {
+  return {
+    path,
+    label,
+    required: false,
+    visibility: "visible",
+    editable: true,
+    example: "",
+    ...options,
+  };
+}
 
 const state = {
   config: { apiBaseUrl: "http://localhost:18000", sseBaseUrl: "http://localhost:18000", mockRuntime: true },
@@ -563,17 +599,24 @@ function renderWorkflowRouteSelect(sourceId) {
 
 function renderWorkflowNodeConfig(node) {
   if (!node) return "";
-  const fields = WORKFLOW_CONFIG_FIELDS[node.type] ?? [];
+  const fields = workflowVisibleConfigFields(node.type);
   if (!fields.length) return `<p class="muted">No configurable fields.</p>`;
-  return fields.map((path) => renderWorkflowConfigField(node, path)).join("");
+  return fields.map((field) => renderWorkflowConfigField(node, field)).join("");
 }
 
-function renderWorkflowConfigField(node, path) {
+function renderWorkflowConfigField(node, field) {
+  const path = field.path;
   const value = workflowConfigInputValue(node.config?.[path], path);
+  const requiredLabel = field.required ? ` <span class="workflow-config-required" aria-label="Required">*</span>` : "";
+  const label = `<span class="workflow-config-label">${escapeHtml(workflowConfigLabel(field))}${requiredLabel}</span>`;
+  const placeholder = ` placeholder="${escapeAttr(field.example ?? "")}"`;
+  const required = field.required ? " required" : "";
+  const readonly = field.editable === false ? " readonly" : "";
+  const disabled = field.editable === false ? " disabled" : "";
   if (node.type === "tool" && path === "tool_name" && state.workflowToolCatalog.length) {
     return `
-      <label class="config-field">${workflowConfigLabel(path)}
-        <select data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}">
+      <label class="config-field">${label}
+        <select data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}"${required}${disabled}>
           <option value="">Select tool</option>
           ${state.workflowToolCatalog.map((tool) => `<option value="${escapeAttr(tool.id)}" ${tool.id === value ? "selected" : ""}>${escapeHtml(tool.name || tool.id)}</option>`).join("")}
         </select>
@@ -584,8 +627,8 @@ function renderWorkflowConfigField(node, path) {
   if (path === "operator") {
     const operators = ["eq", "ne", "gt", "gte", "lt", "lte", "contains", "exists", "is_empty", "is_true", "is_false"];
     return `
-      <label class="config-field">${workflowConfigLabel(path)}
-        <select data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}">
+      <label class="config-field">${label}
+        <select data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}"${required}${disabled}>
           <option value="">Select operator</option>
           ${operators.map((operator) => `<option value="${operator}" ${operator === value ? "selected" : ""}>${operator}</option>`).join("")}
         </select>
@@ -594,11 +637,11 @@ function renderWorkflowConfigField(node, path) {
   }
   const multiline = WORKFLOW_JSON_CONFIG_FIELDS.has(path) || path === "template" || path === "prompt" || path === "system_prompt";
   if (multiline) {
-    return `<label class="config-field config-field-wide">${workflowConfigLabel(path)}<textarea data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" rows="3">${escapeHtml(value)}</textarea></label>`;
+    return `<label class="config-field config-field-wide">${label}<textarea data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" rows="3"${placeholder}${required}${readonly}>${escapeHtml(value)}</textarea></label>`;
   }
   const type = WORKFLOW_NUMBER_CONFIG_FIELDS.has(path) ? "number" : "text";
   const step = path === "temperature" ? ` step="0.1" min="0" max="2"` : "";
-  return `<label class="config-field">${workflowConfigLabel(path)}<input type="${type}"${step} data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" value="${escapeAttr(value)}" /></label>`;
+  return `<label class="config-field">${label}<input type="${type}"${step} data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" value="${escapeAttr(value)}"${placeholder}${required}${readonly} /></label>`;
 }
 
 function renderSelectedToolMetadata(toolId) {
@@ -713,8 +756,17 @@ function workflowTopologyText(preview) {
   return "START\n↓\nEND";
 }
 
-function workflowConfigLabel(path) {
-  return path.split("_").map(titleCase).join(" ");
+function workflowVisibleConfigFields(nodeType) {
+  return (WORKFLOW_CONFIG_FIELDS[nodeType] ?? []).filter((field) => field.visibility !== "hidden");
+}
+
+function isEditableWorkflowConfigPath(nodeType, path) {
+  return workflowVisibleConfigFields(nodeType).some((field) => field.path === path && field.editable !== false);
+}
+
+function workflowConfigLabel(field) {
+  const path = typeof field === "string" ? field : field.path;
+  return (typeof field === "string" ? "" : field.label) || path.split("_").map(titleCase).join(" ");
 }
 
 function workflowConfigInputValue(value, path) {
@@ -896,7 +948,10 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-workflow-config-path]").forEach((element) => {
     const update = () => {
-      updateSelectedWorkflowConfig(element.dataset.workflowConfigPath, element.value);
+      const path = element.dataset.workflowConfigPath;
+      const node = state.workflowNodes.find((item) => item.id === state.workflowSelectedNodeId);
+      if (!isEditableWorkflowConfigPath(node?.type, path)) return;
+      updateSelectedWorkflowConfig(path, element.value);
     };
     element.addEventListener("input", update);
     element.addEventListener("change", update);
@@ -1742,6 +1797,7 @@ function createWorkflowDraft() {
 function updateSelectedWorkflowConfig(path, rawValue) {
   const node = state.workflowNodes.find((item) => item.id === state.workflowSelectedNodeId);
   if (!node || !path) return;
+  if (!isEditableWorkflowConfigPath(node.type, path)) return;
   const value = parseWorkflowConfigValue(path, rawValue);
   node.config = { ...(node.config ?? {}) };
   if (value === undefined || value === "") {
@@ -2854,6 +2910,9 @@ function styleTag() {
     .node-config textarea { min-height: 78px; max-height: 220px; padding: 8px 9px; outline: 0; resize: vertical; }
     .node-config input:hover, .node-config select:hover, .node-config textarea:hover { border-color: #8ea1bb; background: #fff; }
     .node-config input:focus, .node-config select:focus, .node-config textarea:focus { border-color: var(--accent); outline: 2px solid rgba(37, 99, 235, .18); outline-offset: 1px; box-shadow: 0 0 0 1px rgba(37, 99, 235, .12); }
+    .node-config input[readonly], .node-config textarea[readonly], .node-config select:disabled { cursor: not-allowed; opacity: .68; background: #f1f5f9; }
+    .workflow-config-label { display: inline-flex; align-items: flex-start; width: max-content; line-height: 1.2; }
+    .workflow-config-required { position: relative; top: -.2em; display: inline-flex; align-items: center; margin-left: 2px; color: #b42318; font-size: 11px; font-weight: 800; line-height: 1; vertical-align: super; }
     .danger-zone { background: #fffafa; border-color: #f3c6c2; }
     .danger-zone h2 { color: #9f2f27; }
     .subtle-danger { justify-self: start; padding: 6px 9px; min-height: 32px; background: #fff; border-color: #f3b8b2; color: var(--error); }

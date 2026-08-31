@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from contextos.runtime.graph.nodes.protocol import NodeCallable
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.manifest.schema import NodeSpec
 from contextos.tool.executor_registry import ToolExecutorError, ToolExecutorRegistry
@@ -37,8 +37,7 @@ class ToolNodeExecutor:
             except Exception as error:
                 raise ToolNodeExecutionError("tool.execution_failed", node.id, tool_name, str(error)) from error
 
-            output_key = str(node.config.get("output_key", "tool_result"))
-            next_state[output_key] = result
+            next_state[output_state_key(node)] = result
             _append_event(next_state, "tool_result", node, runtime_context, tool_name, {"result": result})
             return next_state
 
@@ -48,20 +47,7 @@ class ToolNodeExecutor:
 def _mapped_args(mapping: object, state: dict[str, object]) -> dict[str, object]:
     if not isinstance(mapping, dict):
         return {}
-    return {str(key): _resolve_state_path(value, state) for key, value in mapping.items()}
-
-
-def _resolve_state_path(expression: object, state: dict[str, object]) -> object:
-    if not isinstance(expression, str) or not expression.startswith("$state."):
-        return expression
-
-    value: Any = state
-    for part in expression.removeprefix("$state.").split("."):
-        if isinstance(value, dict):
-            value = value.get(part)
-        else:
-            value = getattr(value, part, None)
-    return value
+    return {str(key): resolve_reference_value(value, state) for key, value in mapping.items()}
 
 
 def _append_event(

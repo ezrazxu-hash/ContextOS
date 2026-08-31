@@ -144,7 +144,7 @@ class ManifestValidatorTests(unittest.TestCase):
         manifest = valid_manifest_with(
             graph={
                 "state_schema": "default_chat_state",
-                "nodes": [{"id": "planner", "type": "llm", "config": {"model": "default", "prompt": "{{input}}"}}],
+                "nodes": [{"id": "planner", "type": "llm", "config": {"model": "default"}}],
                 "edges": [{"from": "START", "to": "planner"}, {"from": "planner", "to": "END"}],
             }
         )
@@ -154,7 +154,47 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertEqual(result.errors[0].code, "llm_config.required")
         self.assertEqual(result.errors[0].node_id, "planner")
-        self.assertEqual(result.errors[0].field, "graph.nodes[0].config.output_key")
+        self.assertEqual(result.errors[0].field, "graph.nodes[0].config.prompt")
+
+    def test_prompt_llm_and_tool_output_keys_are_not_required(self) -> None:
+        from contextos.template.validator.validator import ManifestValidator
+        from contextos.tool.registry.metadata import ToolMetadata
+        from contextos.tool.registry.registry import ToolRegistry
+
+        extension_registry, _ = create_registries()
+        tool_registry = ToolRegistry(
+            [
+                ToolMetadata(
+                    tool_id="web_search",
+                    name="Web Search",
+                    description="Searches",
+                    input_schema={},
+                    output_schema={},
+                )
+            ]
+        )
+        manifest = valid_manifest_with(
+            graph={
+                "state_schema": "default_chat_state",
+                "nodes": [
+                    {"id": "prompt", "type": "prompt", "config": {"template": "{{input}}"}},
+                    {"id": "planner", "type": "llm", "config": {"model": "default", "prompt": "{{input}}"}},
+                    {"id": "lookup", "type": "tool", "config": {"tool_name": "web_search"}},
+                    {"id": "final", "type": "output", "config": {"source": "$state.answer"}},
+                ],
+                "edges": [
+                    {"from": "START", "to": "prompt"},
+                    {"from": "prompt", "to": "planner"},
+                    {"from": "planner", "to": "lookup"},
+                    {"from": "lookup", "to": "final"},
+                    {"from": "final", "to": "END"},
+                ],
+            }
+        )
+
+        result = ManifestValidator(extension_registry, tool_registry).validate_result(manifest)
+
+        self.assertTrue(result.valid, [error.to_dict() for error in result.errors])
 
     def test_start_and_end_cannot_be_manifest_nodes(self) -> None:
         from contextos.template.validator.validator import ManifestValidator

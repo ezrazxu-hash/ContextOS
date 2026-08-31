@@ -68,6 +68,155 @@ test("UI05-T01-TC02: dirty workflow protects refresh and preserves node drafts a
   assert.equal(view.nodeConfig.hasUncommittedChanges, true);
 });
 
+test("Node config hides internal fields but preserves loaded values when saving", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const draftManifest = {
+    schema_version: "1.0",
+    template: { id: "research-agent", name: "Research Agent", version: "draft" },
+    runtime: {
+      nodes: [
+        {
+          id: "planner",
+          type: "llm",
+          config: { model: "default", prompt: "{{input}}", output_key: "legacy_answer" },
+        },
+        { id: "final", type: "output", config: { source: "$state.legacy_answer" } },
+      ],
+      edges: [
+        { source: "START", target: "planner" },
+        { source: "planner", target: "final" },
+        { source: "final", target: "END" },
+      ],
+    },
+    ui: { nodes: {}, viewport: {} },
+  };
+  let savedManifest = null;
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+    apiClient: {
+      async fetchAgentDraft(agentId) {
+        return { agent_id: agentId, draft_manifest: draftManifest };
+      },
+      async saveAgentDraft(agentId, manifest) {
+        savedManifest = manifest;
+        return { status: "saved", agent_id: agentId, manifest };
+      },
+    },
+  });
+
+  await workbench.loadDraft("research-agent");
+  workbench.selectNode("planner");
+  const fields = workbench.view().nodeConfig.sections.flatMap((section) => section.fields.map((field) => field.path));
+  workbench.updateNodeConfigDraft({ output_key: "overwritten", model: "fast-model" });
+  await workbench.saveDraft({ id: "research-agent", name: "Research Agent", version: "draft" });
+
+  assert.ok(!fields.includes("output_key"));
+  assert.equal(savedManifest.runtime.nodes[0].config.output_key, "legacy_answer");
+  assert.equal(savedManifest.runtime.nodes[0].config.model, "fast-model");
+});
+
+test("Node config exposes readonly identity fields and blocks readonly patch writes", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
+  workbench.selectNode(llm.id);
+  const before = workbench.serializeManifest();
+  const identity = workbench.view().nodeConfig.identity;
+  workbench.updateNodeConfigDraft({ id: "changed", type: "tool" });
+
+  assert.deepEqual(
+    identity.map((field) => [field.path, field.value, field.readonly, field.editable]),
+    [
+      ["id", llm.id, true, false],
+      ["type", "llm", true, false],
+    ],
+  );
+  assert.deepEqual(workbench.serializeManifest(), before);
+  assert.equal(workbench.view().nodeConfig.hasUncommittedChanges, false);
+});
+
+test("Node config editable fields include required marker and examples", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const llm = workbench.dropLibraryNode("llm", { x: 100, y: 100 }).node;
+  workbench.selectNode(llm.id);
+  workbench.updateNodeConfigDraft({ model: "default", prompt: "Summarize {{input}}" });
+  const fields = Object.fromEntries(
+    workbench.view().nodeConfig.sections.flatMap((section) => section.fields.map((field) => [field.path, field])),
+  );
+
+  assert.equal(fields.model.required, true);
+  assert.equal(fields.model.requiredLabel, "*");
+  assert.equal(fields.model.editable, true);
+  assert.equal(fields.model.example, "default");
+  assert.equal(fields.prompt.required, true);
+  assert.equal(fields.prompt.example, "Summarize {{input}}");
+  assert.equal(fields.temperature.required, false);
+  assert.equal(fields.temperature.example, "0.2");
+  assert.equal(fields.model.value, "default");
+  assert.equal(fields.prompt.value, "Summarize {{input}}");
+});
+
+test("Node config field state and values survive draft reload", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const draftManifest = {
+    schema_version: "1.0",
+    template: { id: "research-agent", name: "Research Agent", version: "draft" },
+    runtime: {
+      nodes: [
+        {
+          id: "lookup",
+          type: "tool",
+          config: { tool_name: "context.echo", args: { query: "$state.input" }, output_key: "legacy_tool_result" },
+        },
+      ],
+      edges: [
+        { source: "START", target: "lookup" },
+        { source: "lookup", target: "END" },
+      ],
+    },
+    ui: { nodes: { lookup: { position: { x: 100, y: 120 } } }, viewport: {} },
+  };
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+    apiClient: {
+      async fetchAgentDraft(agentId) {
+        return { agent_id: agentId, draft_manifest: draftManifest };
+      },
+    },
+  });
+
+  await workbench.loadDraft("research-agent");
+  workbench.selectNode("lookup");
+  const config = workbench.view().nodeConfig;
+  const fields = Object.fromEntries(config.sections.flatMap((section) => section.fields.map((field) => [field.path, field])));
+
+  assert.deepEqual(config.identity.map((field) => [field.path, field.value, field.readonly]), [
+    ["id", "lookup", true],
+    ["type", "tool", true],
+  ]);
+  assert.equal(fields.tool_name.value, "context.echo");
+  assert.equal(fields.tool_name.required, true);
+  assert.equal(fields.tool_name.editable, true);
+  assert.equal(fields.tool_name.example, "context.echo");
+  assert.ok(!Object.keys(fields).includes("output_key"));
+  assert.equal(workbench.serializeManifest().runtime.nodes[0].config.output_key, "legacy_tool_result");
+});
+
 test("UI05-T01-TC03: successful save clears dirty workflow state", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
@@ -608,11 +757,11 @@ test("T85 Prompt node config exposes template assembly fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["role", "template", "variables", "input_mapping", "output_key"],
+    ["role", "template", "variables", "input_mapping"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
-    ["template", "output_key"],
+    ["template"],
   );
 });
 
@@ -632,10 +781,7 @@ test("T85 Prompt node local config validation maps required fields to controls",
   assert.equal(validation.valid, false);
   assert.deepEqual(
     validation.errors.map((error) => error.fieldPath),
-    [
-      `runtime.nodes[${prompt.id}].config.template`,
-      `runtime.nodes[${prompt.id}].config.output_key`,
-    ],
+    [`runtime.nodes[${prompt.id}].config.template`],
   );
 });
 
@@ -658,11 +804,11 @@ test("T84 LLM node config exposes backend executable fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping", "output_key"],
+    ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
-    ["model", "prompt", "output_key"],
+    ["model", "prompt"],
   );
 });
 
@@ -685,7 +831,6 @@ test("T84 LLM node local config validation maps required fields to controls", as
     [
       `runtime.nodes[${llm.id}].config.model`,
       `runtime.nodes[${llm.id}].config.prompt`,
-      `runtime.nodes[${llm.id}].config.output_key`,
     ],
   );
 });
@@ -703,7 +848,7 @@ test("UI05-T05-TC02: Tool node config omits model-only fields", async () => {
 
   const paths = workbench.view().nodeConfig.sections.flatMap((section) => section.fields.map((field) => field.path));
 
-  assert.deepEqual(paths, ["tool_name", "args", "output_key"]);
+  assert.deepEqual(paths, ["tool_name", "args"]);
   assert.ok(!paths.includes("model"));
   assert.ok(!paths.includes("system_prompt"));
 });
@@ -727,11 +872,11 @@ test("T86 Tool node config exposes executable tool fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["tool_name", "args", "output_key"],
+    ["tool_name", "args"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
-    ["tool_name", "output_key"],
+    ["tool_name"],
   );
 });
 
@@ -754,7 +899,7 @@ test("T87 Condition node config exposes branch condition fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["source", "operator", "value", "state_key"],
+    ["source", "operator", "value"],
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
@@ -1212,9 +1357,11 @@ test("T90 Workflow node config schemas expose executable business fields", async
 
   assert.ok(llmFields.includes("provider"));
   assert.ok(llmFields.includes("max_tokens"));
+  assert.ok(!llmFields.includes("output_key"));
   assert.ok(promptFields.includes("role"));
   assert.ok(promptFields.includes("variables"));
-  assert.ok(conditionFields.includes("state_key"));
+  assert.ok(!promptFields.includes("output_key"));
+  assert.ok(!conditionFields.includes("state_key"));
 });
 
 test("T90 Tool catalog loads registered tool metadata for Tool node config", async () => {

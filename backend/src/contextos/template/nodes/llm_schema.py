@@ -29,16 +29,6 @@ def validate_llm_node_config(config: dict[str, Any], *, field_prefix: str, node_
                 node_id=node_id,
             )
         )
-    if not config.get("output_key"):
-        issues.append(
-            ValidationIssue(
-                code="llm_config.required",
-                field=f"{field_prefix}.output_key",
-                message="LLM node config field is required: output_key",
-                node_id=node_id,
-            )
-        )
-
     temperature = config.get("temperature")
     if temperature is not None and not _valid_temperature(temperature):
         issues.append(

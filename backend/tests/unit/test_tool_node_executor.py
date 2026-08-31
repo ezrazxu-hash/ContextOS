@@ -30,6 +30,33 @@ class ToolNodeExecutorTests(unittest.TestCase):
 
         self.assertEqual(calls, [{"query": "mars", "limit": 3}])
 
+    def test_args_accept_structured_node_output_reference(self) -> None:
+        from contextos.runtime.graph.nodes.tool import ToolNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+        from contextos.tool.executor import ToolExecutor
+        from contextos.tool.executor_registry import ToolExecutorRegistry
+
+        calls = []
+
+        async def run(args):
+            calls.append(args)
+            return {"ok": True}
+
+        registry = ToolExecutorRegistry([ToolExecutor("search.lookup", run)])
+        node = NodeSpec(
+            id="lookup",
+            type="tool",
+            config={
+                "tool_name": "search.lookup",
+                "args": {"query": {"type": "node_output", "node_id": "planner", "port": "response"}},
+            },
+        )
+
+        ToolNodeExecutor(registry).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"__planner_response": "mars"})
+
+        self.assertEqual(calls, [{"query": "mars"}])
+
     def test_tool_call_and_result_events_are_emitted(self) -> None:
         from contextos.runtime.graph.nodes.tool import ToolNodeExecutor
         from contextos.runtime.graph.runtime_context import RuntimeContext
@@ -65,6 +92,23 @@ class ToolNodeExecutorTests(unittest.TestCase):
         state = ToolNodeExecutor(registry).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"answer": "mars"})
 
         self.assertEqual(state["lookup_result"], {"value": "mars"})
+
+    def test_result_is_written_to_generated_node_output_key_without_output_key(self) -> None:
+        from contextos.runtime.graph.nodes.tool import ToolNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+        from contextos.tool.executor import ToolExecutor
+        from contextos.tool.executor_registry import ToolExecutorRegistry
+
+        async def run(args):
+            return {"value": args["query"]}
+
+        registry = ToolExecutorRegistry([ToolExecutor("search.lookup", run)])
+        node = NodeSpec(id="lookup-tool", type="tool", config={"tool_name": "search.lookup", "args": {"query": "$state.answer"}})
+
+        state = ToolNodeExecutor(registry).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"answer": "mars"})
+
+        self.assertEqual(state["__lookup_tool_result"], {"value": "mars"})
 
     def test_tool_error_becomes_structured_node_error(self) -> None:
         from contextos.runtime.graph.nodes.tool import ToolNodeExecutionError, ToolNodeExecutor

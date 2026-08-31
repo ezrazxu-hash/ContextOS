@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from contextos.runtime.graph.nodes.registry import NodeExecutorRegistry
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference, route_state_key
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.compiler.compile_service import GraphCompileError, GraphCompileService
 from contextos.template.manifest.schema import NodeSpec, TemplateManifest
@@ -55,15 +56,13 @@ class _DryRunExecutor:
 
         def run(state: dict[str, object]) -> dict[str, object]:
             update = {**state, "visited_nodes": [*state.get("visited_nodes", []), node.id]}
-            output_key = node.config.get("output_key")
-            if output_key is not None:
+            if node.type in {"prompt", "llm", "tool"} or node.config.get("output_key") is not None:
                 value = _dry_value(node, update)
-                update[str(output_key)] = value
+                update[output_state_key(node)] = value
             if node.type == "output":
                 update["output"] = _dry_value(node, update)
             if node.type == "condition":
-                state_key = str(node.config.get("state_key", "route"))
-                update[state_key] = "true"
+                update[route_state_key(node)] = "true"
             return update
 
         return run
@@ -73,22 +72,10 @@ def _dry_value(node: NodeSpec, state: dict[str, object]) -> object:
     if node.type == "tool":
         return {"dry_run": node.id}
     if node.type == "output":
-        source = str(node.config.get("source", f"dry_run:{node.id}"))
-        if source.startswith("$state."):
-            found, value = _resolve_state_path(source, state)
-            return value if found else source
-        return source
+        source = node.config.get("source", f"dry_run:{node.id}")
+        found, value = resolve_reference(source, state)
+        return value if found else source
     return str(node.config.get("output", f"dry_run:{node.id}"))
-
-
-def _resolve_state_path(expression: str, state: dict[str, object]) -> tuple[bool, object]:
-    value: object = state
-    for part in expression.removeprefix("$state.").split("."):
-        if isinstance(value, dict) and part in value:
-            value = value[part]
-        else:
-            return False, None
-    return True, value
 
 
 def _dry_run_registry() -> NodeExecutorRegistry:

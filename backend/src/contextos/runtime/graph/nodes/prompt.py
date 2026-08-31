@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any
-
 from contextos.runtime.graph.nodes.protocol import NodeCallable
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.manifest.schema import NodeSpec
 
@@ -17,7 +16,7 @@ class PromptNodeExecutor:
             _append_event(next_state, "node_started", node, runtime_context)
             values = _mapped_values(node.config.get("input_mapping", {}), state)
             rendered = _render_template(str(node.config.get("template", "")), values)
-            next_state[str(node.config.get("output_key", "prompt"))] = rendered
+            next_state[output_state_key(node)] = rendered
             _append_event(next_state, "node_finished", node, runtime_context)
             return next_state
 
@@ -27,20 +26,7 @@ class PromptNodeExecutor:
 def _mapped_values(mapping: object, state: dict[str, object]) -> dict[str, object]:
     if not isinstance(mapping, dict):
         return {}
-    return {str(key): _resolve_state_path(str(value), state) for key, value in mapping.items()}
-
-
-def _resolve_state_path(expression: str, state: dict[str, object]) -> object:
-    if not expression.startswith("$state."):
-        return expression
-
-    value: Any = state
-    for part in expression.removeprefix("$state.").split("."):
-        if isinstance(value, dict):
-            value = value.get(part)
-        else:
-            value = getattr(value, part, None)
-    return value
+    return {str(key): resolve_reference_value(value, state) for key, value in mapping.items()}
 
 
 def _render_template(template: str, values: dict[str, object]) -> str:

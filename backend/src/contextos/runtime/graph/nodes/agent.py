@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
-
 from contextos.provider.base.chat_client import ChatCompletionClient, LlmProviderError
 from contextos.runtime.graph.nodes.protocol import NodeCallable
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.manifest.schema import NodeSpec
 
@@ -33,8 +32,7 @@ class AgentNodeExecutor:
             except LlmProviderError as error:
                 raise AgentNodeExecutionError("agent.request_failed", node.id, str(error)) from error
 
-            output_key = str(node.config.get("output_key", "output"))
-            next_state[output_key] = content
+            next_state[output_state_key(node)] = content
             _append_event(next_state, "token", node, runtime_context, {"content": content})
             _append_event(next_state, "node_finished", node, runtime_context)
             return next_state
@@ -53,7 +51,7 @@ def _reject_unsupported_tool_loop(node: NodeSpec) -> None:
 
 def _messages_for_agent(node: NodeSpec, state: dict[str, object], runtime_context: RuntimeContext) -> list[dict[str, str]]:
     instruction = str(node.config.get("instruction", ""))
-    user_input = _resolve_state_path(str(node.config.get("input", "$state.input")), state)
+    user_input = resolve_reference_value(node.config.get("input", "$state.input"), state)
     context_lines = _context_lines(runtime_context)
     user_content = "\n".join([*context_lines, str(user_input)])
     return [
@@ -68,19 +66,6 @@ def _context_lines(runtime_context: RuntimeContext) -> list[str]:
         return []
     context = context_api.build_context(runtime_context.session_id, runtime_context.timeline_id)
     return [str(item) for item in context]
-
-
-def _resolve_state_path(expression: str, state: dict[str, object]) -> object:
-    if not expression.startswith("$state."):
-        return expression
-
-    value: Any = state
-    for part in expression.removeprefix("$state.").split("."):
-        if isinstance(value, dict):
-            value = value.get(part)
-        else:
-            value = getattr(value, part, None)
-    return value
 
 
 def _append_event(

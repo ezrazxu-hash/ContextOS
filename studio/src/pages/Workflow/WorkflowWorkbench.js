@@ -19,16 +19,16 @@ const NODE_CONFIG_SCHEMAS = {
     {
       id: "template",
       fields: [
-        { path: "role", label: "Role" },
-        { path: "template", label: "Template", required: true },
-        { path: "variables", label: "Variables" },
+        { path: "role", label: "Role", example: "user" },
+        { path: "template", label: "Template", required: true, example: "Summarize {{input}}" },
+        { path: "variables", label: "Variables", example: "{\"input\":\"string\"}" },
       ],
     },
     {
       id: "io",
       fields: [
-        { path: "input_mapping", label: "Input Mapping" },
-        { path: "output_key", label: "Output Key", required: true },
+        { path: "input_mapping", label: "Input Mapping", example: "{\"input\":\"$state.input\"}" },
+        { path: "output_key", label: "Output Key", visibility: "hidden", editable: false },
       ],
     },
   ],
@@ -36,34 +36,34 @@ const NODE_CONFIG_SCHEMAS = {
     {
       id: "model",
       fields: [
-        { path: "provider", label: "Provider" },
-        { path: "model", label: "Model", required: true },
-        { path: "max_tokens", label: "Max Tokens" },
+        { path: "provider", label: "Provider", example: "openai-compatible" },
+        { path: "model", label: "Model", required: true, example: "default" },
+        { path: "max_tokens", label: "Max Tokens", example: "512" },
       ],
     },
     {
       id: "prompt",
       fields: [
-        { path: "system_prompt", label: "System Prompt" },
-        { path: "prompt", label: "Prompt", required: true },
-        { path: "temperature", label: "Temperature" },
+        { path: "system_prompt", label: "System Prompt", example: "You are helpful." },
+        { path: "prompt", label: "Prompt", required: true, example: "Summarize {{input}}" },
+        { path: "temperature", label: "Temperature", example: "0.2" },
       ],
     },
     {
       id: "io",
       fields: [
-        { path: "input_mapping", label: "Input Mapping" },
-        { path: "output_key", label: "Output Key", required: true },
+        { path: "input_mapping", label: "Input Mapping", example: "{\"input\":\"$state.input\"}" },
+        { path: "output_key", label: "Output Key", visibility: "hidden", editable: false },
       ],
     },
   ],
   tool: [
-    { id: "tool", fields: [{ path: "tool_name", label: "Tool", required: true }] },
+    { id: "tool", fields: [{ path: "tool_name", label: "Tool", required: true, example: "context.echo" }] },
     {
       id: "io",
       fields: [
-        { path: "args", label: "Arguments" },
-        { path: "output_key", label: "Output Key", required: true },
+        { path: "args", label: "Arguments", example: "{\"query\":\"$state.input\"}" },
+        { path: "output_key", label: "Output Key", visibility: "hidden", editable: false },
       ],
     },
   ],
@@ -71,14 +71,14 @@ const NODE_CONFIG_SCHEMAS = {
     {
       id: "condition",
       fields: [
-        { path: "source", label: "Source", required: true },
-        { path: "operator", label: "Operator", required: true },
-        { path: "value", label: "Value" },
-        { path: "state_key", label: "State Key" },
+        { path: "source", label: "Source", required: true, example: "$state.score" },
+        { path: "operator", label: "Operator", required: true, example: "gte" },
+        { path: "value", label: "Value", example: "80" },
+        { path: "state_key", label: "State Key", visibility: "hidden", editable: false },
       ],
     },
   ],
-  output: [{ id: "output", fields: [{ path: "source", label: "Source", required: true }] }],
+  output: [{ id: "output", fields: [{ path: "source", label: "Source", required: true, example: "$state.answer" }] }],
 };
 const FALLBACK_PLATFORM = {
   readUiState() {
@@ -423,8 +423,14 @@ export function createWorkflowWorkbench(options = {}) {
       if (!state.selectedNodeId) {
         throw new Error("Select a workflow node before editing config");
       }
-      const current = configDrafts.get(state.selectedNodeId) ?? selectedNodeConfig(builder.view(), state.selectedNodeId);
-      configDrafts.set(state.selectedNodeId, { ...current, ...patch });
+      const workflowView = builder.view();
+      const node = selectedNode(workflowView, state.selectedNodeId);
+      const editablePatch = editableConfigPatch(node, patch);
+      const current = configDrafts.get(state.selectedNodeId) ?? selectedNodeConfig(workflowView, state.selectedNodeId);
+      if (!Object.keys(editablePatch).some((path) => !valuesEquivalent(current[path], editablePatch[path]))) {
+        return this.view();
+      }
+      configDrafts.set(state.selectedNodeId, { ...current, ...editablePatch });
       draftDirty.add(state.selectedNodeId);
       markDirty();
       return this.view();
@@ -643,6 +649,7 @@ export function createWorkflowWorkbench(options = {}) {
     },
     async save(template) {
       state.status = "saving";
+      flushConfigDrafts(builder, configDrafts, draftDirty);
       if (apiClient.saveAgentDraft) {
         const manifest = runtimeManifest(builder.view(), template);
         try {
@@ -655,6 +662,8 @@ export function createWorkflowWorkbench(options = {}) {
             }
           }
           const result = await apiClient.saveAgentDraft(template.id, manifest);
+          configDrafts.clear();
+          draftDirty.clear();
           state.dirty = false;
           state.status = "saved";
           return result?.status ? result : { status: "saved", manifest };
@@ -675,6 +684,8 @@ export function createWorkflowWorkbench(options = {}) {
         return { status: "failed", error };
       }
       if (result.status === "saved") {
+        configDrafts.clear();
+        draftDirty.clear();
         state.dirty = false;
         state.status = "saved";
       } else {
@@ -747,6 +758,7 @@ export function createWorkflowWorkbench(options = {}) {
           selectedNodeId: state.selectedNodeId,
           draft: selectedDraft,
           schemaDriven: true,
+          identity: nodeIdentityFields(selected),
           actions: {
             delete: {
               label: "Delete Node",
@@ -779,6 +791,79 @@ export function createWorkflowWorkbench(options = {}) {
 
 function selectedNodeConfig(workflowView, nodeId) {
   return { ...(workflowView.nodes.find((node) => node.id === nodeId)?.config ?? {}) };
+}
+
+function nodeIdentityFields(node) {
+  if (!node) {
+    return [];
+  }
+  return [
+    readonlyField("id", "ID", node.id),
+    readonlyField("type", "Type", node.type),
+  ];
+}
+
+function readonlyField(path, label, value) {
+  return {
+    path,
+    label,
+    value,
+    visibility: "visible",
+    editable: false,
+    readonly: true,
+    disabled: true,
+    required: false,
+    error: null,
+  };
+}
+
+function editableConfigPatch(node, patch) {
+  if (!node || !patch || typeof patch !== "object") {
+    return {};
+  }
+  const editablePaths = editableConfigPaths(node.type);
+  return Object.fromEntries(Object.entries(patch).filter(([path]) => editablePaths.has(path)));
+}
+
+function editableConfigPaths(nodeType) {
+  return new Set(configFields(nodeType).filter(isEditableConfigField).map((field) => field.path));
+}
+
+function configFields(nodeType) {
+  return (NODE_CONFIG_SCHEMAS[nodeType] ?? []).flatMap((section) => section.fields);
+}
+
+function visibleConfigFields(section) {
+  return section.fields.filter((field) => field.visibility !== "hidden");
+}
+
+function isEditableConfigField(field) {
+  return field.visibility !== "hidden" && field.editable !== false;
+}
+
+function fieldViewDefaults(field) {
+  const editable = isEditableConfigField(field);
+  return {
+    visibility: field.visibility ?? "visible",
+    editable,
+    readonly: !editable,
+    disabled: !editable,
+    example: field.example ?? "",
+    requiredLabel: field.required ? "*" : "",
+  };
+}
+
+function valuesEquivalent(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function flushConfigDrafts(builder, configDrafts, draftDirty) {
+  for (const nodeId of draftDirty) {
+    const draft = configDrafts.get(nodeId);
+    if (draft) {
+      builder.updateNodeConfig(nodeId, draft);
+    }
+  }
 }
 
 function canvasViewportView(viewport) {
@@ -848,8 +933,8 @@ function nodeConfigSections(node, draft, fieldErrors, state) {
   }
   return (NODE_CONFIG_SCHEMAS[node.type] ?? []).map((section) => ({
     id: section.id,
-    fields: section.fields.map((field) => nodeConfigFieldView(field, draft, fieldErrors, state)),
-  }));
+    fields: visibleConfigFields(section).map((field) => nodeConfigFieldView(field, draft, fieldErrors, state)),
+  })).filter((section) => section.fields.length > 0);
 }
 
 function nodeConfigFieldView(field, draft, fieldErrors, state) {
@@ -857,6 +942,7 @@ function nodeConfigFieldView(field, draft, fieldErrors, state) {
     path: field.path,
     label: field.label,
     required: Boolean(field.required),
+    ...fieldViewDefaults(field),
     value: valueAtPath(draft, field.path),
     error: fieldErrors.get(field.path) ?? null,
   };
@@ -877,7 +963,7 @@ function validateNodeConfig(node, draft) {
   }
   return (NODE_CONFIG_SCHEMAS[node.type] ?? [])
     .flatMap((section) => {
-      return section.fields
+      return visibleConfigFields(section)
         .filter((field) => field.required && isBlank(valueAtPath(draft, field.path)))
         .map((field) => ({
           sectionId: section.id,

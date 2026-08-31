@@ -6,12 +6,20 @@ class AgentNodeExecutorTests(unittest.TestCase):
         from contextos.template.nodes.agent_schema import validate_agent_node_config
 
         errors = validate_agent_node_config(
-            {"model": "default", "prompt_template": "{{input}}", "output_key": "answer"},
+            {"model": "default", "prompt_template": "{{input}}"},
             field_prefix="config",
         )
 
         self.assertEqual(errors[0].code, "agent_config.required")
         self.assertEqual(errors[0].field, "config.instruction")
+
+    def test_agent_schema_does_not_require_output_key(self) -> None:
+        from contextos.template.nodes.agent_schema import validate_agent_node_config
+
+        self.assertEqual(
+            validate_agent_node_config({"model": "default", "instruction": "Use context."}, field_prefix="config"),
+            [],
+        )
 
     def test_context_is_included_in_single_turn_messages(self) -> None:
         from contextos.runtime.graph.nodes.agent import AgentNodeExecutor
@@ -42,6 +50,19 @@ class AgentNodeExecutorTests(unittest.TestCase):
         )
 
         self.assertEqual(state["agent_answer"], "agent-ok")
+
+    def test_single_turn_output_is_written_to_generated_node_output_key_without_output_key(self) -> None:
+        from contextos.runtime.graph.nodes.agent import AgentNodeExecutor
+        from contextos.runtime.graph.runtime_context import RuntimeContext
+        from contextos.template.manifest.schema import NodeSpec
+
+        node = NodeSpec(id="agent-1", type="agent", config=agent_config(output_key=None))
+
+        state = AgentNodeExecutor(FakeProvider("agent-ok")).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))(
+            {"input": "hello"}
+        )
+
+        self.assertEqual(state["__agent_1_response"], "agent-ok")
 
     def test_tool_loop_config_is_rejected_explicitly(self) -> None:
         from contextos.runtime.graph.nodes.agent import AgentNodeExecutionError, AgentNodeExecutor
