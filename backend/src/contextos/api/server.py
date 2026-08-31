@@ -60,8 +60,14 @@ from contextos.runtime.timeline.service import TimelineService
 from contextos.runtime.trace.collector import TraceCollector
 from contextos.runtime.trace.repository import InMemoryTraceRepository
 from contextos.template.extension.registry import ExtensionRegistry
+from contextos.template.demo_workflow import (
+    DEMO_WORKFLOW_SESSION_ID,
+    DEMO_WORKFLOW_TEMPLATE_ID,
+    DEMO_WORKFLOW_TIMELINE_ID,
+    demo_workflow_manifest,
+)
 from contextos.template.publish_service import PublishService
-from contextos.template.service import TemplateService
+from contextos.template.service import TemplateNotFound, TemplateService
 from contextos.template.version.repository import InMemoryAgentVersionRepository
 from contextos.template.version.service import AgentVersionService
 from contextos.tool.executor import FakeReadOnlyTool
@@ -297,9 +303,11 @@ def create_demo_services(
         llm_client=llm_client or create_deepseek_client_from_env(),
     )
 
+    _ensure_demo_workflow(services)
     if store is not None and store.loaded_existing_state:
         return services
 
+    _ensure_demo_workflow_session(services)
     if session_repository.get("demo-session") is not None:
         return services
 
@@ -378,6 +386,59 @@ def create_demo_services(
         message_id=assistant.id,
     )
     return services
+
+
+def _ensure_demo_workflow(services: RuntimeServices) -> None:
+    manifest = demo_workflow_manifest()
+    try:
+        record = services.template_service.get(DEMO_WORKFLOW_TEMPLATE_ID)
+    except TemplateNotFound:
+        record = services.template_service.save(manifest)
+
+    if record.draft_manifest_payload is None:
+        record = services.template_service.save_draft(DEMO_WORKFLOW_TEMPLATE_ID, manifest)
+
+    active_version_exists = (
+        record.active_version_id is not None
+        and services.agent_version_repository.get(record.active_version_id) is not None
+    )
+    if not active_version_exists:
+        services.publish_service.publish(DEMO_WORKFLOW_TEMPLATE_ID)
+
+
+def _ensure_demo_workflow_session(services: RuntimeServices) -> None:
+    if services.session_repository.get(DEMO_WORKFLOW_SESSION_ID) is not None:
+        return
+
+    record = services.template_service.get(DEMO_WORKFLOW_TEMPLATE_ID)
+    if record.active_version_id is None:
+        return
+
+    created_at = datetime(2026, 8, 26, 0, 1, tzinfo=timezone.utc)
+    services.session_repository.save(
+        Session(
+            id=DEMO_WORKFLOW_SESSION_ID,
+            workspace_id="demo-workspace",
+            agent_template_id=DEMO_WORKFLOW_TEMPLATE_ID,
+            current_timeline_id=DEMO_WORKFLOW_TIMELINE_ID,
+            created_at=created_at,
+            status=SessionStatus.ACTIVE,
+            title="Demo Workflow",
+            metadata={"source": "demo-workflow-seed"},
+            agent_version_id=record.active_version_id,
+        )
+    )
+    services.timeline_repository.save(
+        Timeline(
+            id=DEMO_WORKFLOW_TIMELINE_ID,
+            session_id=DEMO_WORKFLOW_SESSION_ID,
+            parent_timeline_id=None,
+            fork_checkpoint_id=None,
+            fork_message_id=None,
+            created_at=created_at,
+            status=TimelineStatus.ACTIVE,
+        )
+    )
 
 
 def _default_runtime_state_path() -> Path:
@@ -789,9 +850,18 @@ def _chat_runtime_events(
         trace_id,
         agent_version_id=_session_agent_version_id(session),
         input=_latest_user_input(session_id, timeline_id, services),
+        message_history=_message_history(session_id, timeline_id, services),
     )
+    saw_token = False
     for event in runtime.stream_runtime_events(run_context):
         event = _attach_latest_group_to_terminal_event(event, session_id, timeline_id, services)
+        if event.type == "token":
+            saw_token = True
+        if event.type == "graph_finished" and not saw_token and event.data.get("output") is not None:
+            saw_token = True
+            yield runtime_event_to_legacy_event(
+                RuntimeEvent("token", {"content": str(event.data.get("output", "")), "trace_id": trace_id})
+            )
         try:
             yield runtime_event_to_legacy_event(event)
         except RuntimeEventContractError:
@@ -805,6 +875,13 @@ def _session_agent_version_id(session) -> str | None:
     metadata = getattr(session, "metadata", {})
     metadata_value = metadata.get("agent_version_id") if isinstance(metadata, dict) else None
     return str(metadata_value) if metadata_value else None
+
+
+def _message_history(session_id: str, timeline_id: str, services: RuntimeServices) -> list[dict[str, str]]:
+    builder = getattr(services, "conversation_context_builder", None)
+    if builder is None:
+        return []
+    return builder.build_llm_messages(session_id, timeline_id)
 
 
 def _latest_user_input(session_id: str, timeline_id: str, services: RuntimeServices) -> str:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from contextos.runtime.graph.nodes.protocol import NodeCallable
-from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value, write_node_output
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.manifest.schema import NodeSpec
 from contextos.tool.executor_registry import ToolExecutorError, ToolExecutorRegistry
@@ -38,6 +38,7 @@ class ToolNodeExecutor:
                 raise ToolNodeExecutionError("tool.execution_failed", node.id, tool_name, str(error)) from error
 
             next_state[output_state_key(node)] = result
+            write_node_output(next_state, node, result)
             _append_event(next_state, "tool_result", node, runtime_context, tool_name, {"result": result})
             return next_state
 

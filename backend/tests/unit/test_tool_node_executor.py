@@ -53,7 +53,9 @@ class ToolNodeExecutorTests(unittest.TestCase):
             },
         )
 
-        ToolNodeExecutor(registry).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"__planner_response": "mars"})
+        ToolNodeExecutor(registry).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))(
+            {"node_outputs": {"planner": "mars"}}
+        )
 
         self.assertEqual(calls, [{"query": "mars"}])
 
@@ -92,6 +94,7 @@ class ToolNodeExecutorTests(unittest.TestCase):
         state = ToolNodeExecutor(registry).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"answer": "mars"})
 
         self.assertEqual(state["lookup_result"], {"value": "mars"})
+        self.assertEqual(state["node_outputs"]["lookup"], {"value": "mars"})
 
     def test_result_is_written_to_generated_node_output_key_without_output_key(self) -> None:
         from contextos.runtime.graph.nodes.tool import ToolNodeExecutor

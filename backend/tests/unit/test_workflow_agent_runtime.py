@@ -120,6 +120,36 @@ class WorkflowAgentRuntimeTests(unittest.TestCase):
         self.assertEqual(checkpoints[0].data["agent_version_id"], version.id)
         self.assertEqual(checkpoints[0].data["graph_state"]["output"], "runtime-ok")
 
+    def test_run_context_message_history_is_available_in_graph_state(self) -> None:
+        from contextos.runtime.agent.protocol import AgentRunContext
+        from contextos.runtime.agent.workflow_runtime import WorkflowAgentRuntime
+        from contextos.runtime.graph.nodes.output import OutputNodeExecutor
+        from contextos.runtime.graph.nodes.registry import NodeExecutorRegistry
+        from contextos.template.version.repository import InMemoryAgentVersionRepository
+        from contextos.template.version.service import AgentVersionService
+
+        versions = AgentVersionService(InMemoryAgentVersionRepository())
+        payload = manifest_payload()
+        payload["runtime"]["nodes"] = [{"id": "final", "type": "output", "config": {"source": "$state.messages"}}]
+        payload["runtime"]["edges"] = [
+            {"id": "start-final", "source": "START", "target": "final"},
+            {"id": "final-end", "source": "final", "target": "END"},
+        ]
+        version = versions.create_published_version("research-agent", payload)
+        registry = NodeExecutorRegistry()
+        registry.register(OutputNodeExecutor())
+
+        history = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "second"}]
+        events = list(
+            WorkflowAgentRuntime(versions, registry).stream_runtime_events(
+                AgentRunContext("session-1", "timeline-1", "trace-1", agent_version_id=version.id, input="hello", message_history=history)
+            )
+        )
+        checkpoint = next(event for event in events if event.type == "checkpoint")
+
+        self.assertEqual(events[-1].data["output"], history)
+        self.assertEqual(checkpoint.data["graph_state"]["messages"], history)
+
 
 class FakeProvider:
     def __init__(self, response: str) -> None:

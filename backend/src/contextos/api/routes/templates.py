@@ -158,8 +158,11 @@ def _not_found(template_id: str) -> dict[str, object]:
 
 def _template_summary(record) -> dict[str, object]:
     template = record.manifest_payload["template"]
-    return {
+    summary = {
         "id": record.template_id,
         "name": template["name"],
         "version": template["version"],
     }
+    if record.active_version_id is not None:
+        summary["active_version_id"] = record.active_version_id
+    return summary

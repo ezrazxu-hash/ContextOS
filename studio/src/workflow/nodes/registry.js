@@ -1,11 +1,11 @@
 const NODE_DEFINITIONS = [
   definition("START", "Start", []),
   definition("END", "End", []),
-  definition("prompt", "PROMPT", ["role", "template", "variables", "input_mapping"]),
-  definition("llm", "LLM", ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping"]),
-  definition("tool", "Tool", ["tool_name", "args"]),
-  definition("condition", "Condition", ["source", "operator", "value"]),
-  definition("output", "Output", ["source"]),
+  definition("prompt", "PROMPT", ["role", "template", hiddenField("variables"), bindingField("input_mapping", "template_variables")]),
+  definition("llm", "LLM", ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", bindingField("input_mapping", "template_variables")]),
+  definition("tool", "Tool", ["tool_name", bindingField("args", "tool_args")]),
+  definition("condition", "Condition", [bindingField("source", "reference"), "operator", "value"]),
+  definition("output", "Output", [bindingField("source", "reference")]),
 ];
 
 export function createWorkflowNodeRegistry(definitions = NODE_DEFINITIONS) {
@@ -34,15 +34,28 @@ function definition(type, label, fields) {
     renderConfig() {
       return {
         type,
-        fields: fields.map((path) => ({ path, control: controlFor(path) })),
+        fields: fields.map(fieldView),
       };
     },
   };
 }
 
+function fieldView(field) {
+  if (typeof field === "string") return { path: field, control: controlFor(field) };
+  return { ...field, control: field.control ?? controlFor(field.path) };
+}
+
+function hiddenField(path) {
+  return { path, control: "json", visibility: "hidden", editable: false };
+}
+
+function bindingField(path, binding) {
+  return { path, control: "binding", binding };
+}
+
 function controlFor(path) {
   if (path === "temperature" || path === "max_tokens") return "number";
   if (path === "operator") return "select";
-  if (path === "input_mapping" || path === "args" || path === "routes" || path === "variables") return "json";
+  if (path === "routes" || path === "variables") return "json";
   return "text";
 }

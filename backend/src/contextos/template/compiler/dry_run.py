@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from contextos.runtime.graph.nodes.registry import NodeExecutorRegistry
-from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference, route_state_key
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference, route_state_key, write_node_output
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.compiler.compile_service import GraphCompileError, GraphCompileService
 from contextos.template.manifest.schema import NodeSpec, TemplateManifest
@@ -59,6 +59,7 @@ class _DryRunExecutor:
             if node.type in {"prompt", "llm", "tool"} or node.config.get("output_key") is not None:
                 value = _dry_value(node, update)
                 update[output_state_key(node)] = value
+                write_node_output(update, node, value)
             if node.type == "output":
                 update["output"] = _dry_value(node, update)
             if node.type == "condition":

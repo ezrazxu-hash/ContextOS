@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from contextos.runtime.agent.events import RuntimeEvent
@@ -14,6 +14,7 @@ class AgentRunContext:
     trace_id: str
     agent_version_id: str | None = None
     input: str = ""
+    message_history: list[dict[str, str]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         _require_non_empty(self.session_id, "session_id")

@@ -100,3 +100,34 @@ test("main Workflow node config renderer applies visibility editability required
   assert.match(renderer, /disabled/);
   assert.match(listener, /isEditableWorkflowConfigPath/);
 });
+
+test("main Workflow node config uses binding controls for data references", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const renderer = source.slice(source.indexOf("function renderWorkflowBindingField"), source.indexOf("function renderSelectedToolMetadata"));
+  const updater = source.slice(source.indexOf("function updateSelectedWorkflowBinding"), source.indexOf("async function openWorkflow"));
+  const helpers = source.slice(source.indexOf("function workflowReferenceValueFromControls"), source.indexOf("function formatWorkflowValue"));
+
+  assert.match(source, /binding:\s*"template_variables"/);
+  assert.match(source, /binding:\s*"tool_args"/);
+  assert.match(source, /binding:\s*"reference"/);
+  assert.match(renderer, /data-workflow-binding-control/);
+  assert.match(renderer, /Message history/);
+  assert.match(renderer, /workflowToolArgumentFields/);
+  assert.match(updater, /node\.config\[fieldPath\]/);
+  assert.match(helpers, /type:\s*"node_output"/);
+  assert.match(helpers, /node_id/);
+  assert.match(helpers, /type:\s*"workflow_input"/);
+});
+
+test("main Workflow page keeps active published version when loading saved templates", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const loader = source.slice(source.indexOf("async function loadRouteData"), source.indexOf("function isCurrentRouteLoad"));
+  const workflowLoader = source.slice(source.indexOf("function loadWorkflowManifest"), source.indexOf("function clearWorkflowDraft"));
+  const summary = source.slice(source.indexOf("function workflowTemplateSummary"), source.indexOf("function defaultWorkflowPosition"));
+
+  assert.match(loader, /activeWorkflowVersionFromTemplate\(template\)/);
+  assert.match(workflowLoader, /activeVersion = null/);
+  assert.match(workflowLoader, /workflowPublishedVersion = activeVersion/);
+  assert.match(summary, /active_version_id/);
+  assert.match(summary, /status:\s*"published"/);
+});

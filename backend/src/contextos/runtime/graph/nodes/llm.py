@@ -6,7 +6,7 @@ from typing import Any
 
 from contextos.provider.base.chat_client import ChatCompletionClient, LlmProviderError
 from contextos.runtime.graph.nodes.protocol import NodeCallable
-from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value, write_node_output
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.manifest.schema import NodeSpec
 
@@ -36,6 +36,7 @@ class LLMNodeExecutor:
                 raise LLMNodeExecutionError("llm.request_failed", node.id, str(error)) from error
 
             next_state[output_state_key(node)] = content
+            write_node_output(next_state, node, content)
             _append_event(next_state, "token", node, runtime_context, {"content": content})
             _append_event(next_state, "node_finished", node, runtime_context)
             return next_state

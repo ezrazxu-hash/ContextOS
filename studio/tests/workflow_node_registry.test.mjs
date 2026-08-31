@@ -37,4 +37,8 @@ test("T72 config renderer exposes concrete fields for supported nodes", async ()
   assert.deepEqual(registry.get("llm").renderConfig().fields.map((field) => field.path), ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping"]);
   assert.deepEqual(registry.get("tool").renderConfig().fields.map((field) => field.path), ["tool_name", "args"]);
   assert.deepEqual(registry.get("condition").renderConfig().fields.map((field) => field.path), ["source", "operator", "value"]);
+  assert.equal(registry.get("prompt").renderConfig().fields.find((field) => field.path === "variables").visibility, "hidden");
+  assert.equal(registry.get("prompt").renderConfig().fields.find((field) => field.path === "input_mapping").control, "binding");
+  assert.equal(registry.get("tool").renderConfig().fields.find((field) => field.path === "args").binding, "tool_args");
+  assert.equal(registry.get("condition").renderConfig().fields.find((field) => field.path === "source").binding, "reference");
 });

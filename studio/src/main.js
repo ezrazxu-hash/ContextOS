@@ -25,8 +25,8 @@ const WORKFLOW_CONFIG_FIELDS = {
   prompt: [
     workflowConfigField("role", "Role", { example: "user" }),
     workflowConfigField("template", "Template", { required: true, example: "Summarize {{input}}" }),
-    workflowConfigField("variables", "Variables", { example: "{\"input\":\"string\"}" }),
-    workflowConfigField("input_mapping", "Input Mapping", { example: "{\"input\":\"$state.input\"}" }),
+    workflowConfigField("variables", "Variables", { visibility: "hidden", editable: false }),
+    workflowConfigField("input_mapping", "Input Mapping", { binding: "template_variables", sourceField: "template" }),
     workflowConfigField("output_key", "Output Key", { visibility: "hidden", editable: false }),
   ],
   llm: [
@@ -36,21 +36,21 @@ const WORKFLOW_CONFIG_FIELDS = {
     workflowConfigField("system_prompt", "System Prompt", { example: "You are helpful." }),
     workflowConfigField("prompt", "Prompt", { required: true, example: "Summarize {{input}}" }),
     workflowConfigField("temperature", "Temperature", { example: "0.2" }),
-    workflowConfigField("input_mapping", "Input Mapping", { example: "{\"input\":\"$state.input\"}" }),
+    workflowConfigField("input_mapping", "Input Mapping", { binding: "template_variables", sourceField: "prompt" }),
     workflowConfigField("output_key", "Output Key", { visibility: "hidden", editable: false }),
   ],
   tool: [
     workflowConfigField("tool_name", "Tool", { required: true, example: "context.echo" }),
-    workflowConfigField("args", "Arguments", { example: "{\"query\":\"$state.input\"}" }),
+    workflowConfigField("args", "Arguments", { binding: "tool_args" }),
     workflowConfigField("output_key", "Output Key", { visibility: "hidden", editable: false }),
   ],
   condition: [
-    workflowConfigField("source", "Source", { required: true, example: "$state.score" }),
+    workflowConfigField("source", "Source", { required: true, binding: "reference" }),
     workflowConfigField("operator", "Operator", { required: true, example: "gte" }),
     workflowConfigField("value", "Value", { example: "80" }),
     workflowConfigField("state_key", "State Key", { visibility: "hidden", editable: false }),
   ],
-  output: [workflowConfigField("source", "Source", { required: true, example: "$state.answer" })],
+  output: [workflowConfigField("source", "Source", { required: true, binding: "reference" })],
 };
 const WORKFLOW_JSON_CONFIG_FIELDS = new Set(["variables", "input_mapping", "args"]);
 const WORKFLOW_NUMBER_CONFIG_FIELDS = new Set(["temperature", "max_tokens"]);
@@ -233,11 +233,11 @@ async function loadRouteData() {
       if (templateId && state.workflowTemplates.some((template) => template.id === templateId)) {
         const template = await client.fetchTemplate(templateId);
         if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
-        loadWorkflowManifest(template.manifest, template.id);
+        loadWorkflowManifest(template.manifest, template.id, activeWorkflowVersionFromTemplate(template));
       } else if (state.workflowTemplates.length > 0) {
         const template = await client.fetchTemplate(state.workflowTemplates[0].id);
         if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
-        loadWorkflowManifest(template.manifest, template.id);
+        loadWorkflowManifest(template.manifest, template.id, activeWorkflowVersionFromTemplate(template));
       } else if (state.workflowTemplates.length === 0) {
         clearWorkflowDraft();
       }
@@ -606,6 +606,9 @@ function renderWorkflowNodeConfig(node) {
 
 function renderWorkflowConfigField(node, field) {
   const path = field.path;
+  if (field.binding) {
+    return renderWorkflowBindingField(node, field);
+  }
   const value = workflowConfigInputValue(node.config?.[path], path);
   const requiredLabel = field.required ? ` <span class="workflow-config-required" aria-label="Required">*</span>` : "";
   const label = `<span class="workflow-config-label">${escapeHtml(workflowConfigLabel(field))}${requiredLabel}</span>`;
@@ -642,6 +645,104 @@ function renderWorkflowConfigField(node, field) {
   const type = WORKFLOW_NUMBER_CONFIG_FIELDS.has(path) ? "number" : "text";
   const step = path === "temperature" ? ` step="0.1" min="0" max="2"` : "";
   return `<label class="config-field">${label}<input type="${type}"${step} data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" value="${escapeAttr(value)}"${placeholder}${required}${readonly} /></label>`;
+}
+
+function renderWorkflowBindingField(node, field) {
+  const requiredLabel = field.required ? ` <span class="workflow-config-required" aria-label="Required">*</span>` : "";
+  const label = `<span class="workflow-config-label">${escapeHtml(workflowConfigLabel(field))}${requiredLabel}</span>`;
+  if (field.binding === "template_variables") {
+    const variables = workflowTemplateVariables(node.config?.[field.sourceField]);
+    if (!variables.length) {
+      return `<div class="config-field config-field-wide workflow-binding-field">${label}<p class="muted">No template variables found.</p></div>`;
+    }
+    const mapping = isPlainObject(node.config?.[field.path]) ? node.config[field.path] : {};
+    return `
+      <div class="config-field config-field-wide workflow-binding-field">
+        ${label}
+        ${variables.map((name) => renderWorkflowReferenceControls(node, field.path, name, mapping[name], { label: name, required: true })).join("")}
+      </div>
+    `;
+  }
+  if (field.binding === "tool_args") {
+    const tool = selectedWorkflowTool(node);
+    if (!tool) {
+      return `<div class="config-field config-field-wide workflow-binding-field">${label}<p class="muted">Select a tool to configure its arguments.</p></div>`;
+    }
+    const args = isPlainObject(node.config?.args) ? node.config.args : {};
+    const fields = workflowToolArgumentFields(tool, args);
+    if (!fields.length) {
+      return `<div class="config-field config-field-wide workflow-binding-field">${label}<p class="muted">This tool does not define arguments.</p></div>`;
+    }
+    return `
+      <div class="config-field config-field-wide workflow-binding-field">
+        ${label}
+        ${fields.map((arg) => renderWorkflowReferenceControls(node, "args", arg.name, args[arg.name], arg)).join("")}
+      </div>
+    `;
+  }
+  return `
+    <div class="config-field config-field-wide workflow-binding-field">
+      ${label}
+      ${renderWorkflowReferenceControls(node, field.path, "", node.config?.[field.path], { label: workflowConfigLabel(field), required: field.required })}
+    </div>
+  `;
+}
+
+function renderWorkflowReferenceControls(node, fieldPath, key, value, options = {}) {
+  const reference = workflowReferenceFromValue(node, value);
+  const group = workflowBindingGroupId(fieldPath, key);
+  const keyAttr = escapeAttr(key ?? "");
+  const outputOptions = workflowAvailableOutputOptions(node.id);
+  const selectedOutput = reference.type === "node_output" ? `${reference.nodeId}:${reference.port}` : (outputOptions[0]?.value ?? "");
+  const sourceLabel = options.label ?? key ?? fieldPath;
+  const requiredLabel = options.required ? ` <span class="workflow-config-required" aria-label="Required">*</span>` : "";
+  const valueType = options.type ?? "string";
+  return `
+    <div class="workflow-binding-row" data-workflow-binding-group="${escapeAttr(group)}">
+      <div class="workflow-binding-head">
+        <span class="workflow-config-label">${escapeHtml(sourceLabel)}${requiredLabel}</span>
+        ${valueType ? `<small>${escapeHtml(valueType)}</small>` : ""}
+      </div>
+      <div class="workflow-binding-grid">
+        <select data-workflow-binding-control data-workflow-binding-field="${escapeAttr(fieldPath)}" data-workflow-binding-key="${keyAttr}" data-workflow-binding-part="source" data-testid="workflow-binding-${escapeAttr(fieldPath)}-${keyAttr}-source">
+          <option value="workflow_input" ${reference.type === "workflow_input" ? "selected" : ""}>Workflow Input</option>
+          <option value="node_output" ${reference.type === "node_output" ? "selected" : ""} ${outputOptions.length ? "" : "disabled"}>Upstream Node Output</option>
+          <option value="literal" ${reference.type === "literal" ? "selected" : ""}>Constant</option>
+        </select>
+        ${reference.type === "workflow_input" ? renderWorkflowInputPicker(fieldPath, key, reference.name) : ""}
+        ${reference.type === "node_output" ? renderWorkflowOutputPicker(fieldPath, key, selectedOutput, outputOptions) : ""}
+        ${reference.type === "literal" ? renderWorkflowLiteralInput(fieldPath, key, reference.value, valueType) : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkflowInputPicker(fieldPath, key, selectedName) {
+  const inputs = [
+    { id: "input", label: "User input" },
+    { id: "messages", label: "Message history" },
+  ];
+  return `
+    <select data-workflow-binding-control data-workflow-binding-field="${escapeAttr(fieldPath)}" data-workflow-binding-key="${escapeAttr(key ?? "")}" data-workflow-binding-part="workflow-input" data-testid="workflow-binding-${escapeAttr(fieldPath)}-${escapeAttr(key ?? "")}-workflow-input">
+      ${inputs.map((input) => `<option value="${escapeAttr(input.id)}" ${input.id === selectedName ? "selected" : ""}>${escapeHtml(input.label)}</option>`).join("")}
+    </select>
+  `;
+}
+
+function renderWorkflowOutputPicker(fieldPath, key, selectedOutput, options) {
+  return `
+    <select data-workflow-binding-control data-workflow-binding-field="${escapeAttr(fieldPath)}" data-workflow-binding-key="${escapeAttr(key ?? "")}" data-workflow-binding-part="node-output" data-testid="workflow-binding-${escapeAttr(fieldPath)}-${escapeAttr(key ?? "")}-node-output">
+      ${options.map((option) => `<option value="${escapeAttr(option.value)}" ${option.value === selectedOutput ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+    </select>
+  `;
+}
+
+function renderWorkflowLiteralInput(fieldPath, key, value, valueType) {
+  return `<input type="${valueType === "number" || valueType === "integer" ? "number" : "text"}" data-workflow-binding-control data-workflow-binding-field="${escapeAttr(fieldPath)}" data-workflow-binding-key="${escapeAttr(key ?? "")}" data-workflow-binding-part="literal" data-workflow-binding-value-type="${escapeAttr(valueType)}" data-testid="workflow-binding-${escapeAttr(fieldPath)}-${escapeAttr(key ?? "")}-literal" value="${escapeAttr(workflowLiteralInputValue(value))}" placeholder="Example value" />`;
+}
+
+function workflowBindingGroupId(fieldPath, key = "") {
+  return `${fieldPath}:${key}`;
 }
 
 function renderSelectedToolMetadata(toolId) {
@@ -789,6 +890,159 @@ function parseWorkflowConfigValue(path, rawValue) {
     return rawValue === "" ? undefined : Number(rawValue);
   }
   return rawValue;
+}
+
+function workflowReferenceValueFromControls(fieldPath, key = "") {
+  const source = workflowBindingControl(fieldPath, key, "source")?.value ?? "workflow_input";
+  if (source === "node_output") {
+    const [nodeId, port] = String(workflowBindingControl(fieldPath, key, "node-output")?.value ?? "").split(":");
+    return { type: "node_output", node_id: nodeId, port: port || "out" };
+  }
+  if (source === "literal") {
+    const literal = workflowBindingControl(fieldPath, key, "literal");
+    return { type: "literal", value: parseWorkflowLiteralValue(literal?.value ?? "", literal?.dataset.workflowBindingValueType) };
+  }
+  return { type: "workflow_input", name: workflowBindingControl(fieldPath, key, "workflow-input")?.value ?? "input" };
+}
+
+function workflowBindingControl(fieldPath, key, part) {
+  return [...document.querySelectorAll("[data-workflow-binding-control]")].find(
+    (element) =>
+      element.dataset.workflowBindingField === fieldPath &&
+      (element.dataset.workflowBindingKey ?? "") === (key ?? "") &&
+      element.dataset.workflowBindingPart === part
+  );
+}
+
+function workflowReferenceFromValue(node, value) {
+  if (isPlainObject(value)) {
+    if (value.type === "workflow_input") return { type: "workflow_input", name: value.name ?? "input" };
+    if (value.type === "node_output") return { type: "node_output", nodeId: value.node_id ?? "", port: value.port ?? "out" };
+    if (value.type === "literal") return { type: "literal", value: value.value ?? "" };
+    if (value.type === "expression") return workflowReferenceFromStatePath(node, value.value);
+  }
+  if (typeof value === "string" && value.startsWith("$state.")) {
+    return workflowReferenceFromStatePath(node, value);
+  }
+  if (value !== undefined && value !== null && value !== "") {
+    return { type: "literal", value };
+  }
+  return { type: "workflow_input", name: "input" };
+}
+
+function workflowReferenceFromStatePath(node, value) {
+  if (value === "$state.input") return { type: "workflow_input", name: "input" };
+  if (value === "$state.messages") return { type: "workflow_input", name: "messages" };
+  const output = workflowAvailableOutputOptions(node.id).find((option) => option.statePath === value || (option.statePath && value.startsWith(`${option.statePath}.`)));
+  if (output) return { type: "node_output", nodeId: output.nodeId, port: output.port };
+  return { type: "literal", value };
+}
+
+function workflowTemplateVariables(template) {
+  const names = [];
+  const seen = new Set();
+  String(template ?? "").replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, name) => {
+    const normalized = String(name).trim();
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      names.push(normalized);
+    }
+    return "";
+  });
+  return names;
+}
+
+function selectedWorkflowTool(node) {
+  const toolName = node.config?.tool_name;
+  return state.workflowToolCatalog.find((tool) => tool.id === toolName) ?? null;
+}
+
+function workflowToolArgumentFields(tool, currentArgs = {}) {
+  const schema = isPlainObject(tool?.input_schema) ? tool.input_schema : {};
+  const properties = isPlainObject(schema.properties) ? schema.properties : {};
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  const names = [...new Set([...Object.keys(properties), ...Object.keys(currentArgs)])];
+  return names.map((name) => {
+    const property = isPlainObject(properties[name]) ? properties[name] : {};
+    return {
+      name,
+      label: name,
+      required: required.has(name),
+      type: property.type ?? "string",
+    };
+  });
+}
+
+function workflowAvailableOutputOptions(targetNodeId) {
+  return workflowUpstreamNodes(targetNodeId).flatMap(workflowOutputOptionsForNode);
+}
+
+function workflowUpstreamNodes(targetNodeId) {
+  const byId = new Map(state.workflowNodes.map((node) => [node.id, node]));
+  const incoming = new Map();
+  state.workflowEdges.map(normalizeWorkflowEdge).forEach((edge) => {
+    if (!incoming.has(edge.target)) incoming.set(edge.target, []);
+    incoming.get(edge.target).push(edge.source);
+  });
+  const seen = new Set();
+  const nodes = [];
+  const queue = [...(incoming.get(targetNodeId) ?? [])];
+  while (queue.length) {
+    const id = queue.shift();
+    if (!id || id === "START" || id === "END" || seen.has(id)) continue;
+    seen.add(id);
+    const node = byId.get(id);
+    if (node) nodes.push(node);
+    queue.push(...(incoming.get(id) ?? []));
+  }
+  return nodes.reverse();
+}
+
+function workflowOutputOptionsForNode(node) {
+  const statePath = node.config?.output_key ? `$state.${node.config.output_key}` : "";
+  if (node.type === "prompt") {
+    return [{ value: `${node.id}:out`, label: `${node.id} / prompt text`, nodeId: node.id, port: "out", statePath }];
+  }
+  if (node.type === "llm") {
+    return [{ value: `${node.id}:response`, label: `${node.id} / response`, nodeId: node.id, port: "response", statePath }];
+  }
+  if (node.type === "tool") {
+    const tool = selectedWorkflowTool(node);
+    const properties = isPlainObject(tool?.output_schema?.properties) ? tool.output_schema.properties : {};
+    const propertyOptions = Object.keys(properties).map((port) => ({
+      value: `${node.id}:${port}`,
+      label: `${node.id} / ${port}`,
+      nodeId: node.id,
+      port,
+      statePath: statePath ? `${statePath}.${port}` : "",
+    }));
+    return [
+      ...propertyOptions,
+      { value: `${node.id}:result`, label: `${node.id} / full result`, nodeId: node.id, port: "result", statePath },
+    ];
+  }
+  return [];
+}
+
+function workflowLiteralInputValue(value) {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  return JSON.stringify(value);
+}
+
+function parseWorkflowLiteralValue(value, type) {
+  if (type === "number" || type === "integer") {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : value;
+  }
+  if (type === "boolean") {
+    return value === "true" || value === true;
+  }
+  return value;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function formatWorkflowValue(value) {
@@ -954,7 +1208,16 @@ function bindEvents() {
       updateSelectedWorkflowConfig(path, element.value);
     };
     element.addEventListener("input", update);
-    element.addEventListener("change", update);
+    element.addEventListener("change", () => {
+      update();
+      if (["tool_name", "template", "prompt"].includes(element.dataset.workflowConfigPath)) render();
+    });
+  });
+  document.querySelectorAll("[data-workflow-binding-control]").forEach((element) => {
+    const fieldPath = element.dataset.workflowBindingField;
+    const key = element.dataset.workflowBindingKey ?? "";
+    element.addEventListener("input", () => updateSelectedWorkflowBinding(fieldPath, key, { renderAfterUpdate: false }));
+    element.addEventListener("change", () => updateSelectedWorkflowBinding(fieldPath, key, { renderAfterUpdate: true }));
   });
   const workflowTestInput = document.querySelector("[data-testid='workflow-test-input']");
   workflowTestInput?.addEventListener("input", () => {
@@ -1812,11 +2075,32 @@ function updateSelectedWorkflowConfig(path, rawValue) {
   state.workflowRuntimeEvents = [];
 }
 
+function updateSelectedWorkflowBinding(fieldPath, key = "", options = {}) {
+  const node = state.workflowNodes.find((item) => item.id === state.workflowSelectedNodeId);
+  if (!node || !fieldPath) return;
+  if (!isEditableWorkflowConfigPath(node.type, fieldPath)) return;
+  const value = workflowReferenceValueFromControls(fieldPath, key);
+  node.config = { ...(node.config ?? {}) };
+  if (fieldPath === "input_mapping" || fieldPath === "args") {
+    const current = isPlainObject(node.config[fieldPath]) ? { ...node.config[fieldPath] } : {};
+    current[key] = value;
+    node.config[fieldPath] = current;
+  } else {
+    node.config[fieldPath] = value;
+  }
+  state.workflowDirty = true;
+  state.workflowGraphPreview = null;
+  state.workflowPublishedVersion = null;
+  state.workflowTestRun = null;
+  state.workflowRuntimeEvents = [];
+  if (options.renderAfterUpdate) render();
+}
+
 async function openWorkflow(templateId) {
   if (!templateId) return;
   try {
     const template = await runtimeClient().fetchTemplate(templateId);
-    loadWorkflowManifest(template.manifest, template.id);
+    loadWorkflowManifest(template.manifest, template.id, activeWorkflowVersionFromTemplate(template));
     history.pushState({}, "", `/workflow?templateId=${encodeURIComponent(templateId)}`);
     state.toast = { tone: "success", text: "Workflow loaded" };
   } catch (error) {
@@ -2228,7 +2512,7 @@ function serializeWorkflowManifest() {
   });
 }
 
-function loadWorkflowManifest(manifest, templateId = null) {
+function loadWorkflowManifest(manifest, templateId = null, activeVersion = null) {
   const graph = deserializeGraph(manifest);
   state.workflowSelectedTemplateId = templateId ?? graph.template.id;
   state.workflowName = graph.template.name;
@@ -2243,7 +2527,7 @@ function loadWorkflowManifest(manifest, templateId = null) {
   state.workflowEdgeSourceId = null;
   state.workflowCanvasZoom = clampWorkflowZoom(graph.viewport?.zoom ?? 1);
   state.workflowGraphPreview = null;
-  state.workflowPublishedVersion = null;
+  state.workflowPublishedVersion = activeVersion;
   state.workflowTestRun = null;
   state.workflowRuntimeEvents = [];
   state.workflowDirty = false;
@@ -2274,10 +2558,27 @@ function updateWorkflowTemplates(template) {
 
 function workflowTemplateSummary(template) {
   const manifest = template.manifest ?? template;
-  return {
+  const summary = {
     id: template.id ?? manifest.template.id,
     name: manifest.template.name,
     version: manifest.template.version,
+  };
+  const activeVersionId = template.active_version_id ?? template.activeVersionId ?? null;
+  if (activeVersionId) {
+    summary.active_version_id = activeVersionId;
+  }
+  return summary;
+}
+
+function activeWorkflowVersionFromTemplate(template) {
+  const activeVersion = template.active_version ?? template.activeVersion ?? null;
+  if (activeVersion?.id) return activeVersion;
+  const activeVersionId = template.active_version_id ?? template.activeVersionId ?? null;
+  if (!activeVersionId) return null;
+  return {
+    id: activeVersionId,
+    agent_template_id: template.id ?? template.manifest?.template?.id ?? null,
+    status: "published",
   };
 }
 
@@ -2913,6 +3214,11 @@ function styleTag() {
     .node-config input[readonly], .node-config textarea[readonly], .node-config select:disabled { cursor: not-allowed; opacity: .68; background: #f1f5f9; }
     .workflow-config-label { display: inline-flex; align-items: flex-start; width: max-content; line-height: 1.2; }
     .workflow-config-required { position: relative; top: -.2em; display: inline-flex; align-items: center; margin-left: 2px; color: #b42318; font-size: 11px; font-weight: 800; line-height: 1; vertical-align: super; }
+    .workflow-binding-field { gap: 8px; }
+    .workflow-binding-row { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+    .workflow-binding-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .workflow-binding-head small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
+    .workflow-binding-grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1fr); gap: 8px; }
     .danger-zone { background: #fffafa; border-color: #f3c6c2; }
     .danger-zone h2 { color: #9f2f27; }
     .subtle-danger { justify-self: start; padding: 6px 9px; min-height: 32px; background: #fff; border-color: #f3b8b2; color: var(--error); }
@@ -2967,6 +3273,7 @@ function styleTag() {
       .main-pane { min-height: 680px; }
       .workflow-surface, .debug-grid { grid-template-columns: 1fr; }
       .workflow-config-resize-handle { display: none; }
+      .workflow-binding-grid { grid-template-columns: 1fr; }
       .message-card { width: 100%; }
     }
   </style>`;

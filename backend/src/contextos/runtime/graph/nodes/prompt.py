@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from contextos.runtime.graph.nodes.protocol import NodeCallable
-from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value
+from contextos.runtime.graph.nodes.references import output_state_key, resolve_reference_value, write_node_output
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.manifest.schema import NodeSpec
 
@@ -17,6 +17,7 @@ class PromptNodeExecutor:
             values = _mapped_values(node.config.get("input_mapping", {}), state)
             rendered = _render_template(str(node.config.get("template", "")), values)
             next_state[output_state_key(node)] = rendered
+            write_node_output(next_state, node, rendered)
             _append_event(next_state, "node_finished", node, runtime_context)
             return next_state
 

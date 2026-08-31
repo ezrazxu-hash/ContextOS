@@ -20,6 +20,7 @@ class PromptNodeExecutorTests(unittest.TestCase):
         state = PromptNodeExecutor().build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"topic": "Q3 sales"})
 
         self.assertEqual(state["prompt_text"], "Summarize Q3 sales for finance")
+        self.assertEqual(state["node_outputs"]["compose_prompt"], "Summarize Q3 sales for finance")
         self.assertEqual([event["type"] for event in state["runtime_events"]], ["node_started", "node_finished"])
 
     def test_rendered_text_is_written_to_generated_node_output_key_without_output_key(self) -> None:

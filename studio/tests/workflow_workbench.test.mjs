@@ -757,8 +757,9 @@ test("T85 Prompt node config exposes template assembly fields", async () => {
   );
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
-    ["role", "template", "variables", "input_mapping"],
+    ["role", "template", "input_mapping"],
   );
+  assert.equal(config.sections.flatMap((section) => section.fields).find((field) => field.path === "input_mapping").binding, "template_variables");
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
     ["template"],
@@ -806,6 +807,7 @@ test("T84 LLM node config exposes backend executable fields", async () => {
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
     ["provider", "model", "max_tokens", "system_prompt", "prompt", "temperature", "input_mapping"],
   );
+  assert.equal(config.sections.flatMap((section) => section.fields).find((field) => field.path === "input_mapping").binding, "template_variables");
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
     ["model", "prompt"],
@@ -874,6 +876,7 @@ test("T86 Tool node config exposes executable tool fields", async () => {
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
     ["tool_name", "args"],
   );
+  assert.equal(config.sections.flatMap((section) => section.fields).find((field) => field.path === "args").binding, "tool_args");
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
     ["tool_name"],
@@ -901,6 +904,7 @@ test("T87 Condition node config exposes branch condition fields", async () => {
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
     ["source", "operator", "value"],
   );
+  assert.equal(config.sections.flatMap((section) => section.fields).find((field) => field.path === "source").binding, "reference");
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
     ["source", "operator"],
@@ -936,6 +940,7 @@ test("T89 Output node config exposes final output source", async () => {
     config.sections.flatMap((section) => section.fields.map((field) => field.path)),
     ["source"],
   );
+  assert.equal(config.sections.flatMap((section) => section.fields).find((field) => field.path === "source").binding, "reference");
   assert.deepEqual(
     config.sections.flatMap((section) => section.fields.filter((field) => field.required).map((field) => field.path)),
     ["source"],
@@ -1359,7 +1364,8 @@ test("T90 Workflow node config schemas expose executable business fields", async
   assert.ok(llmFields.includes("max_tokens"));
   assert.ok(!llmFields.includes("output_key"));
   assert.ok(promptFields.includes("role"));
-  assert.ok(promptFields.includes("variables"));
+  assert.ok(promptFields.includes("input_mapping"));
+  assert.ok(!promptFields.includes("variables"));
   assert.ok(!promptFields.includes("output_key"));
   assert.ok(!conditionFields.includes("state_key"));
 });

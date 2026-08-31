@@ -21,13 +21,13 @@ const NODE_CONFIG_SCHEMAS = {
       fields: [
         { path: "role", label: "Role", example: "user" },
         { path: "template", label: "Template", required: true, example: "Summarize {{input}}" },
-        { path: "variables", label: "Variables", example: "{\"input\":\"string\"}" },
+        { path: "variables", label: "Variables", visibility: "hidden", editable: false },
       ],
     },
     {
       id: "io",
       fields: [
-        { path: "input_mapping", label: "Input Mapping", example: "{\"input\":\"$state.input\"}" },
+        { path: "input_mapping", label: "Input Mapping", binding: "template_variables", sourceField: "template" },
         { path: "output_key", label: "Output Key", visibility: "hidden", editable: false },
       ],
     },
@@ -52,7 +52,7 @@ const NODE_CONFIG_SCHEMAS = {
     {
       id: "io",
       fields: [
-        { path: "input_mapping", label: "Input Mapping", example: "{\"input\":\"$state.input\"}" },
+        { path: "input_mapping", label: "Input Mapping", binding: "template_variables", sourceField: "prompt" },
         { path: "output_key", label: "Output Key", visibility: "hidden", editable: false },
       ],
     },
@@ -62,7 +62,7 @@ const NODE_CONFIG_SCHEMAS = {
     {
       id: "io",
       fields: [
-        { path: "args", label: "Arguments", example: "{\"query\":\"$state.input\"}" },
+        { path: "args", label: "Arguments", binding: "tool_args" },
         { path: "output_key", label: "Output Key", visibility: "hidden", editable: false },
       ],
     },
@@ -71,14 +71,14 @@ const NODE_CONFIG_SCHEMAS = {
     {
       id: "condition",
       fields: [
-        { path: "source", label: "Source", required: true, example: "$state.score" },
+        { path: "source", label: "Source", required: true, binding: "reference" },
         { path: "operator", label: "Operator", required: true, example: "gte" },
         { path: "value", label: "Value", example: "80" },
         { path: "state_key", label: "State Key", visibility: "hidden", editable: false },
       ],
     },
   ],
-  output: [{ id: "output", fields: [{ path: "source", label: "Source", required: true, example: "$state.answer" }] }],
+  output: [{ id: "output", fields: [{ path: "source", label: "Source", required: true, binding: "reference" }] }],
 };
 const FALLBACK_PLATFORM = {
   readUiState() {
@@ -849,6 +849,8 @@ function fieldViewDefaults(field) {
     readonly: !editable,
     disabled: !editable,
     example: field.example ?? "",
+    binding: field.binding ?? null,
+    sourceField: field.sourceField ?? null,
     requiredLabel: field.required ? "*" : "",
   };
 }

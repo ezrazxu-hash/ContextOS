@@ -111,9 +111,10 @@ class HttpRuntimeHostTests(unittest.TestCase):
         finally:
             host.stop()
 
-        self.assertEqual(agents["agents"][0]["id"], "research-agent")
-        self.assertEqual(agents["agents"][0]["name"], "Research Agent")
-        self.assertEqual(agents["agents"][0]["active_version"]["id"], published["id"])
+        agents_by_id = {agent["id"]: agent for agent in agents["agents"]}
+        self.assertEqual(agents_by_id["research-agent"]["name"], "Research Agent")
+        self.assertEqual(agents_by_id["research-agent"]["active_version"]["id"], published["id"])
+        self.assertEqual(agents_by_id["demo-workflow"]["active_version"]["id"], "demo-workflow_v1")
 
     def test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works(self) -> None:
         from contextos.api.server import HttpRuntimeHost, create_demo_services
@@ -632,6 +633,90 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(response["end"], "END")
         self.assertEqual(response["edges"], [{"source": "START", "target": "writer"}, {"source": "writer", "target": "END"}])
         self.assertEqual(response["execution_order"], ["writer"])
+
+    def test_host_seeds_demo_workflow_as_published_runnable_template(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=PromptEchoLlmClient())
+        host.start()
+        try:
+            templates = get_json(f"{host.url}/api/templates")
+            template = get_json(f"{host.url}/api/templates/demo-workflow")
+            preview = post_json(f"{host.url}/api/agents/demo-workflow/graph-preview", template["manifest"])
+            run = post_json(f"{host.url}/api/agent-versions/{template['active_version_id']}/test-runs", {"input": "Hello demo"})
+        finally:
+            host.stop()
+
+        summaries = {item["id"]: item for item in templates["templates"]}
+        self.assertEqual(summaries["demo-workflow"]["name"], "Demo Workflow")
+        self.assertEqual(summaries["demo-workflow"]["active_version_id"], "demo-workflow_v1")
+        self.assertEqual(template["active_version_id"], "demo-workflow_v1")
+        self.assertEqual([node["id"] for node in template["manifest"]["runtime"]["nodes"]], ["capture_input", "echo_tool", "final_output"])
+        self.assertEqual(
+            template["manifest"]["runtime"]["edges"],
+            [
+                {"id": "start-capture", "source": "START", "target": "capture_input"},
+                {"id": "capture-echo", "source": "capture_input", "target": "echo_tool"},
+                {"id": "echo-final", "source": "echo_tool", "target": "final_output"},
+                {"id": "final-end", "source": "final_output", "target": "END"},
+            ],
+        )
+        self.assertTrue(preview["valid"])
+        self.assertEqual(preview["start"], "START")
+        self.assertEqual(preview["end"], "END")
+        self.assertEqual(preview["execution_order"], ["capture_input", "echo_tool", "final_output"])
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["output"], "Workflow input: Hello demo")
+        self.assertEqual(
+            [event["type"] for event in run["events"]],
+            ["graph_started", "node_started", "node_finished", "tool_call", "tool_result", "node_started", "node_finished", "checkpoint", "graph_finished"],
+        )
+
+    def test_demo_workflow_bound_session_executes_workflow_and_persists_after_restart(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient("demo workflow session ok"), storage_path=storage_path)
+            host.start()
+            try:
+                session = get_json(f"{host.url}/api/sessions/demo-workflow-session")
+                post_json(
+                    f"{host.url}/api/sessions/demo-workflow-session/messages",
+                    {
+                        "role": "user",
+                        "content": "Run the seeded workflow",
+                        "token_count": 4,
+                        "timeline_id": session["current_timeline_id"],
+                    },
+                )
+                sse = get_text(f"{host.url}/sse/sessions/demo-workflow-session/chat?timelineId={session['current_timeline_id']}")
+                messages = get_json(f"{host.url}/api/sessions/demo-workflow-session/messages?timelineId={session['current_timeline_id']}")
+                debug = get_json(f"{host.url}/api/debug/sessions/demo-workflow-session?traceId=trace-chat-response")
+            finally:
+                host.stop()
+
+            restarted = create_http_runtime_host(host="127.0.0.1", port=0, storage_path=storage_path)
+            restarted.start()
+            try:
+                reloaded_templates = get_json(f"{restarted.url}/api/templates")
+                reloaded_session = get_json(f"{restarted.url}/api/sessions/demo-workflow-session")
+            finally:
+                restarted.stop()
+
+        self.assertEqual(session["agent_template_id"], "demo-workflow")
+        self.assertEqual(session["agent_version_id"], "demo-workflow_v1")
+        self.assertEqual(sse_token_text(sse), "Workflow input: Run the seeded workflow")
+        self.assertEqual(messages["messages"][-1]["role"], "assistant")
+        self.assertEqual(messages["messages"][-1]["content"], "Workflow input: Run the seeded workflow")
+        self.assertEqual(debug["checkpoints"][-1]["agent_version_id"], "demo-workflow_v1")
+        self.assertEqual(
+            debug["checkpoints"][-1]["graph_state"]["visited_nodes"],
+            ["capture_input", "echo_tool", "final_output"],
+        )
+        reloaded_summaries = {item["id"]: item for item in reloaded_templates["templates"]}
+        self.assertEqual(reloaded_summaries["demo-workflow"]["active_version_id"], "demo-workflow_v1")
+        self.assertEqual(reloaded_session["agent_version_id"], "demo-workflow_v1")
 
     def test_deleted_demo_session_is_not_reseeded_after_restart(self) -> None:
         from contextos.api.server import create_http_runtime_host

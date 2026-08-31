@@ -57,6 +57,16 @@ class LlmNodeSchemaTests(unittest.TestCase):
         self.assertEqual(issues[0].code, "llm_config.invalid_input_mapping")
         self.assertEqual(issues[0].field, "config.input_mapping.topic")
 
+    def test_input_mapping_accepts_structured_references(self) -> None:
+        from contextos.template.nodes.llm_schema import validate_llm_node_config
+
+        issues = validate_llm_node_config(
+            valid_config(input_mapping={"topic": {"type": "node_output", "node_id": "compose_prompt", "port": "out"}}),
+            field_prefix="config",
+        )
+
+        self.assertEqual(issues, [])
+
 
 def valid_config(**overrides):
     config = {

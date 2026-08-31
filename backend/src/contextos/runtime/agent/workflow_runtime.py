@@ -42,6 +42,8 @@ class WorkflowAgentRuntime:
                     "timeline_id": run_context.timeline_id,
                     "run_id": run_context.trace_id,
                     "input": run_context.input,
+                    "messages": list(run_context.message_history),
+                    "node_outputs": {},
                 },
                 RuntimeContext(run_context.session_id, run_context.timeline_id, run_context.trace_id),
             )

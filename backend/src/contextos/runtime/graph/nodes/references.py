@@ -22,6 +22,12 @@ def output_state_key(node: NodeSpec, port: str | None = None) -> str:
     return internal_state_key(node.id, port or _DEFAULT_OUTPUT_PORTS.get(node.type, "output"))
 
 
+def write_node_output(state: dict[str, object], node: NodeSpec, value: object) -> None:
+    outputs = dict(state.get("node_outputs", {})) if isinstance(state.get("node_outputs"), dict) else {}
+    outputs[node.id] = value
+    state["node_outputs"] = outputs
+
+
 def route_state_key(node: NodeSpec) -> str:
     explicit = node.config.get("state_key")
     if explicit:
@@ -46,6 +52,9 @@ def resolve_reference(reference: object, state: dict[str, object]) -> tuple[bool
             port = reference.get("port")
             if node_id is None or port is None:
                 return False, None
+            node_outputs = state.get("node_outputs")
+            if isinstance(node_outputs, dict) and str(node_id) in node_outputs:
+                return _resolve_port(node_outputs[str(node_id)], str(port))
             return _resolve_state_key(internal_state_key(str(node_id), str(port)), state)
         if reference_type == "literal":
             return True, reference.get("value")
@@ -62,6 +71,16 @@ def resolve_reference(reference: object, state: dict[str, object]) -> tuple[bool
         return _resolve_expression(reference, state)
 
     return True, reference
+
+
+def _resolve_port(value: object, port: str) -> tuple[bool, object]:
+    if isinstance(value, dict):
+        if port in value:
+            return True, value[port]
+        if port in _DEFAULT_OUTPUT_PORTS.values() or port == "output":
+            return True, value
+        return False, None
+    return True, value
 
 
 def _resolve_expression(expression: str, state: dict[str, object]) -> tuple[bool, object]:

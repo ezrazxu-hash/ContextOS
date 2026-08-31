@@ -37,6 +37,7 @@ class LlmNodeExecutorTests(unittest.TestCase):
         state = LLMNodeExecutor(FakeProvider("planned")).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))({"input": "hello"})
 
         self.assertEqual(state["planner_result"], "planned")
+        self.assertEqual(state["node_outputs"]["planner"], "planned")
 
     def test_response_is_written_to_generated_node_output_key_without_output_key(self) -> None:
         from contextos.runtime.graph.nodes.llm import LLMNodeExecutor
@@ -68,7 +69,7 @@ class LlmNodeExecutorTests(unittest.TestCase):
         )
 
         LLMNodeExecutor(provider).build(node, RuntimeContext("session-1", "timeline-1", "trace-1"))(
-            {"__compose_prompt_out": "hello"}
+            {"node_outputs": {"compose-prompt": "hello"}}
         )
 
         self.assertEqual(provider.messages[0][0], {"role": "user", "content": "Previous: hello"})
