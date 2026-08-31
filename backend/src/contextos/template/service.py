@@ -60,6 +60,29 @@ class TemplateService:
             self._remove_record(template_id)
         return record
 
+    def rename(self, template_id: str, name: str) -> TemplateRecord:
+        record = self.get(template_id)
+        manifest_payload = deepcopy(record.manifest_payload)
+        manifest_payload.setdefault("template", {})["name"] = name
+        draft_manifest_payload = deepcopy(record.draft_manifest_payload) if record.draft_manifest_payload is not None else None
+        if draft_manifest_payload is not None:
+            draft_manifest_payload.setdefault("template", {})["name"] = name
+        updated = TemplateRecord(
+            template_id=record.template_id,
+            manifest_payload=manifest_payload,
+            draft_manifest_payload=draft_manifest_payload,
+            draft_updated_at=record.draft_updated_at,
+            active_version_id=record.active_version_id,
+        )
+        self._save_record(updated)
+        return updated
+
+    def remove(self, template_id: str) -> TemplateRecord:
+        record = self._remove_record(template_id)
+        if record is None:
+            raise TemplateNotFound(template_id)
+        return record
+
     def list(self) -> list[TemplateRecord]:
         if self._store is not None:
             records = [self._record_from_dict(record) for record in self._store.list_records("templates")]
@@ -152,11 +175,11 @@ class TemplateService:
             return self._record_from_dict(record) if record is not None else None
         return self._templates.get(template_id)
 
-    def _remove_record(self, template_id: str) -> None:
+    def _remove_record(self, template_id: str) -> TemplateRecord | None:
         if self._store is not None:
-            self._store.remove_record("templates", template_id)
-        else:
-            self._templates.pop(template_id, None)
+            record = self._store.remove_record("templates", template_id)
+            return self._record_from_dict(record) if record is not None else None
+        return self._templates.pop(template_id, None)
 
     @staticmethod
     def _record_from_dict(record: dict[str, Any]) -> TemplateRecord:

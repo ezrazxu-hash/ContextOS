@@ -226,6 +226,94 @@ test("UI05-T03-TC02: fit view frames the complete workflow graph", async () => {
   assert.deepEqual(view.canvas.viewport.bounds, fit.bounds);
 });
 
+test("UI05-T03-TC04: Ctrl wheel zooms the workflow canvas within bounded limits", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const zoomedIn = workbench.handleCanvasWheel({ ctrlKey: true, deltaY: -120 });
+  const zoomedOut = workbench.handleCanvasWheel({ ctrlKey: true, deltaY: 120 });
+  for (let index = 0; index < 40; index += 1) {
+    workbench.handleCanvasWheel({ ctrlKey: true, deltaY: 120 });
+  }
+
+  assert.equal(zoomedIn.handled, true);
+  assert.ok(zoomedIn.viewport.zoom > 1);
+  assert.equal(zoomedOut.handled, true);
+  assert.equal(workbench.view().canvas.viewport.zoom, 0.4);
+  assert.equal(workbench.view().canvas.viewport.minZoom, 0.4);
+  assert.equal(workbench.view().canvas.viewport.maxZoom, 2);
+});
+
+test("UI05-T03-TC05: ordinary wheel preserves scroll behavior and canvas zoom", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const result = workbench.handleCanvasWheel({ ctrlKey: false, deltaY: -120 });
+
+  assert.deepEqual(result, { handled: false });
+  assert.equal(workbench.view().canvas.viewport.zoom, 1);
+  assert.equal(workbench.view().header.dirty, false);
+});
+
+test("UI05-T03-TC06: right button drag pans the workflow canvas without dirtying the manifest", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const started = workbench.startCanvasPan({
+    button: 2,
+    targetRole: "canvas",
+    clientX: 120,
+    clientY: 140,
+    scrollLeft: 40,
+    scrollTop: 60,
+  });
+  const moved = workbench.moveCanvasPan({ clientX: 90, clientY: 105 });
+  const ended = workbench.endCanvasPan();
+
+  assert.equal(started.handled, true);
+  assert.equal(started.preventContextMenu, true);
+  assert.deepEqual(moved, { handled: true, scrollLeft: 70, scrollTop: 95 });
+  assert.deepEqual(ended, { handled: true });
+  assert.equal(workbench.view().canvas.viewport.panning, false);
+  assert.equal(workbench.view().header.dirty, false);
+});
+
+test("UI05-T03-TC07: ordinary right click does not leave the workflow canvas panning", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const started = workbench.startCanvasPan({
+    button: 2,
+    targetRole: "canvas",
+    clientX: 120,
+    clientY: 140,
+    scrollLeft: 40,
+    scrollTop: 60,
+  });
+  const ended = workbench.endCanvasPan();
+
+  assert.equal(started.handled, true);
+  assert.deepEqual(ended, { handled: true });
+  assert.equal(workbench.view().canvas.viewport.panning, false);
+  assert.equal(workbench.view().canvas.viewport.panMoved, false);
+});
+
 test("UI05-T03-TC03: deleting a selected node removes connected edges from the draft manifest", async () => {
   const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
 
@@ -251,6 +339,38 @@ test("UI05-T03-TC03: deleting a selected node removes connected edges from the d
   );
   assert.deepEqual(manifest.runtime.edges, []);
   assert.equal(workbench.view().nodeConfig.selectedNodeId, null);
+});
+
+test("UI05-T04-TC04: Delete removes only the selected canvas edge", async () => {
+  const { createWorkflowWorkbench } = await import(moduleUrl("src/pages/Workflow/WorkflowWorkbench.js"));
+
+  const workbench = createWorkflowWorkbench({
+    platform: createMemoryPlatform(),
+    viewportWidth: 1280,
+  });
+
+  const prompt = workbench.dropLibraryNode("prompt", { x: 100, y: 100 }).node;
+  const tool = workbench.dropLibraryNode("tool", { x: 300, y: 100 }).node;
+  const output = workbench.dropLibraryNode("output", { x: 500, y: 100 }).node;
+  workbench.connect(prompt.id, tool.id);
+  workbench.connect(tool.id, output.id);
+  const edgeId = workbench.view().canvas.edges.find((edge) => edge.from === prompt.id && edge.to === tool.id).id;
+
+  const selected = workbench.selectCanvasEdge(edgeId);
+  const result = workbench.handleCanvasKeyDown({ key: "Delete", targetRole: "canvas" });
+  const manifest = workbench.serializeManifest();
+
+  assert.equal(selected.selected, true);
+  assert.equal(result.handled, true);
+  assert.deepEqual(
+    manifest.runtime.nodes.map((node) => node.id),
+    [prompt.id, tool.id, output.id],
+  );
+  assert.deepEqual(
+    manifest.runtime.edges.map((edge) => `${edge.source ?? edge.from}->${edge.target ?? edge.to}`),
+    [`${tool.id}->${output.id}`],
+  );
+  assert.equal(workbench.view().canvas.selectedEdgeId, null);
 });
 
 test("T82 moving a node updates its manifest position and keeps selection", async () => {

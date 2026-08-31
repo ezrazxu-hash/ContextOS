@@ -3,6 +3,9 @@ import { createWorkflowBuilder } from "../../features/workflow-builder/WorkflowB
 import { serializeGraph } from "../../workflow/manifest/model.js";
 
 const DEFAULT_VIEWPORT_WIDTH = 1280;
+const MIN_CANVAS_ZOOM = 0.4;
+const MAX_CANVAS_ZOOM = 2;
+const CANVAS_WHEEL_ZOOM_STEP = 0.1;
 const NODE_LIBRARY = [
   { type: "prompt", label: "PROMPT", category: "Prompt" },
   { type: "llm", label: "LLM", category: "Model" },
@@ -99,7 +102,9 @@ export function createWorkflowWorkbench(options = {}) {
     nodeLibraryQuery: "",
     nextNodeNumber: 1,
     activeCanvasTool: "pointer",
-    canvasViewport: { mode: "manual", bounds: null },
+    canvasViewport: { mode: "manual", bounds: null, zoom: 1 },
+    canvasPan: null,
+    selectedEdgeId: null,
     edgeErrors: new Map(),
     runtimeNodeStatus: new Map(),
     runtimeEvents: [],
@@ -157,10 +162,25 @@ export function createWorkflowWorkbench(options = {}) {
         return { deleted: false };
       }
       builder.removeEdge(edge);
+      if (state.selectedEdgeId === edgeId) {
+        state.selectedEdgeId = null;
+      }
       state.edgeErrors.delete(parsed.index);
       state.validationIssues = [];
       markDirty();
       return { deleted: true };
+    },
+    selectCanvasEdge(edgeId) {
+      const parsed = parseEdgeId(edgeId);
+      const workflowView = builder.view();
+      const edge = workflowView.edges[parsed.index];
+      if (!edge || edgeIdFor(edge, parsed.index) !== edgeId) {
+        state.selectedEdgeId = null;
+        return { selected: false };
+      }
+      state.selectedEdgeId = edgeId;
+      state.selectedNodeId = null;
+      return { selected: true, edge: canvasEdge(edge, parsed.index, state.edgeErrors, state.selectedEdgeId) };
     },
     reconnectCanvasEdge(edgeId, nextEndpoint) {
       const parsed = parseEdgeId(edgeId);
@@ -206,12 +226,61 @@ export function createWorkflowWorkbench(options = {}) {
     },
     fitCanvasView() {
       const bounds = graphBounds(builder.view().nodes);
-      state.canvasViewport = { mode: "fit", bounds };
+      state.canvasViewport = { mode: "fit", bounds, zoom: state.canvasViewport.zoom };
       return { bounds };
+    },
+    handleCanvasWheel(event = {}) {
+      if (!event.ctrlKey) {
+        return { handled: false };
+      }
+      const direction = Number(event.deltaY ?? 0) < 0 ? 1 : -1;
+      state.canvasViewport = {
+        mode: "manual",
+        bounds: null,
+        zoom: clampZoom(state.canvasViewport.zoom + direction * CANVAS_WHEEL_ZOOM_STEP),
+      };
+      return { handled: true, viewport: canvasViewportView(state.canvasViewport) };
+    },
+    startCanvasPan(event = {}) {
+      if (event.button !== 2 || isInteractiveCanvasTarget(event.targetRole)) {
+        return { handled: false };
+      }
+      state.canvasPan = {
+        startX: Number(event.clientX ?? 0),
+        startY: Number(event.clientY ?? 0),
+        scrollLeft: Number(event.scrollLeft ?? 0),
+        scrollTop: Number(event.scrollTop ?? 0),
+        moved: false,
+      };
+      return { handled: true, preventContextMenu: true };
+    },
+    moveCanvasPan(event = {}) {
+      if (!state.canvasPan) {
+        return { handled: false };
+      }
+      const deltaX = Number(event.clientX ?? state.canvasPan.startX) - state.canvasPan.startX;
+      const deltaY = Number(event.clientY ?? state.canvasPan.startY) - state.canvasPan.startY;
+      state.canvasPan.moved = state.canvasPan.moved || Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1;
+      return {
+        handled: true,
+        scrollLeft: Math.max(0, Math.round(state.canvasPan.scrollLeft - deltaX)),
+        scrollTop: Math.max(0, Math.round(state.canvasPan.scrollTop - deltaY)),
+      };
+    },
+    endCanvasPan() {
+      if (!state.canvasPan) {
+        return { handled: false };
+      }
+      state.canvasPan = null;
+      return { handled: true };
     },
     handleCanvasKeyDown(event) {
       if (!isDeleteKey(event.key) || isEditableTarget(event.targetRole)) {
         return { handled: false };
+      }
+      if (state.selectedEdgeId) {
+        const result = this.deleteCanvasEdge(state.selectedEdgeId);
+        return { handled: result.deleted, ...result };
       }
       if (!state.selectedNodeId) {
         return { handled: false };
@@ -283,9 +352,11 @@ export function createWorkflowWorkbench(options = {}) {
     selectNode(nodeId) {
       if (nodeId === "START" || nodeId === "END") {
         state.selectedNodeId = null;
+        state.selectedEdgeId = null;
         return this.view();
       }
       state.selectedNodeId = nodeId;
+      state.selectedEdgeId = null;
       return this.view();
     },
     updateNodeConfigDraft(patch) {
@@ -579,10 +650,16 @@ export function createWorkflowWorkbench(options = {}) {
           viewport: {
             mode: state.canvasViewport.mode,
             bounds: state.canvasViewport.bounds ? { ...state.canvasViewport.bounds } : null,
+            zoom: state.canvasViewport.zoom,
+            minZoom: MIN_CANVAS_ZOOM,
+            maxZoom: MAX_CANVAS_ZOOM,
+            panning: Boolean(state.canvasPan),
+            panMoved: Boolean(state.canvasPan?.moved),
           },
           boundaryNodes: boundaryNodes(),
           nodes: workflowView.nodes.map((node) => canvasNode(node, state)),
-          edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, state.edgeErrors)),
+          edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, state.edgeErrors, state.selectedEdgeId)),
+          selectedEdgeId: state.selectedEdgeId,
         },
         nodeConfig: {
           selectedNodeId: state.selectedNodeId,
@@ -611,6 +688,20 @@ export function createWorkflowWorkbench(options = {}) {
 
 function selectedNodeConfig(workflowView, nodeId) {
   return { ...(workflowView.nodes.find((node) => node.id === nodeId)?.config ?? {}) };
+}
+
+function canvasViewportView(viewport) {
+  return {
+    mode: viewport.mode,
+    bounds: viewport.bounds ? { ...viewport.bounds } : null,
+    zoom: viewport.zoom,
+    minZoom: MIN_CANVAS_ZOOM,
+    maxZoom: MAX_CANVAS_ZOOM,
+  };
+}
+
+function clampZoom(value) {
+  return Math.max(MIN_CANVAS_ZOOM, Math.min(MAX_CANVAS_ZOOM, Number(value.toFixed(2))));
 }
 
 function runtimeManifest(workflowView, template) {
@@ -707,6 +798,10 @@ function isEditableTarget(targetRole) {
   return ["input", "textarea", "contenteditable"].includes(targetRole);
 }
 
+function isInteractiveCanvasTarget(targetRole) {
+  return ["node", "edge", "button", "input", "textarea", "select", "contenteditable"].includes(targetRole);
+}
+
 function graphBounds(nodes) {
   if (nodes.length === 0) {
     return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
@@ -780,12 +875,14 @@ function subgraphValidationHint(internalNodeIds, validationIssues) {
   };
 }
 
-function canvasEdge(edge, index, edgeErrors) {
+function canvasEdge(edge, index, edgeErrors, selectedEdgeId = null) {
   const error = edgeErrors.get(index) ?? null;
+  const id = edgeIdFor(edge, index);
   return {
     ...edge,
-    id: edgeIdFor(edge, index),
+    id,
     label: edge.condition ? branchLabel(edge.condition) : "",
+    selected: id === selectedEdgeId,
     status: error ? "invalid" : "valid",
     error,
   };

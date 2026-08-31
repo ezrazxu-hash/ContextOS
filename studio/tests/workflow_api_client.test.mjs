@@ -33,6 +33,8 @@ test("T70 Workflow API client maps agent draft validate publish version and test
   await api.fetchAgentVersion("research-agent_v1");
   await api.startAgentTestRun("research-agent_v1", { input: "hello" });
   await api.fetchAgentTestRun("test_run_1");
+  await api.renameTemplate("research-agent", "Renamed Workflow");
+  await api.deleteTemplate("research-agent");
   await collect(api.streamAgentTestRunEvents("test_run_1"));
 
   assert.deepEqual(
@@ -48,10 +50,13 @@ test("T70 Workflow API client maps agent draft validate publish version and test
       ["GET", "/agent-versions/research-agent_v1"],
       ["POST", "/agent-versions/research-agent_v1/test-runs"],
       ["GET", "/agent-test-runs/test_run_1"],
+      ["PATCH", "/templates/research-agent"],
+      ["DELETE", "/templates/research-agent"],
       ["SSE", "/sse/agent-test-runs/test_run_1"],
     ],
   );
   assert.deepEqual(calls[2].options.body, { schema_version: "1.0" });
+  assert.deepEqual(calls.find((call) => call.path === "/templates/research-agent" && call.method === "PATCH").options.body, { name: "Renamed Workflow" });
   assert.deepEqual(calls.find((call) => call.path === "/agent-versions/research-agent_v1/test-runs").options.body, { input: "hello" });
 });
 

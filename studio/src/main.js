@@ -11,6 +11,9 @@ import {
 const ROUTES = ["/chat", "/workflow", "/template", "/debug"];
 const DEFAULT_SESSION_ID = "demo-session";
 const DEFAULT_TIMELINE_ID = "demo-timeline";
+const WORKFLOW_MIN_ZOOM = 0.4;
+const WORKFLOW_MAX_ZOOM = 2;
+const WORKFLOW_ZOOM_STEP = 0.1;
 const app = document.querySelector("#app");
 let routeLoadVersion = 0;
 const demoWorkflowGraph = deserializeGraph(demoTemplateManifest);
@@ -24,12 +27,16 @@ const state = {
   creatingSession: false,
   deletingSessionId: null,
   deletingTimelineId: null,
+  deletingWorkflowId: null,
   renamingSessionId: null,
   renamingTimelineId: null,
+  renamingWorkflowId: null,
   openSessionMenuId: null,
   sessionMenuPosition: null,
   openTimelineMenuId: null,
   timelineMenuPosition: null,
+  openWorkflowMenuId: null,
+  workflowMenuPosition: null,
   openMessageMenuId: null,
   messageMenuPosition: null,
   editingMessageId: null,
@@ -61,8 +68,11 @@ const state = {
   workflowDirty: false,
   workflowSaving: false,
   workflowDrag: null,
+  workflowCanvasPan: null,
   workflowSelectedNodeId: "planner",
+  workflowSelectedEdgeIndex: null,
   workflowEdgeSourceId: null,
+  workflowCanvasZoom: 1,
   workflowGraphPreview: null,
   workflowPreviewing: false,
   templateTab: "basic",
@@ -84,6 +94,7 @@ async function start() {
     render();
   });
   document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("keydown", handleWorkflowKeyDown);
   document.addEventListener("pointerdown", handleFocusIntentDuringSend, true);
   document.addEventListener("focusin", handleFocusIntentDuringSend, true);
   await loadRouteData();
@@ -156,11 +167,18 @@ async function loadRouteData() {
       const templates = await client.fetchTemplates();
       if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
       state.workflowTemplates = templates.templates ?? [];
-      const templateId = workflowIdFromUrl() ?? state.workflowSelectedTemplateId;
+      const requestedWorkflowId = workflowIdFromUrl();
+      const templateId = requestedWorkflowId ?? state.workflowSelectedTemplateId;
       if (templateId && state.workflowTemplates.some((template) => template.id === templateId)) {
         const template = await client.fetchTemplate(templateId);
         if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
         loadWorkflowManifest(template.manifest, template.id);
+      } else if (state.workflowTemplates.length > 0) {
+        const template = await client.fetchTemplate(state.workflowTemplates[0].id);
+        if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
+        loadWorkflowManifest(template.manifest, template.id);
+      } else if (state.workflowTemplates.length === 0) {
+        clearWorkflowDraft();
       }
     }
     state.toast = { tone: "success", text: "Runtime projection ready" };
@@ -185,6 +203,7 @@ function render() {
       </div>
       ${renderSessionMenuOverlay()}
       ${renderTimelineMenuOverlay()}
+      ${renderWorkflowMenuOverlay()}
       ${renderMessageMenuOverlay()}
       ${renderToast()}
     </div>
@@ -363,6 +382,9 @@ function renderWorkflow() {
       <div class="page-head">
         <div><h1 data-testid="main-title">Workflow Builder</h1><p>Workflow manifests from Runtime.</p></div>
         <div class="actions">
+          ${state.workflowSelectedTemplateId ? `<div class="session-menu-host workflow-menu-host">
+            <button data-action="toggle-workflow-menu" data-menu-workflow-id="${escapeAttr(state.workflowSelectedTemplateId)}" class="secondary session-menu-trigger" aria-label="Workflow actions for ${escapeAttr(state.workflowName)}" aria-haspopup="menu" aria-expanded="${state.openWorkflowMenuId === state.workflowSelectedTemplateId}" title="Workflow actions" ${state.deletingWorkflowId === state.workflowSelectedTemplateId || state.renamingWorkflowId === state.workflowSelectedTemplateId ? "disabled" : ""}>...</button>
+          </div>` : ""}
           <button class="secondary" data-action="add-workflow-node">Add Prompt</button>
           <button class="secondary" data-action="preview-workflow-graph" data-testid="workflow-preview" ${state.workflowPreviewing ? "disabled" : ""}>${state.workflowPreviewing ? "Previewing" : "Preview Graph"}</button>
           <button data-action="save-workflow" data-testid="workflow-save" ${state.workflowSaving ? "disabled" : ""}>${state.workflowSaving ? "Saving" : "Save"}</button>
@@ -373,23 +395,31 @@ function renderWorkflow() {
           <section>
             <h2>Workflows</h2>
             <button data-action="create-workflow" data-testid="workflow-new">+ New Workflow</button>
-            <div data-testid="workflow-list">${state.workflowTemplates.map((template) => `
-              <button data-action="open-workflow" data-workflow-id="${escapeAttr(template.id)}" class="${state.workflowSelectedTemplateId === template.id ? "selected" : ""}" title="${escapeAttr(template.id)}">${escapeHtml(template.name ?? template.id)}</button>
-            `).join("")}</div>
+            <div data-testid="workflow-list">${state.workflowTemplates.map((template) => {
+              const selected = state.workflowSelectedTemplateId === template.id;
+              const label = displayResourceLabel(template);
+              const menuOpen = state.openWorkflowMenuId === template.id;
+              const mutating = state.deletingWorkflowId === template.id || state.renamingWorkflowId === template.id;
+              return `
+                <div class="session-row workflow-row ${menuOpen ? "menu-open" : ""}">
+                  <button data-action="open-workflow" data-workflow-id="${escapeAttr(template.id)}" class="nav-item ${selected ? "selected" : ""}" aria-pressed="${selected}" title="${escapeAttr(template.id)}">
+                    <span data-testid="workspace-item-label">${escapeHtml(label)}</span><small>${escapeHtml(template.version ?? "workflow")}</small>
+                  </button>
+                  <div class="session-menu-host workflow-menu-host">
+                    <button data-action="toggle-workflow-menu" data-menu-workflow-id="${escapeAttr(template.id)}" class="session-menu-trigger" aria-label="Workflow actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Workflow actions" ${mutating ? "disabled" : ""}>...</button>
+                  </div>
+                </div>
+              `;
+            }).join("")}</div>
           </section>
           <section>
             <h2>Node Library</h2>
             ${WORKFLOW_NODE_TYPES.map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.toUpperCase()}</button>`).join("")}
           </section>
         </div>
-        <div class="graph-canvas" data-testid="workflow-canvas">
-          ${renderWorkflowEdgesSvg()}
-          ${state.workflowNodes.map((node) => `
-            <div class="graph-node-wrap ${state.workflowSelectedNodeId === node.id ? "selected" : ""} ${state.workflowEdgeSourceId === node.id ? "edge-source" : ""}" style="left:${node.position.x}px;top:${node.position.y}px">
-              <button data-action="select-workflow-node" data-node-id="${escapeAttr(node.id)}" data-drag-workflow-node-id="${escapeAttr(node.id)}" class="graph-node" title="${escapeAttr(node.id)}">${escapeHtml(node.type)}<small>${escapeHtml(node.id)}</small></button>
-              <button class="node-port" data-action="select-edge-source" data-edge-source-id="${escapeAttr(node.id)}" title="Use as edge source" aria-label="Use ${escapeAttr(node.id)} as edge source">+</button>
-            </div>
-          `).join("")}
+        <div class="graph-canvas" data-testid="workflow-canvas" data-zoom="${workflowZoomAttr()}">
+          ${renderWorkflowCanvasContent()}
+          <div class="workflow-zoom-indicator" aria-live="polite">${Math.round(state.workflowCanvasZoom * 100)}%</div>
         </div>
         <div class="node-config">
           <section>
@@ -405,7 +435,7 @@ function renderWorkflow() {
             <button data-action="connect-workflow-edge" data-testid="workflow-connect-edge">Connect</button>
             <div class="edge-list" data-testid="workflow-edge-list">
               ${state.workflowEdges.length === 0 ? "<p>No edges yet.</p>" : state.workflowEdges.map((edge, index) => `
-                <div class="workflow-edge" data-testid="workflow-edge">
+                <div class="workflow-edge ${state.workflowSelectedEdgeIndex === index ? "selected" : ""}" data-testid="workflow-edge">
                   <span>${escapeHtml(edge.from ?? edge.source)} -> ${escapeHtml(edge.to ?? edge.target)}${edge.condition || edge.route ? ` (${escapeHtml(edge.condition ?? edge.route)})` : ""}</span>
                   <button class="secondary" data-action="delete-workflow-edge" data-edge-index="${index}" aria-label="Delete edge ${index + 1}">Delete</button>
                 </div>
@@ -422,16 +452,38 @@ function renderWorkflow() {
   `;
 }
 
-function renderWorkflowEdgesSvg() {
+function renderWorkflowCanvasContent() {
   const size = workflowCanvasSize();
-  const lines = state.workflowEdges.map((edge) => {
+  const zoom = state.workflowCanvasZoom;
+  return `
+    <div class="graph-canvas-viewport" style="width:${Math.ceil(size.width * zoom)}px;height:${Math.ceil(size.height * zoom)}px">
+      <div class="graph-canvas-content" style="width:${size.width}px;height:${size.height}px;transform:scale(${zoom})">
+        ${renderWorkflowEdgesSvg(size)}
+        ${state.workflowNodes.map((node) => `
+          <div class="graph-node-wrap ${state.workflowSelectedNodeId === node.id ? "selected" : ""} ${state.workflowEdgeSourceId === node.id ? "edge-source" : ""}" style="left:${node.position.x}px;top:${node.position.y}px" data-node-position-x="${node.position.x}" data-node-position-y="${node.position.y}">
+            <button data-action="select-workflow-node" data-node-id="${escapeAttr(node.id)}" data-drag-workflow-node-id="${escapeAttr(node.id)}" class="graph-node" title="${escapeAttr(node.id)}">${escapeHtml(node.type)}<small>${escapeHtml(node.id)}</small></button>
+            <button class="node-port" data-action="select-edge-source" data-edge-source-id="${escapeAttr(node.id)}" title="Use as edge source" aria-label="Use ${escapeAttr(node.id)} as edge source">+</button>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkflowEdgesSvg(size = workflowCanvasSize()) {
+  const lines = state.workflowEdges.map((edge, index) => {
     const normalized = normalizeWorkflowEdge(edge);
     const source = workflowEndpointPosition(normalized.source, size);
     const target = workflowEndpointPosition(normalized.target, size);
-    return `<line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" />`;
+    const selected = state.workflowSelectedEdgeIndex === index;
+    const attrs = `x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"`;
+    return `
+      <line class="workflow-edge-line ${selected ? "selected" : ""}" ${attrs} />
+      <polygon class="workflow-edge-hit ${selected ? "selected" : ""}" points="${workflowEdgeHitPoints(source, target)}" data-action="select-workflow-edge" data-edge-index="${index}" data-edge-source="${escapeAttr(normalized.source)}" data-edge-target="${escapeAttr(normalized.target)}" data-testid="workflow-edge-hit" />
+    `;
   }).join("");
   return `
-    <svg class="workflow-edges" width="${size.width}" height="${size.height}" aria-hidden="true">
+    <svg class="workflow-edges" width="${size.width}" height="${size.height}" aria-label="Workflow edges">
       <defs>
         <marker id="workflow-edge-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
           <path d="M0,0 L0,6 L9,3 z" fill="#64748b"></path>
@@ -501,6 +553,21 @@ function workflowEndpointPosition(id, size = workflowCanvasSize()) {
   const node = state.workflowNodes.find((item) => item.id === id);
   if (!node) return { x: 40, y: 34 };
   return { x: (node.position?.x ?? 0) + 56, y: (node.position?.y ?? 0) + 28 };
+}
+
+function workflowEdgeHitPoints(source, target) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const halfWidth = 7;
+  const offsetX = (-dy / length) * halfWidth;
+  const offsetY = (dx / length) * halfWidth;
+  return [
+    `${source.x + offsetX},${source.y + offsetY}`,
+    `${target.x + offsetX},${target.y + offsetY}`,
+    `${target.x - offsetX},${target.y - offsetY}`,
+    `${source.x - offsetX},${source.y - offsetY}`,
+  ].join(" ");
 }
 
 function normalizeWorkflowEdge(edge) {
@@ -589,6 +656,16 @@ function renderTimelineMenuOverlay() {
   `;
 }
 
+function renderWorkflowMenuOverlay() {
+  if (!state.openWorkflowMenuId || !state.workflowMenuPosition) return "";
+  return `
+    <div class="session-menu" data-testid="workflow-menu-${escapeAttr(state.openWorkflowMenuId)}" role="menu" style="left:${state.workflowMenuPosition.left}px;top:${state.workflowMenuPosition.top}px">
+      <button class="danger" data-action="delete-workflow" data-delete-workflow-id="${escapeAttr(state.openWorkflowMenuId)}" role="menuitem">Delete</button>
+      <button data-action="rename-workflow" data-rename-workflow-id="${escapeAttr(state.openWorkflowMenuId)}" role="menuitem">Rename</button>
+    </div>
+  `;
+}
+
 function renderMessageMenuOverlay() {
   if (!state.openMessageMenuId || !state.messageMenuPosition) return "";
   return `
@@ -604,6 +681,10 @@ function bindEvents() {
     if (element.tagName !== "SELECT") element.addEventListener("click", handleAction);
   });
   document.querySelectorAll("[data-drag-workflow-node-id]").forEach((element) => element.addEventListener("pointerdown", handleWorkflowNodePointerDown));
+  const workflowCanvas = document.querySelector("[data-testid='workflow-canvas']");
+  workflowCanvas?.addEventListener("wheel", handleWorkflowCanvasWheel, { passive: false });
+  workflowCanvas?.addEventListener("pointerdown", handleWorkflowCanvasPointerDown);
+  workflowCanvas?.addEventListener("contextmenu", handleWorkflowCanvasContextMenu);
   const composer = document.querySelector(".composer");
   composer?.addEventListener("submit", handleChatSubmit);
   const input = document.querySelector("[data-testid='composer-input']");
@@ -660,6 +741,11 @@ function handleDocumentClick(event) {
   if (state.openTimelineMenuId && !event.target.closest?.(".session-menu-host, .session-menu")) {
     state.openTimelineMenuId = null;
     state.timelineMenuPosition = null;
+    changed = true;
+  }
+  if (state.openWorkflowMenuId && !event.target.closest?.(".workflow-menu-host, .session-menu")) {
+    state.openWorkflowMenuId = null;
+    state.workflowMenuPosition = null;
     changed = true;
   }
   if (state.openMessageMenuId && !event.target.closest?.(".message-menu-trigger, .message-menu")) {
@@ -791,6 +877,8 @@ async function handleAction(event) {
     const sessionId = target.dataset.menuSessionId;
     state.openTimelineMenuId = null;
     state.timelineMenuPosition = null;
+    state.openWorkflowMenuId = null;
+    state.workflowMenuPosition = null;
     state.openMessageMenuId = null;
     state.messageMenuPosition = null;
     if (state.openSessionMenuId === sessionId) {
@@ -806,6 +894,8 @@ async function handleAction(event) {
     const timelineId = target.dataset.menuTimelineId;
     state.openSessionMenuId = null;
     state.sessionMenuPosition = null;
+    state.openWorkflowMenuId = null;
+    state.workflowMenuPosition = null;
     state.openMessageMenuId = null;
     state.messageMenuPosition = null;
     if (state.openTimelineMenuId === timelineId) {
@@ -814,6 +904,23 @@ async function handleAction(event) {
     } else {
       state.openTimelineMenuId = timelineId;
       state.timelineMenuPosition = sessionMenuPosition(target.getBoundingClientRect());
+    }
+    render();
+  } else if (action === "toggle-workflow-menu") {
+    event.stopPropagation();
+    const workflowId = target.dataset.menuWorkflowId;
+    state.openSessionMenuId = null;
+    state.sessionMenuPosition = null;
+    state.openTimelineMenuId = null;
+    state.timelineMenuPosition = null;
+    state.openMessageMenuId = null;
+    state.messageMenuPosition = null;
+    if (state.openWorkflowMenuId === workflowId) {
+      state.openWorkflowMenuId = null;
+      state.workflowMenuPosition = null;
+    } else {
+      state.openWorkflowMenuId = workflowId;
+      state.workflowMenuPosition = sessionMenuPosition(target.getBoundingClientRect());
     }
     render();
   } else if (action === "delete-session") {
@@ -985,6 +1092,8 @@ async function handleAction(event) {
     state.sessionMenuPosition = null;
     state.openTimelineMenuId = null;
     state.timelineMenuPosition = null;
+    state.openWorkflowMenuId = null;
+    state.workflowMenuPosition = null;
     if (state.openMessageMenuId === messageId) {
       state.openMessageMenuId = null;
       state.messageMenuPosition = null;
@@ -1105,6 +1214,10 @@ async function handleAction(event) {
   } else if (action === "delete-workflow-edge") {
     deleteWorkflowEdge(Number(target.dataset.edgeIndex));
     render();
+  } else if (action === "select-workflow-edge") {
+    event.stopPropagation();
+    selectWorkflowEdge(Number(target.dataset.edgeIndex));
+    render();
   } else if (action === "preview-workflow-graph") {
     await previewWorkflowGraph();
   } else if (action === "create-workflow") {
@@ -1112,10 +1225,15 @@ async function handleAction(event) {
     render();
   } else if (action === "open-workflow") {
     await openWorkflow(target.dataset.workflowId);
+  } else if (action === "rename-workflow") {
+    await renameWorkflow(target.dataset.renameWorkflowId);
+  } else if (action === "delete-workflow") {
+    await deleteWorkflow(target.dataset.deleteWorkflowId);
   } else if (action === "save-workflow") {
     await saveWorkflow();
   } else if (action === "select-workflow-node") {
     state.workflowSelectedNodeId = target.dataset.nodeId;
+    state.workflowSelectedEdgeIndex = null;
     render();
   } else if (action === "not-implemented") {
     state.toast = { tone: "warning", text: "Not implemented in the current HTTP Runtime" };
@@ -1127,14 +1245,16 @@ function handleWorkflowNodePointerDown(event) {
   if (event.button !== 0) return;
   const nodeId = event.currentTarget.dataset.dragWorkflowNodeId;
   const node = state.workflowNodes.find((item) => item.id === nodeId);
-  const canvas = event.currentTarget.closest(".graph-canvas");
-  if (!node || !canvas) return;
-  const rect = canvas.getBoundingClientRect();
+  const content = event.currentTarget.closest(".graph-canvas-content");
+  if (!node || !content) return;
+  const rect = content.getBoundingClientRect();
+  const zoom = state.workflowCanvasZoom;
   state.workflowSelectedNodeId = node.id;
+  state.workflowSelectedEdgeIndex = null;
   state.workflowDrag = {
     nodeId: node.id,
-    offsetX: event.clientX - rect.left - node.position.x,
-    offsetY: event.clientY - rect.top - node.position.y,
+    offsetX: (event.clientX - rect.left) / zoom - node.position.x,
+    offsetY: (event.clientY - rect.top) / zoom - node.position.y,
   };
   event.preventDefault();
   document.addEventListener("pointermove", handleWorkflowNodePointerMove);
@@ -1144,13 +1264,14 @@ function handleWorkflowNodePointerDown(event) {
 
 function handleWorkflowNodePointerMove(event) {
   if (!state.workflowDrag) return;
-  const canvas = document.querySelector(".graph-canvas");
+  const content = document.querySelector(".graph-canvas-content");
   const node = state.workflowNodes.find((item) => item.id === state.workflowDrag.nodeId);
-  if (!canvas || !node) return;
-  const rect = canvas.getBoundingClientRect();
+  if (!content || !node) return;
+  const rect = content.getBoundingClientRect();
+  const zoom = state.workflowCanvasZoom;
   node.position = {
-    x: Math.max(0, Math.round(event.clientX - rect.left - state.workflowDrag.offsetX)),
-    y: Math.max(0, Math.round(event.clientY - rect.top - state.workflowDrag.offsetY)),
+    x: Math.max(0, Math.round((event.clientX - rect.left) / zoom - state.workflowDrag.offsetX)),
+    y: Math.max(0, Math.round((event.clientY - rect.top) / zoom - state.workflowDrag.offsetY)),
   };
   state.workflowDirty = true;
   state.workflowGraphPreview = null;
@@ -1160,6 +1281,59 @@ function handleWorkflowNodePointerMove(event) {
 function handleWorkflowNodePointerUp() {
   state.workflowDrag = null;
   document.removeEventListener("pointermove", handleWorkflowNodePointerMove);
+}
+
+function handleWorkflowCanvasPointerDown(event) {
+  if (event.button !== 2 || workflowInteractivePanTarget(event.target)) return;
+  event.preventDefault();
+  state.workflowCanvasPan = {
+    canvas: event.currentTarget,
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: event.currentTarget.scrollLeft,
+    scrollTop: event.currentTarget.scrollTop,
+  };
+  document.addEventListener("pointermove", handleWorkflowCanvasPointerMove);
+  document.addEventListener("pointerup", handleWorkflowCanvasPointerUp);
+  document.addEventListener("pointercancel", handleWorkflowCanvasPointerUp);
+}
+
+function handleWorkflowCanvasPointerMove(event) {
+  const pan = state.workflowCanvasPan;
+  if (!pan) return;
+  event.preventDefault();
+  pan.canvas.scrollLeft = Math.max(0, Math.round(pan.scrollLeft - (event.clientX - pan.startX)));
+  pan.canvas.scrollTop = Math.max(0, Math.round(pan.scrollTop - (event.clientY - pan.startY)));
+}
+
+function handleWorkflowCanvasPointerUp() {
+  state.workflowCanvasPan = null;
+  document.removeEventListener("pointermove", handleWorkflowCanvasPointerMove);
+  document.removeEventListener("pointerup", handleWorkflowCanvasPointerUp);
+  document.removeEventListener("pointercancel", handleWorkflowCanvasPointerUp);
+}
+
+function handleWorkflowCanvasContextMenu(event) {
+  if (workflowInteractivePanTarget(event.target)) return;
+  event.preventDefault();
+}
+
+function handleWorkflowCanvasWheel(event) {
+  if (!event.ctrlKey) return;
+  event.preventDefault();
+  const direction = event.deltaY < 0 ? 1 : -1;
+  const nextZoom = clampWorkflowZoom(state.workflowCanvasZoom + direction * WORKFLOW_ZOOM_STEP);
+  if (nextZoom === state.workflowCanvasZoom) return;
+  state.workflowCanvasZoom = nextZoom;
+  render();
+}
+
+function handleWorkflowKeyDown(event) {
+  if (state.route !== "/workflow" || !isWorkflowDeleteKey(event.key) || workflowEditableTarget(event.target)) return;
+  if (!Number.isInteger(state.workflowSelectedEdgeIndex)) return;
+  event.preventDefault();
+  deleteWorkflowEdge(state.workflowSelectedEdgeIndex);
+  render();
 }
 
 async function handleChatSubmit(event) {
@@ -1320,9 +1494,12 @@ function createWorkflowDraft() {
   state.workflowNodes = [];
   state.workflowEdges = [];
   state.workflowSelectedNodeId = null;
+  state.workflowSelectedEdgeIndex = null;
   state.workflowEdgeSourceId = null;
+  state.workflowCanvasZoom = 1;
   state.workflowGraphPreview = null;
   state.workflowDirty = true;
+  history.pushState({}, "", `/workflow?templateId=${encodeURIComponent(id)}`);
 }
 
 async function openWorkflow(templateId) {
@@ -1347,12 +1524,103 @@ async function saveWorkflow() {
     const saved = await runtimeClient().saveTemplate(serializeWorkflowManifest());
     updateWorkflowTemplates(saved);
     loadWorkflowManifest(saved.manifest, saved.id);
+    history.pushState({}, "", `/workflow?templateId=${encodeURIComponent(saved.id)}`);
     state.workflowGraphPreview = null;
     state.toast = { tone: "success", text: "Workflow saved" };
   } catch (error) {
     state.toast = { tone: "error", text: error.message };
   } finally {
     state.workflowSaving = false;
+    render();
+  }
+}
+
+async function renameWorkflow(templateId) {
+  if (!templateId || state.renamingWorkflowId) return;
+  const workflow = state.workflowTemplates.find((item) => item.id === templateId);
+  const savedWorkflow = Boolean(workflow);
+  const label = savedWorkflow ? displayResourceLabel(workflow) : (state.workflowName || "New Workflow");
+  state.openWorkflowMenuId = null;
+  state.workflowMenuPosition = null;
+  const name = window.prompt(`Rename workflow ${label}`, label)?.trim();
+  if (name === undefined) {
+    render();
+    return;
+  }
+  if (!name) {
+    state.toast = { tone: "warning", text: "Name is required" };
+    render();
+    return;
+  }
+  if (!savedWorkflow) {
+    state.workflowName = name;
+    state.workflowDirty = true;
+    state.workflowGraphPreview = null;
+    state.toast = { tone: "success", text: "Workflow renamed" };
+    render();
+    return;
+  }
+  state.renamingWorkflowId = templateId;
+  state.toast = { tone: "loading", text: "Renaming workflow" };
+  render();
+  try {
+    const updated = await runtimeClient().patchTemplate(templateId, name);
+    updateWorkflowTemplates(updated);
+    if (state.workflowSelectedTemplateId === templateId) {
+      state.workflowName = workflowTemplateSummary(updated).name;
+    }
+    state.toast = { tone: "success", text: "Workflow renamed" };
+    render();
+  } catch (error) {
+    state.toast = { tone: "error", text: error.message };
+    render();
+  } finally {
+    state.renamingWorkflowId = null;
+    render();
+  }
+}
+
+async function deleteWorkflow(templateId) {
+  if (!templateId || state.deletingWorkflowId) return;
+  const workflow = state.workflowTemplates.find((item) => item.id === templateId);
+  const savedWorkflow = Boolean(workflow);
+  const label = savedWorkflow ? displayResourceLabel(workflow) : (state.workflowName || "New Workflow");
+  state.openWorkflowMenuId = null;
+  state.workflowMenuPosition = null;
+  if (!window.confirm(`Delete workflow ${label}?`)) {
+    render();
+    return;
+  }
+  if (!savedWorkflow) {
+    clearWorkflowDraft();
+    history.pushState({}, "", "/workflow");
+    state.toast = { tone: "success", text: "Workflow deleted" };
+    render();
+    return;
+  }
+  const beforeTemplates = [...state.workflowTemplates];
+  state.deletingWorkflowId = templateId;
+  state.toast = { tone: "loading", text: "Deleting workflow" };
+  render();
+  try {
+    await runtimeClient().deleteTemplate(templateId);
+    state.workflowTemplates = state.workflowTemplates.filter((item) => item.id !== templateId);
+    if (state.workflowSelectedTemplateId === templateId) {
+      const nextWorkflow = nextWorkflowAfterDelete(beforeTemplates, templateId);
+      if (nextWorkflow) {
+        await openWorkflow(nextWorkflow.id);
+      } else {
+        clearWorkflowDraft();
+        history.pushState({}, "", "/workflow");
+      }
+    }
+    state.toast = { tone: "success", text: "Workflow deleted" };
+    render();
+  } catch (error) {
+    state.toast = { tone: "error", text: error.message };
+    render();
+  } finally {
+    state.deletingWorkflowId = null;
     render();
   }
 }
@@ -1369,6 +1637,7 @@ function addWorkflowNode(type) {
     state.workflowEdges = [{ from: "START", to: id }, { from: id, to: "END" }];
   }
   state.workflowSelectedNodeId = id;
+  state.workflowSelectedEdgeIndex = null;
   state.workflowEdgeSourceId = id;
   state.workflowGraphPreview = null;
   state.workflowDirty = true;
@@ -1395,6 +1664,7 @@ function connectWorkflowEdge() {
     return;
   }
   state.workflowEdges = [...state.workflowEdges, { source, target }];
+  state.workflowSelectedEdgeIndex = null;
   state.workflowEdgeSourceId = source;
   state.workflowDirty = true;
   state.workflowGraphPreview = null;
@@ -1405,9 +1675,22 @@ function deleteWorkflowEdge(index) {
   if (!Number.isInteger(index) || index < 0 || index >= state.workflowEdges.length) return;
   const removed = normalizeWorkflowEdge(state.workflowEdges[index]);
   state.workflowEdges = state.workflowEdges.filter((_, edgeIndex) => edgeIndex !== index);
+  if (state.workflowSelectedEdgeIndex === index) {
+    state.workflowSelectedEdgeIndex = null;
+  } else if (Number.isInteger(state.workflowSelectedEdgeIndex) && state.workflowSelectedEdgeIndex > index) {
+    state.workflowSelectedEdgeIndex -= 1;
+  }
   state.workflowDirty = true;
   state.workflowGraphPreview = null;
   state.toast = { tone: "success", text: `Removed ${removed.source} -> ${removed.target}` };
+}
+
+function selectWorkflowEdge(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.workflowEdges.length) return;
+  state.workflowSelectedEdgeIndex = index;
+  state.workflowSelectedNodeId = null;
+  const edge = normalizeWorkflowEdge(state.workflowEdges[index]);
+  state.toast = { tone: "success", text: `Selected ${edge.source} -> ${edge.target}` };
 }
 
 async function previewWorkflowGraph() {
@@ -1474,7 +1757,7 @@ function serializeWorkflowManifest() {
     },
     nodes: state.workflowNodes,
     edges: state.workflowEdges,
-    viewport: {},
+    viewport: { zoom: state.workflowCanvasZoom },
   });
 }
 
@@ -1489,7 +1772,22 @@ function loadWorkflowManifest(manifest, templateId = null) {
   }));
   state.workflowEdges = graph.edges.map(clone);
   state.workflowSelectedNodeId = state.workflowNodes[0]?.id ?? null;
+  state.workflowSelectedEdgeIndex = null;
   state.workflowEdgeSourceId = null;
+  state.workflowCanvasZoom = clampWorkflowZoom(graph.viewport?.zoom ?? 1);
+  state.workflowGraphPreview = null;
+  state.workflowDirty = false;
+}
+
+function clearWorkflowDraft() {
+  state.workflowSelectedTemplateId = null;
+  state.workflowName = "";
+  state.workflowNodes = [];
+  state.workflowEdges = [];
+  state.workflowSelectedNodeId = null;
+  state.workflowSelectedEdgeIndex = null;
+  state.workflowEdgeSourceId = null;
+  state.workflowCanvasZoom = 1;
   state.workflowGraphPreview = null;
   state.workflowDirty = false;
 }
@@ -1518,6 +1816,37 @@ function workflowIdFromUrl() {
   return new URLSearchParams(window.location.search).get("templateId");
 }
 
+function nextWorkflowAfterDelete(workflows, deletedWorkflowId) {
+  const deletedIndex = workflows.findIndex((workflow) => workflow.id === deletedWorkflowId);
+  const remaining = workflows.filter((workflow) => workflow.id !== deletedWorkflowId);
+  if (remaining.length === 0) return null;
+  return remaining[Math.min(deletedIndex, remaining.length - 1)];
+}
+
+function clampWorkflowZoom(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(WORKFLOW_MIN_ZOOM, Math.min(WORKFLOW_MAX_ZOOM, Number(numeric.toFixed(2))));
+}
+
+function workflowZoomAttr() {
+  return state.workflowCanvasZoom.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function isWorkflowDeleteKey(key) {
+  return key === "Delete" || key === "Backspace";
+}
+
+function workflowEditableTarget(target) {
+  if (!target) return false;
+  const tagName = target.tagName?.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
+}
+
+function workflowInteractivePanTarget(target) {
+  return Boolean(target?.closest?.(".graph-node, .node-port, .workflow-edge-hit, [data-action], input, textarea, select, button"));
+}
+
 function runtimeClient() {
   return state.config.mockRuntime ? mockClient() : realClient();
 }
@@ -1529,6 +1858,8 @@ function realClient() {
     fetchTemplates: () => getJson("/api/templates"),
     fetchTemplate: (templateId) => getJson(`/api/templates/${encodeURIComponent(templateId)}`),
     saveTemplate: (manifest) => postJson("/api/templates", manifest),
+    patchTemplate: (templateId, name) => patchJson(`/api/templates/${encodeURIComponent(templateId)}`, { name }),
+    deleteTemplate: (templateId) => deleteJson(`/api/templates/${encodeURIComponent(templateId)}`),
     previewAgentGraph: (agentId, manifest) => postJson(`/api/agents/${encodeURIComponent(agentId)}/graph-preview`, manifest),
     fetchSessionMessages: (sessionId, timelineId) => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages${timelineId ? `?timelineId=${encodeURIComponent(timelineId)}` : ""}`),
     createSession: (payload = { agent_template_id: "research-agent", workspace_id: "studio" }) => postJson("/api/sessions", payload),
@@ -1575,6 +1906,16 @@ function mockClient() {
     },
     async saveTemplate(manifest) {
       return { id: manifest.template.id, manifest: clone(manifest) };
+    },
+    async patchTemplate(templateId, name) {
+      const manifest = templateId === state.workflowSelectedTemplateId
+        ? serializeWorkflowManifest()
+        : clone(demoTemplateManifest);
+      manifest.template.name = name;
+      return { id: templateId, manifest };
+    },
+    async deleteTemplate(templateId) {
+      return { id: templateId };
     },
     async previewAgentGraph(agentId, manifest) {
       const graph = deserializeGraph(manifest);
@@ -1972,6 +2313,7 @@ function styleTag() {
     .session-menu-host { min-width: 0; display: flex; align-items: stretch; }
     .session-menu-trigger { width: 34px; min-height: 34px; padding: 6px 0; font-size: 13px; line-height: 1; color: var(--muted); visibility: hidden; }
     .session-row:hover .session-menu-trigger, .session-row.menu-open .session-menu-trigger { visibility: visible; }
+    .actions .workflow-menu-host .session-menu-trigger { visibility: visible; }
     .session-menu { position: fixed; z-index: 50; min-width: 112px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
     .session-menu button { width: 100%; border: 0; padding: 7px 10px; text-align: left; color: var(--text); background: transparent; }
     .session-menu button:hover { background: var(--accent-soft); }
@@ -1988,9 +2330,16 @@ function styleTag() {
     .workflow-surface { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px 1fr 240px; gap: 12px; }
     .node-palette, .node-config, .template-fields, .debug-grid section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
     .node-palette button { width: 100%; margin-bottom: 8px; text-align: left; }
+    .node-palette .session-row .nav-item { margin-bottom: 0; }
+    .node-palette .session-menu-trigger { width: 34px; margin-bottom: 0; text-align: center; }
     .graph-canvas { position: relative; min-height: 0; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(#e8edf3 1px, transparent 1px), linear-gradient(90deg, #e8edf3 1px, transparent 1px), #fff; background-size: 28px 28px; overflow: auto; }
-    .workflow-edges { position: absolute; inset: 0 auto auto 0; overflow: visible; pointer-events: none; }
-    .workflow-edges line { stroke: #64748b; stroke-width: 2; marker-end: url(#workflow-edge-arrow); }
+    .graph-canvas-viewport { position: relative; min-width: 100%; min-height: 100%; }
+    .graph-canvas-content { position: relative; min-width: 100%; min-height: 100%; transform-origin: 0 0; }
+    .workflow-zoom-indicator { position: sticky; left: 10px; bottom: 10px; z-index: 4; display: inline-flex; margin: 0 0 10px 10px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: rgba(248,250,252,.92); color: var(--muted); font-size: 11px; font-weight: 700; pointer-events: none; }
+    .workflow-edges { position: absolute; inset: 0 auto auto 0; overflow: visible; pointer-events: auto; }
+    .workflow-edge-line { stroke: #64748b; stroke-width: 2; marker-end: url(#workflow-edge-arrow); pointer-events: none; }
+    .workflow-edge-line.selected { stroke: var(--accent); stroke-width: 3; }
+    .workflow-edge-hit { fill: rgba(37, 99, 235, .001); stroke: none; pointer-events: auto; cursor: pointer; }
     .workflow-boundary { position: absolute; z-index: 1; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--line); background: #f8fafc; color: var(--muted); font-size: 11px; font-weight: 700; }
     .workflow-boundary-start { left: 12px; top: 14px; }
     .workflow-boundary-end { right: 14px; bottom: 14px; }
@@ -2003,6 +2352,7 @@ function styleTag() {
     .node-port { position: absolute; top: 18px; right: 0; width: 24px; height: 24px; min-height: 24px; padding: 0; border-radius: 50%; font-weight: 700; }
     .edge-list { display: grid; gap: 8px; margin-top: 10px; }
     .workflow-edge { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; }
+    .workflow-edge.selected { border-color: var(--accent); background: var(--accent-soft); }
     .workflow-edge span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .graph-preview { display: grid; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; }
     .graph-preview.error { border-color: #fecaca; background: #fff1f0; color: var(--error); }

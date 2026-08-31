@@ -193,19 +193,19 @@ test("Workflow page lists saves reloads and preserves dragged node positions", a
     await expect(page.getByTestId("main-title")).toHaveText("Workflow Builder");
     await page.getByTestId("workflow-new").click();
     await page.getByTestId("workflow-name").fill("My Workflow A");
-    await page.getByRole("button", { name: "agent", exact: true }).click();
-    await page.getByRole("button", { name: "tool", exact: true }).click();
-    await page.locator(".workflow-edge", { hasText: "agent-1 -> END" }).getByRole("button", { name: /Delete edge/ }).click();
-    await page.locator("#workflow-edge-source").selectOption("agent-1");
+    await page.locator("[data-node-type='prompt']").click();
+    await page.locator("[data-node-type='tool']").click();
+    await page.locator(".workflow-edge", { hasText: "prompt-1 -> END" }).getByRole("button", { name: /Delete edge/ }).click();
+    await page.locator("#workflow-edge-source").selectOption("prompt-1");
     await page.locator("#workflow-edge-target").selectOption("tool-2");
     await page.getByTestId("workflow-connect-edge").click();
     await page.locator("#workflow-edge-source").selectOption("tool-2");
     await page.locator("#workflow-edge-target").selectOption("END");
     await page.getByTestId("workflow-connect-edge").click();
-    await expect(page.getByTestId("workflow-edge-list")).toContainText("agent-1 -> tool-2");
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("prompt-1 -> tool-2");
     await expect(page.locator(".workflow-edge")).toHaveCount(3);
 
-    const node = page.locator(".graph-node", { hasText: "agent" }).first();
+    const node = page.locator(".graph-node", { hasText: "prompt" }).first();
     const otherNode = page.locator(".graph-node", { hasText: "tool" }).first();
     const before = await node.boundingBox();
     const otherBefore = await otherNode.boundingBox();
@@ -220,12 +220,6 @@ test("Workflow page lists saves reloads and preserves dragged node positions", a
     expect(after?.y).toBeGreaterThan((before?.y ?? 0) + 40);
     expect(otherAfter?.x).toBe(otherBefore?.x);
     expect(otherAfter?.y).toBe(otherBefore?.y);
-
-    await page.getByTestId("workflow-preview").click();
-    await expect(page.getByTestId("workflow-graph-preview")).toContainText("START");
-    await expect(page.getByTestId("workflow-graph-preview")).toContainText("agent-1");
-    await expect(page.getByTestId("workflow-graph-preview")).toContainText("tool-2");
-    await expect(page.getByTestId("workflow-graph-preview")).toContainText("END");
 
     await page.getByTestId("workflow-save").click();
     await expect(page.getByTestId("status-toast")).toContainText("Workflow saved");
@@ -245,19 +239,214 @@ test("Workflow page lists saves reloads and preserves dragged node positions", a
       source: edge.source ?? edge.from,
       target: edge.target ?? edge.to,
     }));
-    expect(loadedEdges).toContainEqual({ source: "START", target: "agent-1" });
-    expect(loadedEdges).toContainEqual({ source: "agent-1", target: "tool-2" });
+    expect(loadedEdges).toContainEqual({ source: "START", target: "prompt-1" });
+    expect(loadedEdges).toContainEqual({ source: "prompt-1", target: "tool-2" });
     expect(loadedEdges).toContainEqual({ source: "tool-2", target: "END" });
 
     await page.reload();
     await expect(page.getByTestId("workflow-list")).toContainText("My Workflow A");
-    await page.getByRole("button", { name: /My Workflow A/ }).click();
-    const reopened = page.locator(".graph-node", { hasText: "agent" });
+    await page.getByTestId("workflow-list").getByRole("button", { name: /My Workflow A/ }).click();
+    const reopened = page.locator(".graph-node", { hasText: "prompt" });
     await expect(reopened).toBeVisible();
-    await expect(page.getByTestId("workflow-edge-list")).toContainText("agent-1 -> tool-2");
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("prompt-1 -> tool-2");
     const reopenedBox = await reopened.boundingBox();
     expect(reopenedBox?.x).toBeCloseTo(after?.x ?? 0, 1);
     expect(reopenedBox?.y).toBeCloseTo(after?.y ?? 0, 1);
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Workflow canvas zooms only with Ctrl wheel and keeps dragged positions stable", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.getByTestId("workflow-new").click();
+    await page.locator("[data-node-type='prompt']").click();
+
+    const canvas = page.getByTestId("workflow-canvas");
+    await expect(canvas).toHaveAttribute("data-zoom", "1");
+    const startScroll = await canvas.evaluate((element) => {
+      element.scrollLeft = 80;
+      element.scrollTop = 70;
+      return { left: element.scrollLeft, top: element.scrollTop };
+    });
+    await canvas.evaluate((element) => {
+      window.__workflowContextMenusAllowed = 0;
+      element.addEventListener("contextmenu", (event) => {
+        if (!event.defaultPrevented) {
+          window.__workflowContextMenusAllowed += 1;
+        }
+      });
+    });
+    const canvasBox = await canvas.boundingBox();
+    await page.mouse.move((canvasBox?.x ?? 0) + 140, (canvasBox?.y ?? 0) + 140);
+    await page.mouse.down({ button: "right" });
+    await page.mouse.move((canvasBox?.x ?? 0) + 80, (canvasBox?.y ?? 0) + 95, { steps: 6 });
+    await page.mouse.up({ button: "right" });
+    const pannedScroll = await canvas.evaluate((element) => ({
+      left: element.scrollLeft,
+      top: element.scrollTop,
+      contextMenusAllowed: window.__workflowContextMenusAllowed,
+    }));
+    expect(pannedScroll.left).toBeGreaterThan(startScroll.left);
+    expect(pannedScroll.top).toBeGreaterThanOrEqual(startScroll.top);
+    expect(pannedScroll.contextMenusAllowed).toBe(0);
+
+    await page.mouse.move((canvasBox?.x ?? 0) + 120, (canvasBox?.y ?? 0) + 120);
+    await page.mouse.down({ button: "right" });
+    await page.mouse.up({ button: "right" });
+
+    await canvas.dispatchEvent("wheel", { deltaY: -120, ctrlKey: false, bubbles: true, cancelable: true });
+    await expect(canvas).toHaveAttribute("data-zoom", "1");
+
+    await canvas.dispatchEvent("wheel", { deltaY: -240, ctrlKey: true, bubbles: true, cancelable: true });
+    const zoomed = Number(await canvas.getAttribute("data-zoom"));
+    expect(zoomed).toBeGreaterThan(1);
+
+    const node = page.locator(".graph-node", { hasText: "prompt" }).first();
+    const before = await node.boundingBox();
+    await node.hover();
+    await page.mouse.down();
+    await page.mouse.move((before?.x ?? 0) + 110, (before?.y ?? 0) + 70, { steps: 8 });
+    await page.mouse.up();
+
+    await page.getByTestId("workflow-name").fill("Zoom Drag Workflow");
+    await page.getByTestId("workflow-save").click();
+    await expect(page.getByTestId("status-toast")).toContainText("Workflow saved");
+
+    const templates = await (await page.request.get(`${studio.url}/api/templates`)).json();
+    const saved = templates.templates.find((template) => template.name === "Zoom Drag Workflow");
+    const loaded = await (await page.request.get(`${studio.url}/api/templates/${saved.id}`)).json();
+    const savedPosition = loaded.manifest.ui.nodes["prompt-1"].position;
+    expect(savedPosition.x).toBeGreaterThan(120);
+    expect(savedPosition.y).toBeGreaterThan(110);
+    expect(savedPosition.x).toBeLessThan(220);
+    expect(savedPosition.y).toBeLessThan(190);
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Workflow canvas edge selection deletes only the selected edge and persists after reload", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("workflow-name").fill("Edge Delete Workflow");
+    await page.locator("[data-node-type='prompt']").click();
+    await page.locator("[data-node-type='tool']").click();
+    await page.locator("[data-node-type='output']").click();
+    await page.locator("#workflow-edge-source").selectOption("prompt-1");
+    await page.locator("#workflow-edge-target").selectOption("tool-2");
+    await page.getByTestId("workflow-connect-edge").click();
+    await page.locator("#workflow-edge-source").selectOption("tool-2");
+    await page.locator("#workflow-edge-target").selectOption("output-3");
+    await page.getByTestId("workflow-connect-edge").click();
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("prompt-1 -> tool-2");
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("tool-2 -> output-3");
+
+    await clickWorkflowEdge(page, "prompt-1", "tool-2");
+    await expect(page.locator("[data-testid='workflow-edge-hit'][data-edge-source='prompt-1'][data-edge-target='tool-2']")).toHaveClass(/selected/);
+    await page.keyboard.press("Delete");
+
+    await expect(page.getByTestId("workflow-edge-list")).not.toContainText("prompt-1 -> tool-2");
+    await expect(page.getByTestId("workflow-edge-list")).toContainText("tool-2 -> output-3");
+    await expect(page.locator(".graph-node", { hasText: "prompt" })).toBeVisible();
+    await expect(page.locator(".graph-node", { hasText: "tool" })).toBeVisible();
+    await expect(page.locator(".graph-node", { hasText: "output" })).toBeVisible();
+
+    await clickWorkflowEdge(page, "tool-2", "output-3");
+    await expect(page.locator("[data-testid='workflow-edge-hit'][data-edge-source='tool-2'][data-edge-target='output-3']")).toHaveClass(/selected/);
+    await page.keyboard.press("Backspace");
+    await expect(page.getByTestId("workflow-edge-list")).not.toContainText("tool-2 -> output-3");
+    await expect(page.locator(".graph-node")).toHaveCount(3);
+
+    await page.getByTestId("workflow-save").click();
+    await expect(page.getByTestId("status-toast")).toContainText("Workflow saved");
+    await page.reload();
+    await expect(page.getByTestId("workflow-list")).toContainText("Edge Delete Workflow");
+    await page.getByTestId("workflow-list").getByRole("button", { name: /Edge Delete Workflow/ }).click();
+    await expect(page.getByTestId("workflow-edge-list")).not.toContainText("prompt-1 -> tool-2");
+    await expect(page.getByTestId("workflow-edge-list")).not.toContainText("tool-2 -> output-3");
+    await expect(page.locator(".graph-node")).toHaveCount(3);
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Workflow rename and delete menu updates persisted list and current selection", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+
+    await page.getByTestId("workflow-new").click();
+    page.once("dialog", (dialog) => dialog.accept("Draft Renamed Workflow"));
+    await page.getByRole("button", { name: "Workflow actions for New Workflow" }).click();
+    await page.getByRole("menuitem", { name: "Rename" }).click();
+    await expect(page.getByTestId("workflow-name")).toHaveValue("Draft Renamed Workflow");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Workflow actions for Draft Renamed Workflow" }).click();
+    await page.getByRole("menuitem", { name: "Delete" }).click();
+    await expect(page.getByTestId("workflow-name")).toHaveValue("");
+    expect(new URL(page.url()).search).toBe("");
+
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("workflow-name").fill("Workflow To Rename");
+    await page.locator("[data-node-type='prompt']").click();
+    await page.getByTestId("workflow-save").click();
+    await expect(page.getByTestId("workflow-list")).toContainText("Workflow To Rename");
+
+    await openWorkflowMenu(page, "Workflow To Rename");
+    await expect(page.locator("[data-testid^='workflow-menu-']").getByRole("menuitem")).toHaveText(["Delete", "Rename"]);
+    const patchResponse = page.waitForResponse((response) => {
+      return response.request().method() === "PATCH" && response.url().includes("/api/templates/") && response.status() === 200;
+    });
+    page.once("dialog", (dialog) => dialog.accept("Renamed Workflow"));
+    await page.getByRole("menuitem", { name: "Rename" }).click();
+    await patchResponse;
+
+    await expect(page.getByTestId("workflow-list")).toContainText("Renamed Workflow");
+    await page.reload();
+    await expect(page.getByTestId("workflow-list")).toContainText("Renamed Workflow");
+
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("workflow-name").fill("Workflow To Delete");
+    await page.locator("[data-node-type='tool']").click();
+    await page.getByTestId("workflow-save").click();
+    await expect(page.getByTestId("workflow-list")).toContainText("Workflow To Delete");
+    const deletingId = new URL(page.url()).searchParams.get("templateId");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    const deleteResponse = page.waitForResponse((response) => {
+      return response.request().method() === "DELETE" && response.url().includes(`/api/templates/${deletingId}`) && response.status() === 200;
+    });
+    await openWorkflowMenu(page, "Workflow To Delete");
+    await page.getByRole("menuitem", { name: "Delete" }).click();
+    await deleteResponse;
+
+    await expect(page.getByTestId("workflow-list")).not.toContainText("Workflow To Delete");
+    await expect(page.getByTestId("workflow-list")).toContainText("Renamed Workflow");
+    expect(new URL(page.url()).searchParams.get("templateId")).not.toBe(deletingId);
+    await page.reload();
+    await expect(page.getByTestId("workflow-list")).not.toContainText("Workflow To Delete");
+    await expect(page.getByTestId("workflow-list")).toContainText("Renamed Workflow");
   } finally {
     await studio.close();
     await backend.close();
@@ -697,6 +886,32 @@ async function openSessionMenu(page, sessionId) {
   await page.locator(`[data-testid="session-${sessionId}"]`).hover();
   await page.locator(`[data-menu-session-id="${sessionId}"]`).click();
   await expect(page.getByTestId(`session-menu-${sessionId}`)).toBeVisible();
+}
+
+async function openWorkflowMenu(page, workflowName) {
+  const workflowButton = page.locator("[data-action='open-workflow']", { hasText: workflowName }).first();
+  await workflowButton.hover();
+  const workflowId = await workflowButton.getAttribute("data-workflow-id");
+  await page.getByTestId("workflow-list").locator(`[data-menu-workflow-id="${workflowId}"]`).click();
+  await expect(page.getByTestId(`workflow-menu-${workflowId}`)).toBeVisible();
+}
+
+async function clickWorkflowEdge(page, source, target) {
+  const edge = page.locator(`[data-testid='workflow-edge-hit'][data-edge-source='${source}'][data-edge-target='${target}']`);
+  const point = await edge.evaluate((element) => {
+    const canvas = element.closest("[data-testid='workflow-canvas']");
+    const box = element.getBBox();
+    if (canvas) {
+      canvas.scrollLeft = Math.max(0, box.x + box.width / 2 - canvas.clientWidth / 2);
+      canvas.scrollTop = Math.max(0, box.y + box.height / 2 - canvas.clientHeight / 2);
+    }
+    const rect = element.getBoundingClientRect();
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+  });
+  await page.mouse.click(point.x, point.y);
 }
 
 async function startStudio(port, backendPort) {

@@ -12,6 +12,14 @@ export function createWorkflowApiClient(httpClient) {
       return httpClient.request("GET", `/agents/${encodeURIComponent(agentId)}/draft`, options);
     },
 
+    renameTemplate(templateId, name, options = {}) {
+      return httpClient.request("PATCH", `/templates/${encodeURIComponent(templateId)}`, { ...options, body: { name } });
+    },
+
+    deleteTemplate(templateId, options = {}) {
+      return httpClient.request("DELETE", `/templates/${encodeURIComponent(templateId)}`, options);
+    },
+
     saveAgentDraft(agentId, manifest, options = {}) {
       return httpClient.request("PUT", `/agents/${encodeURIComponent(agentId)}/draft`, { ...options, body: manifest });
     },

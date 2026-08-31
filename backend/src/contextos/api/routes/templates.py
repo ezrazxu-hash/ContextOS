@@ -1,5 +1,6 @@
 from typing import Callable
 
+from contextos.api.errors import ApiError
 from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.extension.registry import ExtensionRegistry
 from contextos.template.service import TemplateNotFound, TemplateService
@@ -25,6 +26,34 @@ def get_template(template_id: str, template_service: TemplateService) -> dict[st
 
 def put_template(template_id: str, payload: dict[str, object], template_service: TemplateService) -> dict[str, object]:
     record = template_service.update(template_id, payload)
+    return {"status": 200, "body": record.to_dict()}
+
+
+def patch_template(template_id: str, payload: dict[str, object], template_service: TemplateService, request_id: str = "req-template-patch") -> dict[str, object]:
+    name = payload.get("name")
+    if name is None:
+        return {
+            "status": 400,
+            "body": ApiError("template.invalid_name", "Template name is required", request_id, 400).to_rest_payload(),
+        }
+    name = str(name).strip()
+    if not name:
+        return {
+            "status": 400,
+            "body": ApiError("template.invalid_name", "Template name is required", request_id, 400).to_rest_payload(),
+        }
+    try:
+        record = template_service.rename(template_id, name)
+    except TemplateNotFound:
+        return _not_found(template_id)
+    return {"status": 200, "body": record.to_dict()}
+
+
+def delete_template(template_id: str, template_service: TemplateService) -> dict[str, object]:
+    try:
+        record = template_service.remove(template_id)
+    except TemplateNotFound:
+        return _not_found(template_id)
     return {"status": 200, "body": record.to_dict()}
 
 

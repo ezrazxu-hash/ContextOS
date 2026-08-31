@@ -1,4 +1,11 @@
 import unittest
+from pathlib import Path
+import sys
+from tempfile import TemporaryDirectory
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(BACKEND_ROOT / "src"))
 
 
 def manifest_payload(node_override=None):
@@ -230,6 +237,59 @@ class TemplateServiceApiTests(unittest.TestCase):
                 "active_version": version.to_dict(),
             }
         ])
+
+    def test_template_rename_updates_draft_and_persists_to_json_store(self) -> None:
+        from contextos.api.routes.agents import get_agent_draft, put_agent_draft
+        from contextos.api.routes.templates import get_template, patch_template, post_template
+        from contextos.runtime.persistence.json_store import JsonRuntimeStore
+        from contextos.template.service import TemplateService
+
+        with TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/runtime-state.json"
+            service = TemplateService(JsonRuntimeStore(path))
+            post_template(manifest_payload(), service)
+            draft = manifest_payload()
+            draft["template"] = {**draft["template"], "name": "Draft Name"}
+            put_agent_draft("research-agent", draft, service)
+
+            renamed = patch_template("research-agent", {"name": "  Renamed Workflow  "}, service)
+            reloaded_service = TemplateService(JsonRuntimeStore(path))
+
+            self.assertEqual(renamed["status"], 200)
+            self.assertEqual(renamed["body"]["manifest"]["template"]["name"], "Renamed Workflow")
+            self.assertEqual(get_template("research-agent", reloaded_service)["body"]["manifest"]["template"]["name"], "Renamed Workflow")
+            self.assertEqual(get_agent_draft("research-agent", reloaded_service)["body"]["draft_manifest"]["template"]["name"], "Renamed Workflow")
+
+    def test_template_rename_rejects_blank_name(self) -> None:
+        from contextos.api.routes.templates import patch_template, post_template
+        from contextos.template.service import TemplateService
+
+        service = TemplateService()
+        post_template(manifest_payload(), service)
+
+        response = patch_template("research-agent", {"name": "   "}, service, request_id="req-template-rename")
+
+        self.assertEqual(response["status"], 400)
+        self.assertEqual(response["body"]["error"]["code"], "template.invalid_name")
+        self.assertEqual(service.get("research-agent").manifest_payload["template"]["name"], "Research Agent")
+
+    def test_template_delete_removes_record_and_persists_to_json_store(self) -> None:
+        from contextos.api.routes.templates import delete_template, get_template, list_templates, post_template
+        from contextos.runtime.persistence.json_store import JsonRuntimeStore
+        from contextos.template.service import TemplateService
+
+        with TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/runtime-state.json"
+            service = TemplateService(JsonRuntimeStore(path))
+            post_template(manifest_payload(), service)
+
+            deleted = delete_template("research-agent", service)
+            reloaded_service = TemplateService(JsonRuntimeStore(path))
+
+            self.assertEqual(deleted["status"], 200)
+            self.assertEqual(deleted["body"]["id"], "research-agent")
+            self.assertEqual(list_templates(reloaded_service)["body"]["templates"], [])
+            self.assertEqual(get_template("research-agent", reloaded_service)["status"], 404)
 
 
 if __name__ == "__main__":
