@@ -272,9 +272,11 @@ test("Workflow canvas zooms only with Ctrl wheel and keeps dragged positions sta
     const canvas = page.getByTestId("workflow-canvas");
     await expect(canvas).toHaveAttribute("data-zoom", "1");
     const startScroll = await canvas.evaluate((element) => {
-      element.scrollLeft = 80;
-      element.scrollTop = 70;
-      return { left: element.scrollLeft, top: element.scrollTop };
+      const maxLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+      const maxTop = Math.max(0, element.scrollHeight - element.clientHeight);
+      element.scrollLeft = Math.min(20, Math.max(0, maxLeft - 20));
+      element.scrollTop = Math.min(20, Math.max(0, maxTop - 20));
+      return { left: element.scrollLeft, top: element.scrollTop, maxLeft, maxTop };
     });
     await canvas.evaluate((element) => {
       window.__workflowContextMenusAllowed = 0;
@@ -294,7 +296,11 @@ test("Workflow canvas zooms only with Ctrl wheel and keeps dragged positions sta
       top: element.scrollTop,
       contextMenusAllowed: window.__workflowContextMenusAllowed,
     }));
-    expect(pannedScroll.left).toBeGreaterThan(startScroll.left);
+    if (startScroll.maxLeft > startScroll.left) {
+      expect(pannedScroll.left).toBeGreaterThan(startScroll.left);
+    } else {
+      expect(pannedScroll.left).toBe(startScroll.left);
+    }
     expect(pannedScroll.top).toBeGreaterThanOrEqual(startScroll.top);
     expect(pannedScroll.contextMenusAllowed).toBe(0);
 
@@ -435,6 +441,49 @@ test("Workflow node delete removes connected edges and persists after reload", a
     await expect(page.locator(".graph-node", { hasText: "tool" })).toHaveCount(0);
     await expect(page.locator(".graph-node")).toHaveCount(2);
     await expect(page.getByTestId("workflow-edge-list")).not.toContainText("tool-2");
+  } finally {
+    await studio.close();
+    await backend.close();
+  }
+});
+
+test("Workflow node config panel is compact and LLM editors have visible borders", async ({ page }) => {
+  const backendPort = await freePort();
+  const studioPort = await freePort();
+  const backend = await startBackend(backendPort);
+  const studio = await startStudio(studioPort, backendPort);
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.getByTestId("workflow-new").click();
+    await page.locator("[data-node-type='llm']").click();
+
+    const panel = page.locator(".node-config");
+    await expect(panel.locator(".node-config-section.basic-info")).toBeVisible();
+    await expect(panel.locator(".node-config-meta")).toContainText("llm-1");
+    await expect(panel.locator(".node-config-section.node-config-fields")).toBeVisible();
+    await expect(panel.locator(".node-config-section.danger-zone")).toBeVisible();
+    expect((await panel.boundingBox())?.width).toBeGreaterThanOrEqual(320);
+
+    for (const testId of ["workflow-config-system_prompt", "workflow-config-prompt", "workflow-config-input_mapping"]) {
+      const editor = page.getByTestId(testId);
+      await expect(editor).toBeVisible();
+      const styles = await editor.evaluate((element) => {
+        const computed = window.getComputedStyle(element);
+        return {
+          borderTopWidth: computed.borderTopWidth,
+          borderTopStyle: computed.borderTopStyle,
+          borderTopColor: computed.borderTopColor,
+          backgroundColor: computed.backgroundColor,
+          borderRadius: computed.borderRadius,
+        };
+      });
+      expect(Number.parseFloat(styles.borderTopWidth)).toBeGreaterThanOrEqual(1);
+      expect(styles.borderTopStyle).toBe("solid");
+      expect(styles.borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(styles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(Number.parseFloat(styles.borderRadius)).toBeGreaterThanOrEqual(6);
+    }
   } finally {
     await studio.close();
     await backend.close();

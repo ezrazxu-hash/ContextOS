@@ -59,3 +59,19 @@ test("main Workflow page exposes a selected Node delete action that clears conne
   assert.match(deleteFunction, /workflowEdges\.filter/);
   assert.match(deleteFunction, /workflowSelectedNodeId = null/);
 });
+
+test("main Workflow node config panel uses compact sections and clear editor borders", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const renderer = source.slice(source.indexOf("function renderWorkflow()"), source.indexOf("function renderWorkflowCanvasContent()"));
+  const styles = source.slice(source.indexOf("function styleTag()"));
+
+  assert.match(renderer, /node-config-section basic-info/);
+  assert.match(renderer, /node-config-meta/);
+  assert.match(renderer, /node-config-section node-config-fields/);
+  assert.match(renderer, /node-config-section danger-zone/);
+  assert.match(renderer, /node-config-section edge-builder/);
+  assert.match(styles, /grid-template-columns:\s*180px minmax\(320px, 1fr\) minmax\(320px, 28vw\)/);
+  assert.match(styles, /\.node-config textarea\s*\{[^}]*border:\s*1px solid var\(--line-strong\)/s);
+  assert.match(styles, /\.node-config textarea:hover/s);
+  assert.match(styles, /\.node-config textarea:focus/s);
+});

@@ -446,14 +446,20 @@ function renderWorkflow() {
           <div class="workflow-zoom-indicator" aria-live="polite">${Math.round(state.workflowCanvasZoom * 100)}%</div>
         </div>
         <div class="node-config">
-          <section>
+          <section class="node-config-section basic-info">
+            <h2>Basic Info</h2>
+            <label class="config-field">Name<input data-testid="workflow-name" value="${escapeAttr(state.workflowName)}" /></label>
+            ${selected ? `<div class="node-config-meta"><div><span>ID</span><strong>${escapeHtml(selected.id)}</strong></div><div><span>Type</span><strong>${escapeHtml(selected.type)}</strong></div></div>` : "<p class=\"muted\">Select a node.</p>"}
+          </section>
+          <section class="node-config-section node-config-fields">
             <h2>Node Config</h2>
-            <label>Name<input data-testid="workflow-name" value="${escapeAttr(state.workflowName)}" /></label>
-            ${selected ? `<dl><dt>ID</dt><dd>${escapeHtml(selected.id)}</dd><dt>Type</dt><dd>${escapeHtml(selected.type)}</dd></dl>` : "<p>Select a node.</p>"}
-            ${selected ? `<button class="danger" data-action="delete-workflow-node" data-testid="workflow-delete-node" data-node-id="${escapeAttr(selected.id)}">Delete Node</button>` : ""}
             ${renderWorkflowNodeConfig(selected)}
           </section>
-          <section>
+          ${selected ? `<section class="node-config-section danger-zone">
+            <h2>Danger Zone</h2>
+            <button class="danger subtle-danger" data-action="delete-workflow-node" data-testid="workflow-delete-node" data-node-id="${escapeAttr(selected.id)}">Delete Node</button>
+          </section>` : ""}
+          <section class="node-config-section edge-builder">
             <h2>Edge Builder</h2>
             <label>Source${renderWorkflowEndpointSelect("workflow-edge-source", "select-edge-source", edgeSource, workflowSourceOptions())}</label>
             <label>Target${renderWorkflowEndpointSelect("workflow-edge-target", "select-edge-target", workflowDefaultTarget(edgeSource), workflowTargetOptions())}</label>
@@ -468,11 +474,11 @@ function renderWorkflow() {
               `).join("")}
             </div>
           </section>
-          <section>
+          <section class="node-config-section graph-preview-section">
             <h2>Graph Preview</h2>
             ${renderWorkflowGraphPreview()}
           </section>
-          <section>
+          <section class="node-config-section agent-test-section">
             <h2>Agent Test</h2>
             <label>Input<textarea data-testid="workflow-test-input" rows="3">${escapeHtml(state.workflowTestInput)}</textarea></label>
             ${renderWorkflowTestRun()}
@@ -559,7 +565,7 @@ function renderWorkflowConfigField(node, path) {
   const value = workflowConfigInputValue(node.config?.[path], path);
   if (node.type === "tool" && path === "tool_name" && state.workflowToolCatalog.length) {
     return `
-      <label>${workflowConfigLabel(path)}
+      <label class="config-field">${workflowConfigLabel(path)}
         <select data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}">
           <option value="">Select tool</option>
           ${state.workflowToolCatalog.map((tool) => `<option value="${escapeAttr(tool.id)}" ${tool.id === value ? "selected" : ""}>${escapeHtml(tool.name || tool.id)}</option>`).join("")}
@@ -571,7 +577,7 @@ function renderWorkflowConfigField(node, path) {
   if (path === "operator") {
     const operators = ["eq", "ne", "gt", "gte", "lt", "lte", "contains", "exists", "is_empty", "is_true", "is_false"];
     return `
-      <label>${workflowConfigLabel(path)}
+      <label class="config-field">${workflowConfigLabel(path)}
         <select data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}">
           <option value="">Select operator</option>
           ${operators.map((operator) => `<option value="${operator}" ${operator === value ? "selected" : ""}>${operator}</option>`).join("")}
@@ -581,11 +587,11 @@ function renderWorkflowConfigField(node, path) {
   }
   const multiline = WORKFLOW_JSON_CONFIG_FIELDS.has(path) || path === "template" || path === "prompt" || path === "system_prompt";
   if (multiline) {
-    return `<label>${workflowConfigLabel(path)}<textarea data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" rows="3">${escapeHtml(value)}</textarea></label>`;
+    return `<label class="config-field config-field-wide">${workflowConfigLabel(path)}<textarea data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" rows="3">${escapeHtml(value)}</textarea></label>`;
   }
   const type = WORKFLOW_NUMBER_CONFIG_FIELDS.has(path) ? "number" : "text";
   const step = path === "temperature" ? ` step="0.1" min="0" max="2"` : "";
-  return `<label>${workflowConfigLabel(path)}<input type="${type}"${step} data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" value="${escapeAttr(value)}" /></label>`;
+  return `<label class="config-field">${workflowConfigLabel(path)}<input type="${type}"${step} data-workflow-config-path="${escapeAttr(path)}" data-testid="workflow-config-${escapeAttr(path)}" value="${escapeAttr(value)}" /></label>`;
 }
 
 function renderSelectedToolMetadata(toolId) {
@@ -1490,7 +1496,6 @@ function handleWorkflowCanvasPointerUp() {
 }
 
 function handleWorkflowCanvasContextMenu(event) {
-  if (workflowInteractivePanTarget(event.target)) return;
   event.preventDefault();
 }
 
@@ -2763,8 +2768,27 @@ function styleTag() {
     .tabs.vertical { flex-direction: column; width: 180px; }
     .tabs .active { background: var(--accent-soft); border-color: #b9cdfa; color: #1d4ed8; }
     .context-item { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fbfcfe; }
-    .workflow-surface { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px 1fr 240px; gap: 12px; }
-    .node-palette, .node-config, .template-fields, .debug-grid section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
+    .workflow-surface { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px minmax(320px, 1fr) minmax(320px, 28vw); gap: 12px; overflow: auto; }
+    .node-palette, .template-fields, .debug-grid section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
+    .node-config { min-width: 320px; max-width: min(540px, 34vw); display: grid; align-content: start; gap: 10px; overflow: auto; background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+    .node-config-section { display: grid; gap: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .node-config-section h2 { margin-bottom: 0; }
+    .node-config-fields { background: #fbfcfe; }
+    .basic-info { border-color: #cfd8e3; }
+    .node-config-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+    .node-config-meta div { min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: #f8fafc; }
+    .node-config-meta span { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
+    .node-config-meta strong { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; font-weight: 700; }
+    .config-field { gap: 4px; font-size: 12px; }
+    .node-config input, .node-config select, .node-config textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: #fff; transition: border-color .12s ease, box-shadow .12s ease, background-color .12s ease; }
+    .node-config input, .node-config select { padding: 7px 9px; min-height: 34px; }
+    .node-config textarea { min-height: 78px; max-height: 220px; padding: 8px 9px; outline: 0; resize: vertical; }
+    .node-config input:hover, .node-config select:hover, .node-config textarea:hover { border-color: #8ea1bb; background: #fff; }
+    .node-config input:focus, .node-config select:focus, .node-config textarea:focus { border-color: var(--accent); outline: 2px solid rgba(37, 99, 235, .18); outline-offset: 1px; box-shadow: 0 0 0 1px rgba(37, 99, 235, .12); }
+    .danger-zone { background: #fffafa; border-color: #f3c6c2; }
+    .danger-zone h2 { color: #9f2f27; }
+    .subtle-danger { justify-self: start; padding: 6px 9px; min-height: 32px; background: #fff; border-color: #f3b8b2; color: var(--error); }
+    .subtle-danger:hover:not(:disabled) { background: #fff1f0; border-color: var(--error); color: var(--error); }
     .node-palette button { width: 100%; margin-bottom: 8px; text-align: left; }
     .node-palette .session-row .nav-item { margin-bottom: 0; }
     .node-palette .session-menu-trigger { width: 34px; margin-bottom: 0; text-align: center; }
