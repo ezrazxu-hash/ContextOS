@@ -316,6 +316,88 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(started["status"], "succeeded")
         self.assertEqual(started["finalResult"], {"message": '{"summary":"Bound data"}', "data": "Bound data", "artifacts": []})
 
+    def test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(
+            host="127.0.0.1",
+            port=0,
+            llm_client=RecordingLlmClient('{"summary":"Report ready","artifacts":[{"name":"report.txt","mimeType":"text/plain","content":"hello artifact"}]}'),
+        )
+        host.start()
+        try:
+            post_json(f"{host.url}/api/workflows", valid_workflow_v2_definition("Create report"))
+            published = post_json(f"{host.url}/api/workflows/support-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/support-flow/runs",
+                {"version": published["version"], "input": {"message": "make report"}},
+            )
+            artifacts = get_json(f"{host.url}/api/workflow-runs/{started['id']}/artifacts")
+            content = get_response(f"{host.url}/api/workflow-artifacts/{started['artifacts'][0]['id']}/content")
+        finally:
+            host.stop()
+
+        artifact_ref = started["artifacts"][0]
+        self.assertEqual(artifacts["artifacts"], [artifact_ref])
+        self.assertEqual(started["finalResult"]["artifacts"], [artifact_ref])
+        self.assertNotIn("content", artifact_ref)
+        self.assertNotIn("storageKey", json.dumps(started))
+        self.assertEqual(content["contentType"], "text/plain")
+        self.assertEqual(content["body"], b"hello artifact")
+
+    def test_host_runs_workflow_v2_workflow_ref_child_workflow(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(
+            host="127.0.0.1",
+            port=0,
+            llm_client=SequentialRecordingLlmClient([
+                '{"topic":"mars"}',
+                '{"summary":"Child research complete"}',
+            ]),
+        )
+        host.start()
+        try:
+            post_json(f"{host.url}/api/workflows", workflow_ref_child_definition())
+            child_published = post_json(f"{host.url}/api/workflows/research-flow/publish", {})
+            parent = workflow_ref_parent_definition(child_published["version"])
+            post_json(f"{host.url}/api/workflows", parent)
+            parent_published = post_json(f"{host.url}/api/workflows/parent-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/parent-flow/runs",
+                {"version": parent_published["version"], "input": {"message": "Research Mars"}},
+            )
+        finally:
+            host.stop()
+
+        self.assertEqual(started["status"], "succeeded")
+        self.assertEqual(started["nodeResults"][1]["nodeId"], "research")
+        self.assertEqual(started["nodeResults"][1]["data"], {"summary": "Child research complete"})
+        self.assertEqual(started["nodeResults"][1]["metadata"]["workflowId"], "research-flow")
+
+    def test_host_blocks_workflow_ref_publish_when_input_mapping_type_is_incompatible(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient('{"summary":"ok"}'))
+        host.start()
+        try:
+            child = workflow_ref_child_definition()
+            child["inputSchema"] = {"type": "object", "required": ["confidence"], "properties": {"confidence": {"type": "number"}}}
+            post_json(f"{host.url}/api/workflows", child)
+            published = post_json(f"{host.url}/api/workflows/research-flow/publish", {})
+            parent = workflow_ref_parent_definition(published["version"])
+            parent["nodes"][1]["config"]["inputBindings"] = {
+                "confidence": {"kind": "nodeOutput", "nodeId": "analyze", "path": ["topic"]},
+            }
+            post_json(f"{host.url}/api/workflows", parent)
+            invalid = post_json_error(f"{host.url}/api/workflows/parent-flow/publish", {})
+        finally:
+            host.stop()
+
+        self.assertEqual(invalid["status"], 422)
+        codes = [error["code"] for error in invalid["body"]["validation"]["errors"]]
+        self.assertIn("workflow_ref_input_type_mismatch", codes)
+
     def test_host_round_trips_and_validates_workflow_v2_agent_node_config(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -1261,6 +1343,15 @@ def get_text(url: str) -> str:
         return response.read().decode("utf-8")
 
 
+def get_response(url: str) -> dict[str, object]:
+    with urlopen(url, timeout=5) as response:
+        return {
+            "status": response.status,
+            "contentType": response.headers.get_content_type(),
+            "body": response.read(),
+        }
+
+
 def post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
     return post_raw_json(url, json.dumps(payload).encode("utf-8"))
 
@@ -1487,6 +1578,75 @@ def valid_condition_workflow_v2_definition() -> dict[str, object]:
             {"source": "route", "target": "business-agent", "sourceHandle": "default"},
             {"source": "technical-agent", "target": "end-1"},
             {"source": "business-agent", "target": "end-1"},
+        ],
+    }
+
+
+def workflow_ref_child_definition() -> dict[str, object]:
+    return {
+        "id": "research-flow",
+        "name": "Research Flow",
+        "schemaVersion": 2,
+        "inputSchema": {
+            "type": "object",
+            "required": ["topic", "priority"],
+            "properties": {"topic": {"type": "string"}, "priority": {"type": "string"}},
+        },
+        "outputSchema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+        "tools": [],
+        "nodes": [
+            {
+                "id": "research-agent",
+                "type": "agent",
+                "config": {
+                    "instruction": "Research the topic.",
+                    "visibility": "visible",
+                    "toolPolicy": {"mode": "disabled"},
+                    "outputSchema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+                },
+            },
+            {"id": "end-1", "type": "end"},
+        ],
+        "edges": [{"source": "START", "target": "research-agent"}, {"source": "research-agent", "target": "end-1"}],
+    }
+
+
+def workflow_ref_parent_definition(child_version: int) -> dict[str, object]:
+    return {
+        "id": "parent-flow",
+        "name": "Parent Flow",
+        "schemaVersion": 2,
+        "tools": [],
+        "nodes": [
+            {
+                "id": "analyze",
+                "type": "agent",
+                "config": {
+                    "instruction": "Extract the research topic.",
+                    "visibility": "visible",
+                    "toolPolicy": {"mode": "disabled"},
+                    "outputSchema": {"type": "object", "required": ["topic"], "properties": {"topic": {"type": "string"}}},
+                },
+            },
+            {
+                "id": "research",
+                "type": "workflow",
+                "config": {
+                    "workflowId": "research-flow",
+                    "version": child_version,
+                    "messageContextMode": "inherit",
+                    "inputBindings": {
+                        "topic": {"kind": "nodeOutput", "nodeId": "analyze", "path": ["topic"]},
+                        "priority": {"kind": "constant", "value": "high"},
+                    },
+                },
+            },
+            {"id": "end-1", "type": "end"},
+        ],
+        "edges": [
+            {"source": "START", "target": "analyze"},
+            {"source": "analyze", "target": "research"},
+            {"source": "research", "target": "end-1"},
         ],
     }
 

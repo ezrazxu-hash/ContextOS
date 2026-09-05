@@ -54,7 +54,7 @@ def post_workflow_validate(
         definition = payload or workflow_service.get(workflow_id)
     except WorkflowV2DefinitionNotFound:
         return _not_found(workflow_id)
-    return {"status": 200, "body": WorkflowV2DefinitionValidator(tool_registry=tool_registry).validate(definition)}
+    return {"status": 200, "body": WorkflowV2DefinitionValidator(tool_registry=tool_registry, definition_service=workflow_service).validate(definition)}
 
 
 def post_workflow_publish(
@@ -65,7 +65,7 @@ def post_workflow_publish(
     try:
         published = workflow_service.publish(
             workflow_id,
-            validator=WorkflowV2DefinitionValidator(tool_registry=tool_registry),
+            validator=WorkflowV2DefinitionValidator(tool_registry=tool_registry, definition_service=workflow_service),
         )
         return {"status": 201, "body": published}
     except WorkflowV2DefinitionNotFound:

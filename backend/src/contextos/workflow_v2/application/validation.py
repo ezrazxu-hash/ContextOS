@@ -17,8 +17,9 @@ TOOL_POLICY_MODES = frozenset({"auto", "required", "disabled"})
 
 
 class WorkflowV2DefinitionValidator:
-    def __init__(self, tool_registry: ToolRegistry | None = None) -> None:
+    def __init__(self, tool_registry: ToolRegistry | None = None, definition_service: Any | None = None) -> None:
         self._tool_registry = tool_registry
+        self._definition_service = definition_service
 
     def validate(self, definition: dict[str, object]) -> dict[str, object]:
         nodes = definition.get("nodes", [])
@@ -29,6 +30,7 @@ class WorkflowV2DefinitionValidator:
         if not isinstance(edges, list):
             return {"valid": False, "errors": [_issue("edges_invalid", "edges", "Edges must be a list")], "warnings": []}
 
+        errors.extend(_state_path_errors(definition))
         workflow_tool_ids = _workflow_tool_ids(definition)
         errors.extend(_validate_workflow_tools(definition, workflow_tool_ids, self._tool_registry))
         node_ids = [str(node.get("id")) for node in nodes if isinstance(node, dict) and node.get("id")]
@@ -49,6 +51,8 @@ class WorkflowV2DefinitionValidator:
                 errors.extend(_validate_agent_node(node, index, workflow_tool_ids, self._tool_registry))
             if node_type == "condition":
                 errors.extend(_validate_condition_node(node, index, node_by_id))
+            if node_type == "workflow":
+                errors.extend(_validate_workflow_ref_node(node, index, node_by_id, definition, self._definition_service))
 
         if not any(isinstance(node, dict) and node.get("type") == "end" for node in nodes):
             errors.append(_issue("missing_end_node", "nodes", "At least one End node is required"))
@@ -183,21 +187,172 @@ def _validate_condition_node(
             errors.append(_issue("condition_source_path_required", f"nodes[{index}].config.branches[{branch_index}].source.path", "Condition source path is required", node_id=str(node.get("id") or "")))
             continue
         output_schema = source_node.get("config", {}).get("outputSchema", source_node.get("config", {}).get("output_schema")) if isinstance(source_node.get("config", {}), dict) else None
-        if not _schema_path_exists(output_schema, [str(item) for item in path]):
+        source_schema = _schema_at_path(output_schema, [str(item) for item in path])
+        if source_schema is None:
             errors.append(_issue("condition_source_field_not_found", f"nodes[{index}].config.branches[{branch_index}].source.path", f"Condition source field is not defined by output schema: {source_node_id}.{'.'.join(str(item) for item in path)}", node_id=str(node.get("id") or "")))
+            continue
+        if not _condition_operator_matches_schema(branch.get("operator"), source_schema):
+            errors.append(_issue("condition_operator_type_mismatch", f"nodes[{index}].config.branches[{branch_index}].operator", f"Condition operator is not compatible with source field type: {branch.get('operator')}", node_id=str(node.get("id") or "")))
     return errors
 
 
 def _schema_path_exists(schema: Any, path: list[str]) -> bool:
+    return _schema_at_path(schema, path) is not None
+
+
+def _schema_at_path(schema: Any, path: list[str]) -> dict[str, Any] | None:
     current = schema
     for segment in path:
         if not isinstance(current, dict) or current.get("type") != "object":
-            return False
+            return None
         properties = current.get("properties", {})
         if not isinstance(properties, dict) or segment not in properties:
-            return False
+            return None
         current = properties[segment]
-    return isinstance(current, dict)
+    return current if isinstance(current, dict) else None
+
+
+def _validate_workflow_ref_node(
+    node: dict[str, Any],
+    index: int,
+    node_by_id: dict[str, dict[str, Any]],
+    definition: dict[str, object],
+    definition_service: Any | None,
+) -> list[dict[str, object]]:
+    config = node.get("config", {})
+    node_id = str(node.get("id") or "")
+    if not isinstance(config, dict):
+        return [_issue("invalid_workflow_ref_config", f"nodes[{index}].config", "Workflow Ref config must be an object", node_id=node_id)]
+    workflow_id = str(config.get("workflowId", config.get("workflow_id", "")))
+    version = config.get("version")
+    bindings = config.get("inputBindings", config.get("input_bindings", {}))
+    if not isinstance(bindings, dict):
+        return [_issue("invalid_workflow_ref_input_bindings", f"nodes[{index}].config.inputBindings", "Workflow Ref inputBindings must be an object", node_id=node_id)]
+    errors: list[dict[str, object]] = []
+    for name, value_ref in bindings.items():
+        errors.extend(_validate_value_ref_shape(value_ref, f"nodes[{index}].config.inputBindings.{name}", node_id))
+    if definition_service is None:
+        return errors
+    if not workflow_id or not isinstance(version, int):
+        errors.append(_issue("workflow_ref_version_required", f"nodes[{index}].config.version", "Workflow Ref requires an explicit published version", node_id=node_id))
+        return errors
+    try:
+        child_definition = definition_service.get_version(workflow_id, version)["definition"]
+    except Exception:
+        errors.append(_issue("workflow_ref_version_not_found", f"nodes[{index}].config.workflowId", f"Workflow version not found: {workflow_id}@{version}", node_id=node_id))
+        return errors
+    input_schema = child_definition.get("inputSchema", child_definition.get("input_schema"))
+    required = input_schema.get("required", []) if isinstance(input_schema, dict) and isinstance(input_schema.get("required", []), list) else []
+    for required_name in required:
+        if str(required_name) not in bindings:
+            errors.append(_issue("workflow_ref_required_input_missing", f"nodes[{index}].config.inputBindings.{required_name}", f"Workflow Ref required input is not bound: {required_name}", node_id=node_id))
+    for input_name, value_ref in bindings.items():
+        target_schema = _schema_at_path(input_schema, [str(input_name)]) if isinstance(input_schema, dict) else None
+        source_schema = _value_ref_schema(value_ref, definition, node_by_id)
+        if source_schema is None and _value_ref_kind(value_ref) in {"nodeOutput", "node_output", "workflowInput", "workflow_input"}:
+            errors.append(_issue("workflow_ref_source_field_not_found", f"nodes[{index}].config.inputBindings.{input_name}", f"Workflow Ref input mapping source field is not defined: {input_name}", node_id=node_id))
+            continue
+        if target_schema is not None and source_schema is not None and not _schema_types_compatible(source_schema, target_schema):
+            errors.append(_issue("workflow_ref_input_type_mismatch", f"nodes[{index}].config.inputBindings.{input_name}", f"Workflow Ref input type is not compatible: {input_name}", node_id=node_id))
+    return errors
+
+
+def _validate_value_ref_shape(value_ref: Any, field: str, node_id: str) -> list[dict[str, object]]:
+    if not isinstance(value_ref, dict):
+        return [_issue("invalid_value_ref", field, "ValueRef must be an object", node_id=node_id)]
+    kind = str(value_ref.get("kind", value_ref.get("type", "")))
+    if kind not in {"workflowInput", "workflow_input", "nodeOutput", "node_output", "constant", "artifact"}:
+        return [_issue("invalid_value_ref", field, f"Unsupported ValueRef kind: {kind}", node_id=node_id)]
+    return []
+
+
+def _value_ref_schema(value_ref: Any, definition: dict[str, object], node_by_id: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    if not isinstance(value_ref, dict):
+        return None
+    kind = _value_ref_kind(value_ref)
+    if kind in {"constant"}:
+        return _schema_for_json_value(value_ref.get("value"))
+    path = [str(item) for item in value_ref.get("path", [])] if isinstance(value_ref.get("path", []), list) else []
+    if kind in {"workflowInput", "workflow_input"}:
+        return _schema_at_path(definition.get("inputSchema", definition.get("input_schema")), path)
+    if kind in {"nodeOutput", "node_output"}:
+        source_node = node_by_id.get(str(value_ref.get("nodeId", value_ref.get("node_id", ""))))
+        if not isinstance(source_node, dict):
+            return None
+        config = source_node.get("config", {}) if isinstance(source_node.get("config", {}), dict) else {}
+        return _schema_at_path(config.get("outputSchema", config.get("output_schema")), path)
+    if kind == "artifact":
+        return {"type": "object", "format": "artifactRef"}
+    return None
+
+
+def _value_ref_kind(value_ref: Any) -> str:
+    return str(value_ref.get("kind", value_ref.get("type", ""))) if isinstance(value_ref, dict) else ""
+
+
+def _schema_for_json_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, bool):
+        return {"type": "boolean"}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"type": "integer"}
+    if isinstance(value, float):
+        return {"type": "number"}
+    if isinstance(value, str):
+        return {"type": "string"}
+    if isinstance(value, list):
+        return {"type": "array"}
+    if isinstance(value, dict):
+        return {"type": "object"}
+    return {}
+
+
+def _schema_types_compatible(source_schema: dict[str, Any], target_schema: dict[str, Any]) -> bool:
+    source_type = _schema_type(source_schema)
+    target_type = _schema_type(target_schema)
+    return source_type == target_type or (source_type == "integer" and target_type == "number")
+
+
+def _condition_operator_matches_schema(operator: Any, schema: dict[str, Any]) -> bool:
+    normalized = _normalize_operator(str(operator or "equals"))
+    schema_type = _schema_type(schema)
+    if normalized in {"greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal"}:
+        return schema_type in {"number", "integer"}
+    if normalized in {"starts_with", "ends_with"}:
+        return schema_type == "string"
+    if normalized == "contains":
+        return schema_type in {"string", "array"}
+    return True
+
+
+def _schema_type(schema: dict[str, Any]) -> str:
+    if isinstance(schema.get("enum"), list):
+        return "string"
+    return str(schema.get("type", ""))
+
+
+def _normalize_operator(operator: str) -> str:
+    value = operator.replace("-", "_")
+    result = []
+    for char in value:
+        if char.isupper():
+            result.append("_")
+            result.append(char.lower())
+        else:
+            result.append(char)
+    return "".join(result).strip("_").lower()
+
+
+def _state_path_errors(value: Any, field: str = "$") -> list[dict[str, object]]:
+    errors: list[dict[str, object]] = []
+    if isinstance(value, str) and "$state." in value:
+        return [_issue("state_path_not_allowed", field, "Workflow V2 configuration must use structured ValueRef instead of $state paths")]
+    if isinstance(value, dict):
+        for key, item in value.items():
+            errors.extend(_state_path_errors(item, f"{field}.{key}" if field != "$" else str(key)))
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            errors.extend(_state_path_errors(item, f"{field}[{index}]"))
+    return errors
 
 
 def _workflow_tool_ids(definition: dict[str, object]) -> set[str]:

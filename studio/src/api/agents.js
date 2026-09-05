@@ -44,6 +44,18 @@ export function createWorkflowApiClient(httpClient) {
       return httpClient.request("GET", `/workflow-runs/${encodeURIComponent(runId)}`, options);
     },
 
+    listWorkflowRunArtifacts(runId, options = {}) {
+      return httpClient.request("GET", `/workflow-runs/${encodeURIComponent(runId)}/artifacts`, options);
+    },
+
+    downloadWorkflowArtifactContent(artifactId, options = {}) {
+      const path = `/workflow-artifacts/${encodeURIComponent(artifactId)}/content`;
+      if (httpClient.download) {
+        return httpClient.download(path, options);
+      }
+      return httpClient.request("GET", path, options);
+    },
+
     listAgents(options = {}) {
       return httpClient.request("GET", "/agents", options);
     },

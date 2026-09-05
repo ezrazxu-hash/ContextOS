@@ -63,6 +63,17 @@ export function createWorkflowV2Builder(initialDefinition = null) {
       node.config = { ...(node.config ?? {}), ...deepClone(patch) };
       return this.view();
     },
+    updateWorkflowRefNodeConfig(nodeId, patch) {
+      const node = state.nodes.find((item) => item.id === nodeId);
+      if (!node) {
+        throw new Error(`Unknown workflow node: ${nodeId}`);
+      }
+      if (node.type !== "workflow") {
+        throw new Error(`Workflow node is not a Workflow Ref node: ${nodeId}`);
+      }
+      node.config = { ...(node.config ?? {}), ...deepClone(patch) };
+      return this.view();
+    },
     connect(source, target, options = {}) {
       const issue = validateConnection(state, source, target);
       if (issue) {

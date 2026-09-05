@@ -1,4 +1,5 @@
 from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionNotFound, WorkflowV2PublishedVersionNotFound
+from contextos.workflow_v2.runtime.artifacts import InMemoryWorkflowV2ArtifactStore, WorkflowV2ArtifactNotFound
 from contextos.workflow_v2.runtime.runs import WorkflowV2RunNotFound, WorkflowV2RunService
 
 
@@ -22,3 +23,24 @@ def get_workflow_run(run_id: str, service: WorkflowV2RunService) -> dict[str, ob
         return {"status": 200, "body": service.get(run_id)}
     except WorkflowV2RunNotFound:
         return {"status": 404, "body": {"error": {"code": "workflow_run.not_found", "message": f"Workflow run not found: {run_id}"}}}
+
+
+def get_workflow_run_artifacts(run_id: str, run_service: WorkflowV2RunService, artifact_store: InMemoryWorkflowV2ArtifactStore) -> dict[str, object]:
+    try:
+        run_service.get(run_id)
+        return {"status": 200, "body": {"artifacts": artifact_store.list_by_run(run_id)}}
+    except WorkflowV2RunNotFound:
+        return {"status": 404, "body": {"error": {"code": "workflow_run.not_found", "message": f"Workflow run not found: {run_id}"}}}
+
+
+def get_workflow_artifact_content(artifact_id: str, artifact_store: InMemoryWorkflowV2ArtifactStore) -> dict[str, object]:
+    try:
+        content = artifact_store.get_content(artifact_id)
+        return {
+            "status": 200,
+            "body": content["content"],
+            "contentType": content["mimeType"],
+            "name": content["name"],
+        }
+    except WorkflowV2ArtifactNotFound:
+        return {"status": 404, "body": {"error": {"code": "workflow_artifact.not_found", "message": f"Workflow artifact not found: {artifact_id}"}}}

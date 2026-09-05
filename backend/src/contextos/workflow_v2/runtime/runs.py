@@ -10,8 +10,9 @@ from uuid import uuid4
 
 from contextos.tool.executor_registry import ToolExecutorError, ToolExecutorRegistry, ToolInputValidationError
 from contextos.tool.registry.registry import ToolRegistry
-from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionNotFound, WorkflowV2DefinitionService, WorkflowV2PublishedVersionNotFound
 from contextos.workflow_v2.application.json_schema import WorkflowV2JsonSchemaService
+from contextos.workflow_v2.runtime.artifacts import InMemoryWorkflowV2ArtifactStore
 
 
 class WorkflowV2RunNotFound(Exception):
@@ -29,6 +30,7 @@ class WorkflowV2RunRecord:
     final_result: dict[str, Any] | None
     node_results: list[dict[str, Any]]
     messages: list[dict[str, Any]]
+    artifacts: list[dict[str, Any]]
     execution_details: dict[str, Any]
     error: dict[str, Any] | None
     created_at: str
@@ -44,6 +46,7 @@ class WorkflowV2RunRecord:
             "finalResult": deepcopy(self.final_result),
             "nodeResults": deepcopy(self.node_results),
             "messages": deepcopy(self.messages),
+            "artifacts": deepcopy(self.artifacts),
             "executionDetails": deepcopy(self.execution_details),
             "error": deepcopy(self.error),
             "createdAt": self.created_at,
@@ -73,12 +76,14 @@ class WorkflowV2RunService:
         llm_client,
         tool_registry: ToolRegistry | None = None,
         tool_executor_registry: ToolExecutorRegistry | None = None,
+        artifact_store: InMemoryWorkflowV2ArtifactStore | None = None,
     ) -> None:
         self._definition_service = definition_service
         self._store = store
         self._llm_client = llm_client
         self._tool_registry = tool_registry
         self._tool_executor_registry = tool_executor_registry
+        self._artifact_store = artifact_store or InMemoryWorkflowV2ArtifactStore()
 
     def start(self, *, workflow_id: str, version: int, input_payload: dict[str, Any]) -> dict[str, Any]:
         published = self._definition_service.get_version(workflow_id, version)
@@ -90,9 +95,11 @@ class WorkflowV2RunService:
             workflow_version=version,
             definition=definition,
             input_payload=deepcopy(input_payload),
+            definition_service=self._definition_service,
             llm_client=self._llm_client,
             tool_registry=self._tool_registry,
             tool_executor_registry=self._tool_executor_registry,
+            artifact_store=self._artifact_store,
         )
         return self._store.save(run)
 
@@ -108,10 +115,15 @@ def _execute_single_agent_run(
     definition: dict[str, Any],
     input_payload: dict[str, Any],
     llm_client,
+    definition_service: WorkflowV2DefinitionService | None = None,
     tool_registry: ToolRegistry | None = None,
     tool_executor_registry: ToolExecutorRegistry | None = None,
+    artifact_store: InMemoryWorkflowV2ArtifactStore | None = None,
+    workflow_depth: int = 0,
+    initial_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    message_history = [_user_message(input_payload)]
+    artifact_store = artifact_store or InMemoryWorkflowV2ArtifactStore()
+    message_history = [*deepcopy(initial_messages or []), _user_message(input_payload)]
     execution_details = {"nodes": []}
     node_results: list[dict[str, Any]] = []
     node_outputs: dict[str, Any] = {}
@@ -132,7 +144,7 @@ def _execute_single_agent_run(
             end_node = node
             break
         if node.get("type") == "agent":
-            result = _run_agent_node(node, definition, message_history, execution_details, llm_client, tool_registry, tool_executor_registry)
+            result = _run_agent_node(node, definition, message_history, execution_details, llm_client, tool_registry, tool_executor_registry, run_id, artifact_store)
             node_results.append(result["nodeResult"])
             if not result["ok"]:
                 return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, **result["error"])
@@ -148,8 +160,30 @@ def _execute_single_agent_run(
                 return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, **result["error"])
             current = str(result["target"])
             continue
+        if node.get("type") == "workflow":
+            result = _run_workflow_ref_node(
+                node,
+                input_payload,
+                node_outputs,
+                message_history,
+                definition_service,
+                llm_client,
+                tool_registry,
+                tool_executor_registry,
+                artifact_store,
+                workflow_depth,
+            )
+            node_results.append(result["nodeResult"])
+            execution_details["nodes"].append({"nodeId": node["id"], "steps": result["steps"]})
+            if not result["ok"]:
+                return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, **result["error"])
+            last_output = result["output"]
+            node_outputs[str(node["id"])] = deepcopy(last_output)
+            current = _edge_target(definition, str(node["id"]), "")
+            continue
         return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, "workflow.unsupported_node", f"Unsupported runtime node type: {node.get('type')}")
 
+    artifacts = artifact_store.list_by_run(run_id)
     return WorkflowV2RunRecord(
         id=run_id,
         workflow_id=workflow_id,
@@ -157,9 +191,10 @@ def _execute_single_agent_run(
         status="succeeded",
         input=input_payload,
         output=last_output,
-        final_result=_build_final_result(end_node, message_history, node_outputs),
+        final_result=_build_final_result(end_node, message_history, node_outputs, artifacts),
         node_results=node_results,
         messages=message_history,
+        artifacts=artifacts,
         execution_details=execution_details,
         error=None,
         created_at=_now(),
@@ -174,12 +209,15 @@ def _run_agent_node(
     llm_client,
     tool_registry: ToolRegistry | None,
     tool_executor_registry: ToolExecutorRegistry | None,
+    run_id: str,
+    artifact_store: InMemoryWorkflowV2ArtifactStore,
 ) -> dict[str, Any]:
     tool_policy = agent_node.get("config", {}).get("toolPolicy", {"mode": "disabled"})
     execution_details["nodes"].append({"nodeId": agent_node["id"], "steps": []})
     try:
         output_schema = agent_node.get("config", {}).get("outputSchema") or {"type": "object", "properties": {}}
         called_tools: set[str] = set()
+        node_artifacts: list[dict[str, Any]] = []
         raw_output = ""
         max_tool_calls = _positive_int(tool_policy.get("maxToolCalls"), 20) if isinstance(tool_policy, dict) else 20
         while True:
@@ -211,22 +249,36 @@ def _run_agent_node(
                     _append_failed_tool_result(message_history, execution_details, tool_call, "TOOL_EXECUTION_FAILED", str(error))
                     return _agent_failure(agent_node, "TOOL_EXECUTION_FAILED", str(error))
                 called_tools.add(tool_call["name"])
-                tool_message = {"role": "tool", "toolCallId": tool_call["id"], "name": tool_call["name"], "status": "succeeded", "data": deepcopy(result)}
+                tool_artifacts = _save_artifacts_from_tool_result(result, run_id, str(agent_node["id"]), artifact_store)
+                node_artifacts.extend(tool_artifacts)
+                tool_data = _tool_result_data(result)
+                tool_message = {"role": "tool", "toolCallId": tool_call["id"], "name": tool_call["name"], "status": "succeeded", "data": deepcopy(tool_data)}
+                if tool_artifacts:
+                    tool_message["artifacts"] = deepcopy(tool_artifacts)
                 message_history.append(tool_message)
-                _steps(execution_details).append({"type": "tool_result", "toolCallId": tool_call["id"], "name": tool_call["name"], "status": "succeeded", "data": deepcopy(result)})
-        message_history.append({"role": "assistant", "content": raw_output, "visible": _agent_message_visible(agent_node)})
+                tool_result_step = {"type": "tool_result", "toolCallId": tool_call["id"], "name": tool_call["name"], "status": "succeeded", "data": deepcopy(tool_data)}
+                if tool_artifacts:
+                    tool_result_step["artifacts"] = deepcopy(tool_artifacts)
+                _steps(execution_details).append(tool_result_step)
         parsed = json.loads(raw_output)
+        agent_artifacts = _save_artifacts_from_payload(parsed, run_id, str(agent_node["id"]), artifact_store)
+        node_artifacts.extend(agent_artifacts)
+        parsed_data = _payload_data_without_artifacts(parsed)
+        assistant_message = {"role": "assistant", "content": _assistant_content(raw_output, parsed_data, agent_artifacts), "visible": _agent_message_visible(agent_node)}
+        if agent_artifacts:
+            assistant_message["artifacts"] = deepcopy(agent_artifacts)
+        message_history.append(assistant_message)
         missing_required = _missing_required_tools(tool_policy, called_tools)
         if missing_required:
             return _agent_failure(agent_node, "REQUIRED_TOOL_NOT_CALLED", f"Required tool was not called: {missing_required[0]}")
-        validation = WorkflowV2JsonSchemaService().validate_value(output_schema, parsed)
+        validation = WorkflowV2JsonSchemaService().validate_value(output_schema, parsed_data)
         _steps(execution_details).append({"type": "schema_validation", "status": "succeeded" if validation["valid"] else "failed"})
         if not validation["valid"]:
             first_error = validation["errors"][0]
             return _agent_failure(agent_node, "workflow.output_schema_invalid", str(first_error["message"]), field=str(first_error["path"]))
-        node_result = {"nodeId": agent_node["id"], "status": "succeeded", "data": parsed}
-        _steps(execution_details).append({"type": "node_result", "status": "succeeded", "data": deepcopy(parsed)})
-        return {"ok": True, "nodeResult": node_result, "output": parsed}
+        node_result = {"nodeId": agent_node["id"], "status": "succeeded", "data": parsed_data, "artifacts": deepcopy(node_artifacts)}
+        _steps(execution_details).append({"type": "node_result", "status": "succeeded", "data": deepcopy(parsed_data), "artifacts": deepcopy(node_artifacts)})
+        return {"ok": True, "nodeResult": node_result, "output": parsed_data}
     except json.JSONDecodeError as error:
         return _agent_failure(agent_node, "workflow.output_parse_failed", str(error), field="$")
     except Exception as error:
@@ -275,10 +327,138 @@ def _run_condition_node(node: dict[str, Any], definition: dict[str, Any], node_o
     return {"ok": True, "target": target, "nodeResult": {"nodeId": node["id"], "status": "succeeded", "data": data}, "steps": [*steps, {"type": "condition_result", "branch": "default", "target": target}]}
 
 
+def _run_workflow_ref_node(
+    node: dict[str, Any],
+    workflow_input: dict[str, Any],
+    node_outputs: dict[str, Any],
+    message_history: list[dict[str, Any]],
+    definition_service: WorkflowV2DefinitionService | None,
+    llm_client,
+    tool_registry: ToolRegistry | None,
+    tool_executor_registry: ToolExecutorRegistry | None,
+    artifact_store: InMemoryWorkflowV2ArtifactStore,
+    workflow_depth: int,
+) -> dict[str, Any]:
+    config = node.get("config", {}) if isinstance(node.get("config", {}), dict) else {}
+    workflow_id = str(config.get("workflowId", config.get("workflow_id", "")))
+    version = config.get("version")
+    message_context_mode = str(config.get("messageContextMode", config.get("message_context_mode", "inherit"))).lower()
+    steps = [{"type": "workflow_ref_start", "workflowId": workflow_id, "workflowVersion": version}]
+    if definition_service is None:
+        return _workflow_ref_failure(node, steps, "workflow_ref.definition_service_missing", "Workflow definition service is not available")
+    if workflow_depth >= 8:
+        return _workflow_ref_failure(node, steps, "workflow_ref.depth_limit_exceeded", "Workflow depth limit exceeded")
+    if not workflow_id or not isinstance(version, int):
+        return _workflow_ref_failure(node, steps, "workflow_ref.version_required", "Workflow Ref node requires an explicit published version")
+    try:
+        published = definition_service.get_version(workflow_id, version)
+    except (WorkflowV2DefinitionNotFound, WorkflowV2PublishedVersionNotFound):
+        return _workflow_ref_failure(node, steps, "workflow_ref.version_not_found", f"Workflow version not found: {workflow_id}@{version}")
+    child_definition = published["definition"]
+    child_input = _resolve_workflow_ref_input(config.get("inputBindings", config.get("input_bindings", {})), workflow_input, node_outputs)
+    if not child_input["ok"]:
+        return _workflow_ref_failure(node, steps, **child_input["error"])
+    input_payload = dict(child_input["value"])
+    input_payload.setdefault("message", json.dumps(child_input["value"], ensure_ascii=False, sort_keys=True))
+    input_validation = _validate_contract(child_definition.get("inputSchema", child_definition.get("input_schema")), input_payload)
+    steps.append({"type": "workflow_ref_input", "status": "succeeded" if input_validation["valid"] else "failed", "data": deepcopy(child_input["value"])})
+    if not input_validation["valid"]:
+        first_error = input_validation["errors"][0]
+        return _workflow_ref_failure(node, steps, "workflow_ref.input_schema_invalid", str(first_error["message"]), field=str(first_error["path"]))
+    inherited_messages = message_history if message_context_mode == "inherit" else None
+    child_run = _execute_single_agent_run(
+        run_id=f"workflow_run_{uuid4().hex}",
+        workflow_id=workflow_id,
+        workflow_version=version,
+        definition=child_definition,
+        input_payload=input_payload,
+        definition_service=definition_service,
+        llm_client=llm_client,
+        tool_registry=tool_registry,
+        tool_executor_registry=tool_executor_registry,
+        artifact_store=artifact_store,
+        workflow_depth=workflow_depth + 1,
+        initial_messages=inherited_messages,
+    )
+    if message_context_mode == "inherit":
+        message_history.extend(child_run["messages"][len(inherited_messages or []):])
+    if child_run["status"] != "succeeded":
+        child_error = child_run.get("error") if isinstance(child_run.get("error"), dict) else {}
+        if child_error.get("code") == "workflow_ref.depth_limit_exceeded":
+            return _workflow_ref_failure(node, [*steps, {"type": "workflow_ref_result", "status": "failed", "error": child_error}], str(child_error["code"]), str(child_error.get("message", "Workflow depth limit exceeded")))
+        return _workflow_ref_failure(node, [*steps, {"type": "workflow_ref_result", "status": "failed", "error": child_run.get("error")}], "workflow_ref.child_failed", "Child workflow failed", field=workflow_id)
+    output_validation = _validate_contract(child_definition.get("outputSchema", child_definition.get("output_schema")), child_run.get("output"))
+    steps.append({"type": "workflow_ref_output", "status": "succeeded" if output_validation["valid"] else "failed", "data": deepcopy(child_run.get("output"))})
+    if not output_validation["valid"]:
+        first_error = output_validation["errors"][0]
+        return _workflow_ref_failure(node, steps, "workflow_ref.output_schema_invalid", str(first_error["message"]), field=str(first_error["path"]))
+    data = deepcopy(child_run.get("output"))
+    node_result = {
+        "nodeId": node["id"],
+        "status": "succeeded",
+        "data": data,
+        "artifacts": deepcopy(child_run.get("finalResult", {}).get("artifacts", [])),
+        "metadata": {
+            "workflowId": workflow_id,
+            "workflowVersion": version,
+            "messageContextMode": message_context_mode,
+            "childRunId": child_run["id"],
+        },
+    }
+    return {"ok": True, "output": data, "nodeResult": node_result, "steps": [*steps, {"type": "workflow_ref_result", "status": "succeeded", "data": data}]}
+
+
+def _resolve_workflow_ref_input(bindings: Any, workflow_input: dict[str, Any], node_outputs: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(bindings, dict):
+        bindings = {}
+    result: dict[str, Any] = {}
+    for name, value_ref in bindings.items():
+        resolved = _resolve_value_ref(value_ref, workflow_input, node_outputs)
+        if not resolved["found"]:
+            return {"ok": False, "error": {"code": "workflow_ref.value_ref_not_found", "message": f"Workflow Ref input binding not found: {name}", "field": str(name)}}
+        result[str(name)] = deepcopy(resolved["value"])
+    return {"ok": True, "value": result}
+
+
+def _resolve_value_ref(value_ref: Any, workflow_input: dict[str, Any], node_outputs: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value_ref, dict):
+        return {"found": False, "value": None}
+    kind = str(value_ref.get("kind", value_ref.get("type", "")))
+    if kind in {"constant", "ConstantValueRef"}:
+        return {"found": True, "value": deepcopy(value_ref.get("value"))}
+    if kind in {"nodeOutput", "node_output", "NodeOutputValueRef"}:
+        node_id = str(value_ref.get("nodeId", value_ref.get("node_id", "")))
+        path = [str(item) for item in value_ref.get("path", [])] if isinstance(value_ref.get("path", []), list) else []
+        return _resolve_node_output_value(node_outputs, node_id, path)
+    if kind in {"workflowInput", "workflow_input", "WorkflowInputValueRef", "userInput"}:
+        path = [str(item) for item in value_ref.get("path", [])] if isinstance(value_ref.get("path", []), list) else []
+        value: Any = workflow_input
+        for segment in path:
+            if not isinstance(value, dict) or segment not in value:
+                return {"found": False, "value": None}
+            value = value[segment]
+        return {"found": True, "value": value}
+    return {"found": False, "value": None}
+
+
+def _validate_contract(schema: Any, value: Any) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        return {"valid": True, "errors": []}
+    return WorkflowV2JsonSchemaService().validate_value(schema, value)
+
+
+def _workflow_ref_failure(node: dict[str, Any], steps: list[dict[str, Any]], code: str, message: str, *, field: str | None = None) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if field is not None:
+        error["field"] = field
+    return {"ok": False, "nodeResult": {"nodeId": node["id"], "status": "failed", "data": None, "artifacts": [], "metadata": {}}, "error": error, "steps": [*steps, {"type": "workflow_ref_result", "status": "failed", "error": error}]}
+
+
 def _build_final_result(
     end_node: dict[str, Any] | None,
     message_history: list[dict[str, Any]],
     node_outputs: dict[str, Any],
+    artifacts: list[dict[str, Any]],
 ) -> dict[str, Any]:
     config = end_node.get("config", {}) if isinstance(end_node, dict) and isinstance(end_node.get("config", {}), dict) else {}
     final_config = config.get("finalResult", config.get("final_result", {}))
@@ -287,8 +467,52 @@ def _build_final_result(
     return {
         "message": _last_visible_assistant_message(message_history),
         "data": _final_result_data(final_config.get("data"), node_outputs),
-        "artifacts": [],
+        "artifacts": [deepcopy(artifact) for artifact in artifacts if artifact.get("visible") is not False],
     }
+
+
+def _save_artifacts_from_tool_result(
+    result: Any,
+    run_id: str,
+    node_id: str,
+    artifact_store: InMemoryWorkflowV2ArtifactStore,
+) -> list[dict[str, Any]]:
+    return _save_artifacts_from_payload(result, run_id, node_id, artifact_store)
+
+
+def _save_artifacts_from_payload(
+    payload: Any,
+    run_id: str,
+    node_id: str,
+    artifact_store: InMemoryWorkflowV2ArtifactStore,
+) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("artifacts"), list):
+        return []
+    refs: list[dict[str, Any]] = []
+    for artifact in payload["artifacts"]:
+        if isinstance(artifact, dict):
+            refs.append(artifact_store.save(run_id=run_id, created_by_node_id=node_id, artifact=artifact))
+    return refs
+
+
+def _tool_result_data(result: Any) -> Any:
+    if not isinstance(result, dict) or "artifacts" not in result:
+        return deepcopy(result)
+    if "data" in result:
+        return deepcopy(result["data"])
+    return {key: deepcopy(value) for key, value in result.items() if key != "artifacts"}
+
+
+def _payload_data_without_artifacts(payload: Any) -> Any:
+    if not isinstance(payload, dict) or "artifacts" not in payload:
+        return deepcopy(payload)
+    return {key: deepcopy(value) for key, value in payload.items() if key != "artifacts"}
+
+
+def _assistant_content(raw_output: str, data: Any, artifacts: list[dict[str, Any]]) -> str:
+    if not artifacts:
+        return raw_output
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 def _last_visible_assistant_message(message_history: list[dict[str, Any]]) -> str | None:
@@ -567,6 +791,7 @@ def _failed_run(
         final_result=None,
         node_results=node_results,
         messages=messages,
+        artifacts=[],
         execution_details=execution_details,
         error=error,
         created_at=_now(),

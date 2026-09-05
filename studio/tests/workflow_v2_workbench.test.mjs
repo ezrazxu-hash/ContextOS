@@ -520,6 +520,210 @@ test("T10 V2 workbench exposes end final result inspector and saves data binding
   assert.deepEqual(workbench.view().nodeConfig.endInspector.binding.data, { kind: "nodeOutput", nodeId: "classify", path: ["category"] });
 });
 
+test("T11 V2 workbench shows artifact refs in final result and node execution details without server uri", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const calls = [];
+  const artifactRef = {
+    id: "artifact_1",
+    name: "report.txt",
+    mimeType: "text/plain",
+    createdByNodeId: "agent-1",
+    visible: true,
+  };
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async startWorkflowRun() {
+        return {
+          id: "workflow_run_artifact_1",
+          status: "succeeded",
+          workflowVersion: 1,
+          output: { summary: "Report ready" },
+          finalResult: { message: '{"summary":"Final answer"}', data: null, artifacts: [artifactRef] },
+          artifacts: [artifactRef],
+          messages: [
+            { role: "user", content: "make report" },
+            { role: "assistant", content: '{"summary":"Report ready"}', artifacts: [artifactRef] },
+          ],
+          nodeResults: [{ nodeId: "agent-1", status: "succeeded", data: { summary: "Report ready" }, artifacts: [artifactRef] }],
+          executionDetails: { nodes: [{ nodeId: "agent-1", steps: [{ type: "node_result", artifacts: [artifactRef] }] }] },
+        };
+      },
+      async downloadWorkflowArtifactContent(artifactId) {
+        calls.push(["download", artifactId]);
+        return { body: "hello artifact", mimeType: "text/plain" };
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  await workbench.startRun({ version: 1, input: { message: "make report" } });
+  const downloaded = await workbench.downloadArtifact("artifact_1");
+
+  const panel = workbench.view().runPanel;
+  assert.deepEqual(panel.finalResult.artifacts, [{ ...artifactRef, downloadAction: { type: "workflowArtifactDownload", artifactId: "artifact_1" } }]);
+  assert.deepEqual(panel.nodeExecutionDetails[0].artifacts, [{ ...artifactRef, downloadAction: { type: "workflowArtifactDownload", artifactId: "artifact_1" } }]);
+  assert.equal(JSON.stringify(panel).includes("uri"), false);
+  assert.deepEqual(calls, [["download", "artifact_1"]]);
+  assert.deepEqual(downloaded, { body: "hello artifact", mimeType: "text/plain" });
+});
+
+test("T11 V2 end inspector exposes artifact refs as a special mapping type without server uri fields", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({ workflowDefinition: validWorkbenchWorkflowDefinition() });
+
+  workbench.selectNode("end-1");
+
+  assert.deepEqual(workbench.view().nodeConfig.endInspector.artifactMapping, {
+    type: "artifactRef",
+    visibleFields: ["id", "name", "mimeType", "createdByNodeId", "visible"],
+    hiddenFields: ["uri", "storageKey"],
+    defaultMode: "allVisible",
+  });
+});
+
+test("T12 V2 workbench configures workflow ref node with contract-driven input mapping", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowCatalog: [
+      {
+        id: "research-flow",
+        name: "Research Flow",
+        versions: [{ version: 1, label: "Version 1" }],
+        inputSchema: {
+          type: "object",
+          required: ["topic"],
+          properties: {
+            topic: { type: "string" },
+            priority: { type: "string" },
+          },
+        },
+      },
+    ],
+    workflowDefinition: {
+      id: "parent-flow",
+      name: "Parent Flow",
+      schemaVersion: 2,
+      revision: 1,
+      tools: [],
+      nodes: [
+        {
+          id: "analyze",
+          type: "agent",
+          config: {
+            name: "Analyze",
+            instruction: "Extract topic.",
+            visibility: "visible",
+            toolPolicy: { mode: "disabled" },
+            outputSchema: { type: "object", required: ["topic"], properties: { topic: { type: "string" } } },
+          },
+        },
+        { id: "research", type: "workflow", config: { workflowId: "research-flow", version: 1, inputBindings: {} } },
+        { id: "end-1", type: "end" },
+      ],
+      edges: [
+        { source: "START", target: "analyze" },
+        { source: "analyze", target: "research" },
+        { source: "research", target: "end-1" },
+      ],
+    },
+  });
+
+  workbench.selectNode("research");
+  const initial = workbench.view().nodeConfig.workflowInspector;
+  assert.deepEqual(initial.workflowOptions.map((workflow) => workflow.id), ["research-flow"]);
+  assert.deepEqual(initial.versionOptions.map((version) => version.version), [1]);
+  assert.deepEqual(initial.inputMappings.map((mapping) => [mapping.name, mapping.type, mapping.required]), [
+    ["topic", "string", true],
+    ["priority", "string", false],
+  ]);
+  assert.deepEqual(initial.inputMappings[0].sourceOptions.map((option) => option.kind), ["workflowInput", "nodeOutput", "constant", "artifact"]);
+  assert.equal(JSON.stringify(initial).includes("$state"), false);
+
+  const updated = workbench.updateSelectedWorkflowRefConfig({
+    workflowId: "research-flow",
+    version: 1,
+    messageContextMode: "isolated",
+    inputBindings: {
+      topic: { kind: "nodeOutput", nodeId: "analyze", path: ["topic"] },
+      priority: { kind: "constant", value: "high" },
+    },
+  });
+
+  assert.deepEqual(updated.node.config.inputBindings.topic, { kind: "nodeOutput", nodeId: "analyze", path: ["topic"] });
+  assert.equal(workbench.view().nodeConfig.workflowInspector.messageContextMode, "isolated");
+});
+
+test("T13 V2 workbench flags condition and workflow mappings when upstream schema changes", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workflowDefinition = {
+    id: "parent-flow",
+    name: "Parent Flow",
+    schemaVersion: 2,
+    revision: 1,
+    tools: [],
+    nodes: [
+      {
+        id: "analyze",
+        type: "agent",
+        config: {
+          name: "Analyze Requirement",
+          instruction: "Extract fields.",
+          visibility: "visible",
+          toolPolicy: { mode: "disabled" },
+          outputSchema: { type: "object", properties: { score: { type: "number" }, topic: { type: "string" } } },
+        },
+      },
+      {
+        id: "route",
+        type: "condition",
+        config: {
+          branches: [{ handle: "high", source: { nodeId: "analyze", path: ["score"] }, operator: "greaterThan", value: 3 }],
+        },
+      },
+      {
+        id: "research",
+        type: "workflow",
+        config: {
+          workflowId: "research-flow",
+          version: 1,
+          inputBindings: { topic: { kind: "nodeOutput", nodeId: "analyze", path: ["topic"] } },
+        },
+      },
+      { id: "end-1", type: "end" },
+    ],
+    edges: [
+      { source: "START", target: "analyze" },
+      { source: "analyze", target: "route" },
+      { source: "route", target: "research", sourceHandle: "high" },
+      { source: "research", target: "end-1" },
+    ],
+  };
+  const workbench = createWorkflowV2Workbench({
+    workflowCatalog: [
+      {
+        id: "research-flow",
+        name: "Research Flow",
+        versions: [{ version: 1 }],
+        inputSchema: { type: "object", required: ["topic"], properties: { topic: { type: "string" } } },
+      },
+    ],
+    workflowDefinition,
+  });
+
+  workbench.selectNode("analyze");
+  workbench.updateSelectedAgentConfig({
+    outputSchema: { type: "object", properties: { score: { type: "string" } } },
+  });
+
+  const issueCodes = workbench.view().validationPanel.issues.map((issue) => issue.code);
+  assert.deepEqual(issueCodes, ["condition_operator_type_mismatch", "workflow_ref_source_field_not_found"]);
+  workbench.selectNode("route");
+  assert.deepEqual(workbench.view().nodeConfig.conditionInspector.issues.map((issue) => issue.code), ["condition_operator_type_mismatch"]);
+  workbench.selectNode("research");
+  assert.deepEqual(workbench.view().nodeConfig.workflowInspector.issues.map((issue) => issue.code), ["workflow_ref_source_field_not_found"]);
+  assert.equal(JSON.stringify(workbench.view().draft).includes("$state."), false);
+});
+
 function validWorkbenchWorkflowDefinition() {
   return {
     id: "support-flow",

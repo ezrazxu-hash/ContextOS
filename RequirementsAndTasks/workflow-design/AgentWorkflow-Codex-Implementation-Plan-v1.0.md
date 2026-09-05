@@ -119,7 +119,7 @@ Tool Result
 | T07 | [x] | 最小 Workflow Run：单 Agent Node 无 Tool | 是 | T06 |
 | T08 | [x] | 隐式 Agent Tool Loop 与运行详情 | 是 | T05、T07 |
 | T09 | [x] | Condition Node 与 Schema Driven 分支 | 是 | T04、T07 |
-| T10 | [-] | End Node 与 FinalResult 绑定 | 是 | T07、T09 |
+| T10 | [x] | End Node 与 FinalResult 绑定 | 是 | T07、T09 |
 | T11 | [ ] | Artifact 全链路与附件结果展示 | 是 | T08、T10 |
 | T12 | [ ] | Workflow Ref Node / 子 Workflow | 是 | T06、T10 |
 | T13 | [ ] | Schema Registry、ValueRef 与失效引用校验 | 是 | T09、T12 |
@@ -1314,7 +1314,7 @@ Condition 只能读取 NodeResult.Data，不能调用 LLM、不能解析 assista
 
 ## T10 — End Node 与 FinalResult 绑定
 
-**状态：** [-] DOING  
+**状态：** [x] DONE  
 **优先级：** P0  
 **依赖：** T07、T09
 
@@ -1392,15 +1392,35 @@ None
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/runtime/runs.py`
+  - `backend/tests/unit/test_workflow_v2_end_result.py`
+  - `backend/tests/integration/test_http_runtime_host.py`
+  - `studio/src/features/workflow-v2/WorkflowV2Builder.js`
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
 - 实现说明：
+  - `WorkflowV2RunRecord` 增加 `finalResult` DTO，同时保留既有 `output` 字段作为最后业务节点结构化输出，避免破坏 T07-T09 调用方。
+  - Runtime 到达 End Node 时通过最小 `FinalResultBuilder` 生成统一结果：默认 `message` 取最后一条 visible assistant message，`data` 默认为 `null`，`artifacts` 当前为空数组。
+  - Agent assistant message 写入 `visible` 标记；`visibility: hidden` 的 Agent 输出不会成为默认最终消息，避免把 `message_history[-1]` 当作唯一来源。
+  - End Node 高级配置支持 `finalResult.data.kind = nodeOutput`，从指定 `nodeId` 的 `NodeResult.Data` 按 `path` 绑定结构化数据。
+  - 前端 `WorkflowV2Builder` 增加 `updateEndNodeConfig`；`WorkflowV2Workbench` 选中 End Node 时提供 `endInspector`，展示默认 message/artifact/data 策略以及上游 Agent outputSchema 派生的数据源。
 - 测试结果：
+  - RED：后端新增 T10 测试最初失败于 assistant message 缺少 `visible` 和 run 缺少 `finalResult`；前端新增 T10 测试最初失败于缺少 `endInspector`。
+  - T10 后端/API：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_end_result tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding` 通过，3 tests OK。
+  - T10 前端：`node --test tests/workflow_v2_workbench.test.mjs` 通过，13 tests passed。
+  - T00-T10 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，49 tests OK。
+  - T00-T10 前端回归：`node --test tests/workflow_api_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，37 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflows.py src/contextos/api/routes/workflow_tools.py src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py` 通过；`node --check src/features/workflow-v2/WorkflowV2Builder.js`、`node --check src/pages/Workflow/WorkflowV2Workbench.js` 通过；`npm run lint` 通过；`npm run build` 通过。
 - 风险/遗留：
+  - `artifacts` 当前按默认空数组返回；完整 Artifact Store、ArtifactRef 生命周期和 visible artifact 聚合留给 T11。
+  - 高级绑定当前仅实现 `NodeResult.Data` 的 `nodeOutput` 引用；指定 Node Message 等更复杂绑定可在后续任务按真实需求扩展。
+  - 前端仍为 view-model 级 Inspector，完整 DOM/交互 polish 留给 T17。
 
 ---
 
 ## T11 — Artifact 全链路与附件结果展示
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P1  
 **依赖：** T08、T10
 
@@ -1475,15 +1495,45 @@ Artifact 必须独立存储，Message 只保留引用。
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/runtime/artifacts.py`
+  - `backend/src/contextos/workflow_v2/runtime/runs.py`
+  - `backend/src/contextos/api/routes/workflow_runs.py`
+  - `backend/src/contextos/api/server.py`
+  - `backend/tests/unit/test_workflow_v2_artifacts.py`
+  - `backend/tests/integration/test_http_runtime_host.py`
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/src/api/agents.js`
+  - `studio/src/client/http.js`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
+  - `studio/tests/workflow_api_client.test.mjs`
+  - `studio/tests/http_client.test.mjs`
 - 实现说明：
+  - 新增 `InMemoryWorkflowV2ArtifactStore` / `WorkflowV2ArtifactContent` / `WorkflowV2ArtifactNotFound`，以 ArtifactId 独立保存内容，公开 DTO 仅为 ArtifactRef：`id`、`name`、`mimeType`、`createdByNodeId`、`visible`。
+  - `WorkflowV2RunService` 注入 artifact store；ToolResult 和 Agent 最终 JSON 中的 `artifacts` 会被保存为独立内容，Message / NodeResult / Run / FinalResult 只保留 ref，不保存二进制或 storage key。
+  - Agent 最终输出若携带 artifact content，会在写入 assistant message 和 NodeResult.data 前清洗掉 `artifacts` 载荷，并将保存后的 refs 写入 `message.artifacts` / `nodeResult.artifacts`。
+  - `FinalResult.artifacts` 默认从整个 Run 聚合所有 `visible != false` 的 ArtifactRef，避免最终消息来自后续节点时丢失中间节点附件。
+  - 新增 `GET /api/workflow-runs/{runId}/artifacts` 和 `GET /api/workflow-artifacts/{artifactId}/content`；content API 返回原始 bytes 与 mime type，不暴露服务器物理路径。
+  - 前端 Workbench run panel 展示 FinalResult artifacts、Run artifacts、Node Execution Detail artifacts，并为每个 artifact ref 生成基于 ArtifactId 的下载 action；End inspector 增加 `artifactRef` mapping 类型，显式隐藏 `uri` / `storageKey`。
+  - API client 增加 `listWorkflowRunArtifacts` / `downloadWorkflowArtifactContent`，HTTP client 增加二进制 `download`。
 - 测试结果：
+  - RED：`tests.unit.test_workflow_v2_artifacts` 初始失败于缺少 `runtime.artifacts`；Agent artifact 测试失败于未保存/清洗 assistant artifact；HTTP artifact API 测试失败于 404；Workbench 测试失败于缺少 `downloadArtifact` 和 `artifactMapping`；API/HTTP client 测试分别失败于缺少 artifact route/download 方法。
+  - T11 后端定向：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_artifacts` 通过，3 tests OK。
+  - T11 HTTP 定向：`$env:PYTHONPATH='src'; python -m unittest tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id` 通过，1 test OK。
+  - T00-T11 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.unit.test_workflow_v2_artifacts tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，53 tests OK。
+  - T11 前端定向：`node --test tests/workflow_v2_workbench.test.mjs` 通过，15 tests passed；`node --test tests/workflow_api_client.test.mjs` 通过，3 tests passed；`node --test tests/http_client.test.mjs` 通过，5 tests passed。
+  - T00-T11 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，44 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py` 通过（sandbox 写 `__pycache__` 需提升权限）；`node --check src/pages/Workflow/WorkflowV2Workbench.js`、`node --check src/api/agents.js`、`node --check src/client/http.js` 通过；`npm run lint` 通过；`npm run build` 通过（sandbox 更新 `studio/dist` 需提升权限）。
+- 手动验证方式：
+  - 启动后端和 Studio，创建/发布一个包含 Agent 的 V2 Workflow，使 Agent 返回 `{"summary":"Report ready","artifacts":[{"name":"report.txt","mimeType":"text/plain","content":"hello"}]}`；运行后检查 Run panel 的 Final Result 附件列表、Node Execution Detail 附件列表，并点击下载确认内容为 `hello`。
 - 风险/遗留：
+  - 当前 Artifact Store 为内存实现，符合当前 workflow_v2 runtime 的 MVP 存储方式；持久化 `workflow_artifact` 实体可在后续 Persistence 任务中落地。
+  - 当前下载 API 未引入用户/租户级鉴权模型；在现有 HTTP host 无认证上下文的约束下，只实现 artifactId 存取与 run 存在性校验，后续接入真实鉴权时需补充权限边界。
 
 ---
 
 ## T12 — Workflow Ref Node / 子 Workflow
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P1  
 **依赖：** T06、T10
 
@@ -1571,15 +1621,39 @@ Analyze → Research Workflow → End
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/runtime/runs.py`
+  - `backend/tests/unit/test_workflow_v2_workflow_ref_runtime.py`
+  - `backend/tests/integration/test_http_runtime_host.py`
+  - `studio/src/features/workflow-v2/WorkflowV2Builder.js`
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
 - 实现说明：
+  - `WorkflowV2RunService` / runtime graph cursor 支持 `type: "workflow"` 的 Workflow Ref Node。
+  - Workflow Ref 执行使用明确 `workflowId + version` 读取 Published Version；解析结构化 `ValueRef`：`workflowInput`、`nodeOutput`、`constant`；普通路径字符串未引入。
+  - 子 Workflow 调用前校验 `inputSchema`，执行后校验子 workflow `outputSchema`；子 workflow output 转换为父 workflow 当前 `NodeResult.data`，并写入 `metadata.workflowId`、`metadata.workflowVersion`、`messageContextMode`、`childRunId`。
+  - 支持 `messageContextMode: inherit | isolated`：inherit 会把父 MessageHistory 提供给子 workflow，并将子 workflow 新增消息并回父历史；isolated 仅在子 workflow 内部使用独立消息历史。
+  - 增加 workflow depth limit（当前 8 层）检查；depth limit 顶层透传 `workflow_ref.depth_limit_exceeded`，普通子 workflow 失败包装为 `workflow_ref.child_failed`。
+  - 前端 `WorkflowV2Builder` 增加 `updateWorkflowRefNodeConfig`；`WorkflowV2Workbench` 选中 Workflow node 时提供 Workflow selector、Version selector、Input Mapping、Message Context inspector，并从注入的 workflow catalog input schema 生成参数映射 UI。
 - 测试结果：
+  - RED：首个后端测试失败于 workflow node runtime 不支持；depth-limit 测试收紧后失败于顶层错误被过度包装；前端 Workflow inspector 测试失败于缺少 `workflowInspector` / 更新方法。
+  - T12 后端定向：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_workflow_ref_runtime tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_workflow_ref_child_workflow` 通过，7 tests OK。
+  - T12 前端定向：`node --test tests/workflow_v2_workbench.test.mjs` 通过，16 tests passed。
+  - T00-T12 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.unit.test_workflow_v2_artifacts tests.unit.test_workflow_v2_workflow_ref_runtime tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_workflow_ref_child_workflow tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，60 tests OK。
+  - T00-T12 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，45 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py` 通过（sandbox 写 `__pycache__` 需提升权限）；`node --check src/features/workflow-v2/WorkflowV2Builder.js`、`node --check src/pages/Workflow/WorkflowV2Workbench.js` 通过；`npm run lint` 通过；`npm run build` 通过（sandbox 更新 `studio/dist` 需提升权限）。
+- 手动验证方式：
+  - 创建并发布 `research-flow` 子 workflow，定义 `inputSchema.topic/priority` 与 `outputSchema.summary`；创建父 workflow：`Analyze Agent -> Workflow Node(research-flow@version, topic=nodeOutput, priority=constant) -> End`；运行父 workflow 后确认父图只显示子 workflow 节点，Run Result 中 workflow node 的 `data.summary` 来自子 workflow。
+  - 在 Workflow Node Inspector 中选择子 workflow/version，确认 Input Mapping 只显示 User Input / Upstream Node Field / Constant / Artifact 等结构化来源，不出现 `$state`。
 - 风险/遗留：
+  - Workflow selector 的 catalog 当前通过 Workbench 注入数据驱动；现有 DefinitionService/HTTP API 尚无 list workflows 聚合接口，因此未为 selector 发散新增后端列表 API。
+  - Artifact 由子 workflow 生成并进入父 workflow 最终聚合的跨 run 生命周期尚未扩展；当前 Workflow Ref NodeResult 会保留子 workflow FinalResult artifacts，后续可在 Artifact/Persistence 任务中补齐跨 workflow run 的归属策略。
+  - Workflow Ref contract 的静态失效引用校验留给 T13（Schema Registry、ValueRef 与失效引用校验）。
 
 ---
 
 ## T13 — Schema Registry、ValueRef 与失效引用校验
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P1  
 **依赖：** T09、T12
 
@@ -1655,9 +1729,32 @@ Analyze Requirement / category
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/application/validation.py`
+  - `backend/src/contextos/api/routes/workflows.py`
+  - `backend/tests/unit/test_workflow_v2_validator.py`
+  - `backend/tests/integration/test_http_runtime_host.py`
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
 - 实现说明：
+  - `WorkflowV2DefinitionValidator` 增加可选 `definition_service` 注入，`validate` / `publish` API 在校验时传入当前 definition service，用于读取 Workflow Ref 子 workflow 的 Published Contract。
+  - Validator 全局检测 `$state.` 字符串并返回 `state_path_not_allowed`，继续约束普通 Workflow V2 配置只使用结构化 `ValueRef`。
+  - Condition 校验从上游 Agent `outputSchema` 解析引用字段 schema，新增 operator/type 兼容检查：数值比较仅允许 `number/integer`，`startsWith/endsWith` 仅允许 `string`，`contains` 允许 `string/array`。
+  - Workflow Ref 校验增强：校验 `ValueRef` shape、required input 是否绑定、`nodeOutput/workflowInput` source path 是否存在、source type 与子 workflow input parameter type 是否兼容。
+  - 前端 Workbench 增加轻量 `NodeSchemaRegistry` 派生校验：Agent `outputSchema` 改动后立即检查 Condition 引用与 Workflow Input Mapping，将问题写入 Validation Panel，并同步到对应 Condition / Workflow Inspector 的 `issues`。
+  - 前端 Workflow Ref source options 仍只保存结构化 `{kind,nodeId,path,value}`，不生成或显示 `$state.xxx`。
 - 测试结果：
+  - RED：后端新增 T13 Validator 测试分别失败于 Condition 类型不兼容未报错、`definition_service` 参数缺失、`$state.` 字符串未拦截、Workflow Ref source path 缺失未报错；前端新增 T13 Workbench 测试失败于 schema 改动后 Validation Panel 无引用诊断。
+  - T13 后端定向：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_validator tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_blocks_workflow_ref_publish_when_input_mapping_type_is_incompatible` 通过，11 tests OK。
+  - T13 前端定向：`node --test tests/workflow_v2_workbench.test.mjs` 通过，17 tests passed。
+  - T00-T13 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.unit.test_workflow_v2_artifacts tests.unit.test_workflow_v2_workflow_ref_runtime tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_workflow_ref_child_workflow tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_blocks_workflow_ref_publish_when_input_mapping_type_is_incompatible tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，64 tests OK。
+  - T00-T13 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，46 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflows.py src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py` 通过（sandbox 写 `__pycache__` 需提升权限）；`node --check src/pages/Workflow/WorkflowV2Workbench.js`、`node --check src/features/workflow-v2/WorkflowV2Builder.js` 通过；`npm run lint` 通过；`npm run build` 通过（sandbox 更新 `studio/dist` 需提升权限）。
+- 手动验证方式：
+  - 创建 `Analyze` Agent 输出 `score:number`、Condition 使用 `score greaterThan 3`、Workflow Ref 将 `topic` 映射到子 workflow input；将 Agent output schema 改为 `score:string` 并删除 `topic`，确认 Validation Panel 同时显示 Condition operator 类型错误和 Workflow Mapping source field 缺失。
+  - 尝试发布一个将 `nodeOutput string` 绑定到子 workflow `number` input 的父 workflow，预期 API 返回 422，validation errors 包含 `workflow_ref_input_type_mismatch`。
 - 风险/遗留：
+  - 前端 schema registry 当前以 Workbench 内部派生函数实现，尚未拆成独立模块；后续 UI 组件化时可按设计文档迁入专用 `NodeSchemaRegistry`。
+  - 引用上游可达性目前仍主要依赖图连线/topology 与 source path/type 校验；更严格的跨分支可达性分析可在后续高级校验中扩展。
 
 ---
 

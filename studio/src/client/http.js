@@ -45,6 +45,30 @@ export function createHttpClient({ baseUrl, fetchImpl = globalThis.fetch } = {})
         throw error;
       }
     },
+    async download(path, { signal, requestId, idempotencyKey, headers = {} } = {}) {
+      try {
+        const response = await fetchImpl(joinUrl(baseUrl, path), {
+          method: "GET",
+          signal,
+          headers: requestHeaders({ body: null, headers, requestId, idempotencyKey }),
+        });
+        if (!response.ok) {
+          throw toClientError(await readJson(response), response);
+        }
+        return {
+          body: new Uint8Array(await response.arrayBuffer()),
+          mimeType: header(response, "content-type") ?? "application/octet-stream",
+        };
+      } catch (error) {
+        if (error instanceof ClientError) {
+          throw error;
+        }
+        if (error?.name === "AbortError" || signal?.aborted) {
+          throw new ClientAbortError();
+        }
+        throw error;
+      }
+    },
   };
 }
 

@@ -220,6 +220,113 @@ class WorkflowV2DefinitionValidatorTests(unittest.TestCase):
         self.assertEqual(errors_by_field["nodes[1].config.branches[0].source.nodeId"], "condition_source_not_agent")
         self.assertEqual(errors_by_field["nodes[1].config.branches[1].source.path"], "condition_source_field_not_found")
 
+    def test_rejects_condition_operator_when_source_field_type_is_incompatible(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    agent_node(
+                        config={
+                            "instruction": "Classify the user request.",
+                            "visibility": "visible",
+                            "outputSchema": {"type": "object", "properties": {"category": {"type": "string"}}},
+                            "toolPolicy": {"mode": "disabled"},
+                        }
+                    ),
+                    {
+                        "id": "condition-1",
+                        "type": "condition",
+                        "config": {
+                            "branches": [
+                                {"handle": "bad-type", "source": {"nodeId": "agent-1", "path": ["category"]}, "operator": "greaterThan", "value": 3},
+                            ],
+                        },
+                    },
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[
+                    {"source": "START", "target": "agent-1"},
+                    {"source": "agent-1", "target": "condition-1"},
+                    {"source": "condition-1", "target": "end-1", "sourceHandle": "bad-type"},
+                ],
+            )
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["errors"][0]["code"], "condition_operator_type_mismatch")
+        self.assertEqual(result["errors"][0]["field"], "nodes[1].config.branches[0].operator")
+
+    def test_rejects_workflow_ref_missing_required_input_and_type_mismatch(self) -> None:
+        from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        definitions = WorkflowV2DefinitionService()
+        definitions.create(child_contract_workflow())
+        definitions.publish("child-flow", validator=WorkflowV2DefinitionValidator())
+        parent = definition(
+            nodes=[
+                agent_node(
+                    config={
+                        "instruction": "Analyze the request.",
+                        "visibility": "visible",
+                        "outputSchema": {"type": "object", "properties": {"topic": {"type": "string"}}},
+                        "toolPolicy": {"mode": "disabled"},
+                    }
+                ),
+                {
+                    "id": "child",
+                    "type": "workflow",
+                    "config": {
+                        "workflowId": "child-flow",
+                        "version": 1,
+                        "inputBindings": {
+                            "confidence": {"kind": "nodeOutput", "nodeId": "agent-1", "path": ["topic"]},
+                            "owner": {"kind": "nodeOutput", "nodeId": "agent-1", "path": ["missing"]},
+                        },
+                    },
+                },
+                {"id": "end-1", "type": "end"},
+            ],
+            edges=[
+                {"source": "START", "target": "agent-1"},
+                {"source": "agent-1", "target": "child"},
+                {"source": "child", "target": "end-1"},
+            ],
+        )
+
+        result = WorkflowV2DefinitionValidator(definition_service=definitions).validate(parent)
+
+        self.assertFalse(result["valid"])
+        errors_by_code = {error["code"]: error for error in result["errors"]}
+        self.assertEqual(errors_by_code["workflow_ref_required_input_missing"]["field"], "nodes[1].config.inputBindings.topic")
+        self.assertEqual(errors_by_code["workflow_ref_input_type_mismatch"]["field"], "nodes[1].config.inputBindings.confidence")
+        self.assertEqual(errors_by_code["workflow_ref_source_field_not_found"]["field"], "nodes[1].config.inputBindings.owner")
+
+    def test_rejects_state_path_strings_in_workflow_v2_definition(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    {
+                        "id": "workflow-1",
+                        "type": "workflow",
+                        "config": {
+                            "workflowId": "child-flow",
+                            "version": 1,
+                            "inputBindings": {"topic": "$state.agent.output.topic"},
+                        },
+                    },
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[{"source": "START", "target": "workflow-1"}, {"source": "workflow-1", "target": "end-1"}],
+            )
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["errors"][0]["code"], "state_path_not_allowed")
+
 
 def definition(nodes, edges):
     return {"schemaVersion": 2, "id": "support-flow", "nodes": nodes, "edges": edges}
@@ -235,6 +342,36 @@ def agent_node(config=None):
             "visibility": "visible",
             "retryPolicy": {"schemaRetryCount": 0, "nodeRetryCount": 0, "timeoutMs": 1000},
         },
+    }
+
+
+def child_contract_workflow():
+    return {
+        "schemaVersion": 2,
+        "id": "child-flow",
+        "name": "Child Flow",
+        "inputSchema": {
+            "type": "object",
+            "required": ["topic", "confidence"],
+            "properties": {
+                "topic": {"type": "string"},
+                "confidence": {"type": "number"},
+                "owner": {"type": "string"},
+            },
+        },
+        "outputSchema": {"type": "object", "properties": {"summary": {"type": "string"}}},
+        "nodes": [
+            agent_node(
+                config={
+                    "instruction": "Answer.",
+                    "visibility": "visible",
+                    "outputSchema": {"type": "object", "properties": {"summary": {"type": "string"}}},
+                    "toolPolicy": {"mode": "disabled"},
+                }
+            ),
+            {"id": "end-1", "type": "end"},
+        ],
+        "edges": [{"source": "START", "target": "agent-1"}, {"source": "agent-1", "target": "end-1"}],
     }
 
 

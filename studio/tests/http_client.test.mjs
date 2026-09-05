@@ -105,6 +105,24 @@ test("UI02-T01 errors retain server trace_id and request headers include ids", a
   assert.equal(calls[0].options.headers["idempotency-key"], "idem-replay");
 });
 
+test("T11 HTTP client downloads workflow artifact bytes with mime type", async () => {
+  const { createHttpClient } = await import(moduleUrl("src/client/http.js"));
+  const client = createHttpClient({
+    baseUrl: "http://runtime.test/api",
+    fetchImpl: async (url, options) => {
+      assert.equal(url, "http://runtime.test/api/workflow-artifacts/artifact_1/content");
+      assert.equal(options.method, "GET");
+      return fakeBinaryResponse({ ok: true, status: 200, body: "hello artifact", contentType: "text/plain" });
+    },
+  });
+
+  const downloaded = await client.download("/workflow-artifacts/artifact_1/content");
+
+  assert.equal(downloaded.mimeType, "text/plain");
+  assert.deepEqual(Array.from(downloaded.body), Array.from(new TextEncoder().encode("hello artifact")));
+}
+);
+
 test("UI02-T01 pages and feature components do not directly concatenate API URLs", () => {
   const roots = [join(studioRoot, "src/pages"), join(studioRoot, "src/features")];
   for (const file of roots.flatMap(listFiles).filter((path) => path.endsWith(".js"))) {
@@ -120,6 +138,25 @@ function fakeResponse({ ok, status, body }) {
     status,
     async json() {
       return body;
+    },
+  };
+}
+
+function fakeBinaryResponse({ ok, status, body, contentType }) {
+  const bytes = new TextEncoder().encode(body);
+  return {
+    ok,
+    status,
+    headers: {
+      get(name) {
+        return name.toLowerCase() === "content-type" ? contentType : null;
+      },
+    },
+    async json() {
+      return null;
+    },
+    async arrayBuffer() {
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     },
   };
 }

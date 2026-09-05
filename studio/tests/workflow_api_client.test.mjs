@@ -34,6 +34,8 @@ test("T70 Workflow API client maps agent draft validate publish version and test
   await api.fetchWorkflowVersion("support-flow", 1);
   await api.startWorkflowRun("support-flow", { version: 1, input: { message: "hello" } });
   await api.fetchWorkflowRun("workflow_run_1");
+  await api.listWorkflowRunArtifacts("workflow_run_1");
+  await api.downloadWorkflowArtifactContent("artifact_1");
   await api.listAgents();
   await api.listTools();
   await api.saveAgentDraft("research-agent", { schema_version: "1.0" });
@@ -64,6 +66,8 @@ test("T70 Workflow API client maps agent draft validate publish version and test
       ["GET", "/workflows/support-flow/versions/1"],
       ["POST", "/workflows/support-flow/runs"],
       ["GET", "/workflow-runs/workflow_run_1"],
+      ["GET", "/workflow-runs/workflow_run_1/artifacts"],
+      ["GET", "/workflow-artifacts/artifact_1/content"],
       ["GET", "/agents"],
       ["GET", "/tools"],
       ["PUT", "/agents/research-agent/draft"],
@@ -85,7 +89,7 @@ test("T70 Workflow API client maps agent draft validate publish version and test
   assert.deepEqual(calls.find((call) => call.path === "/workflows/support-flow/draft").options.body, { schemaVersion: 2, revision: 1 });
   assert.deepEqual(calls.find((call) => call.path === "/workflows/support-flow/validate").options.body, { schemaVersion: 2 });
   assert.deepEqual(calls.find((call) => call.path === "/workflows/support-flow/runs").options.body, { version: 1, input: { message: "hello" } });
-  assert.deepEqual(calls[13].options.body, { schema_version: "1.0" });
+  assert.deepEqual(calls.find((call) => call.path === "/agents/research-agent/draft" && call.method === "PUT").options.body, { schema_version: "1.0" });
   assert.deepEqual(calls.find((call) => call.path === "/templates/research-agent" && call.method === "PATCH").options.body, { name: "Renamed Workflow" });
   assert.deepEqual(calls.find((call) => call.path === "/agent-versions/research-agent_v1/test-runs").options.body, { input: "hello" });
   assert.deepEqual(calls.find((call) => call.path === "/sessions").options.body, {

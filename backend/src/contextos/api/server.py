@@ -23,7 +23,7 @@ from contextos.api.routes.templates import delete_template, delete_template_node
 from contextos.api.routes.tools import list_tools
 from contextos.api.routes.timelines import activate_timeline, list_session_timelines, patch_timeline, remove_timeline
 from contextos.api.routes.workflow import get_node_catalog
-from contextos.api.routes.workflow_runs import get_workflow_run, post_workflow_run
+from contextos.api.routes.workflow_runs import get_workflow_artifact_content, get_workflow_run, get_workflow_run_artifacts, post_workflow_run
 from contextos.api.routes.workflow_tools import list_workflow_tools
 from contextos.api.routes.workflows import get_workflow, get_workflow_version, get_workflow_versions, post_workflow, post_workflow_publish, post_workflow_validate, put_workflow_draft
 from contextos.provider.base.chat_client import ChatCompletionClient
@@ -78,6 +78,7 @@ from contextos.tool.executor_registry import ToolExecutorRegistry
 from contextos.tool.registry.metadata import SideEffect, ToolMetadata
 from contextos.tool.registry.registry import ToolRegistry
 from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+from contextos.workflow_v2.runtime.artifacts import InMemoryWorkflowV2ArtifactStore
 from contextos.workflow_v2.runtime.runs import InMemoryWorkflowV2RunStore, WorkflowV2RunService
 
 
@@ -93,6 +94,7 @@ class RuntimeServices:
     template_service: TemplateService
     workflow_v2_definition_service: WorkflowV2DefinitionService
     workflow_v2_run_store: InMemoryWorkflowV2RunStore
+    workflow_v2_artifact_store: InMemoryWorkflowV2ArtifactStore
     agent_version_repository: InMemoryAgentVersionRepository
     agent_test_run_store: InMemoryAgentTestRunStore
     graph_cache: CompiledGraphCache
@@ -159,6 +161,7 @@ class RuntimeServices:
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             tool_executor_registry=self.tool_executor_registry,
+            artifact_store=self.workflow_v2_artifact_store,
         )
 
     @property
@@ -301,6 +304,7 @@ def create_demo_services(
     template_service = TemplateService(store)
     workflow_v2_definition_service = WorkflowV2DefinitionService(store)
     workflow_v2_run_store = InMemoryWorkflowV2RunStore()
+    workflow_v2_artifact_store = InMemoryWorkflowV2ArtifactStore()
     agent_version_repository = InMemoryAgentVersionRepository(store)
     agent_test_run_store = InMemoryAgentTestRunStore()
     graph_cache = CompiledGraphCache()
@@ -316,6 +320,7 @@ def create_demo_services(
         template_service,
         workflow_v2_definition_service,
         workflow_v2_run_store,
+        workflow_v2_artifact_store,
         agent_version_repository,
         agent_test_run_store,
         graph_cache,
@@ -543,6 +548,18 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 3 and segments[:2] == ["api", "workflow-runs"]:
                 self._send_route_response(get_workflow_run(segments[2], services.workflow_v2_run_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflow-runs"] and segments[3] == "artifacts":
+                self._send_route_response(get_workflow_run_artifacts(segments[2], services.workflow_v2_run_service, services.workflow_v2_artifact_store))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflow-artifacts"] and segments[3] == "content":
+                response = get_workflow_artifact_content(segments[2], services.workflow_v2_artifact_store)
+                if int(response["status"]) != 200:
+                    self._send_route_response(response)
+                    return
+                self._send_bytes(int(response["status"]), bytes(response["body"]), str(response["contentType"]))
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
@@ -870,6 +887,13 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+
+        def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def _read_json_body(self) -> dict[str, object]:
             length = int(self.headers.get("Content-Length", "0"))
