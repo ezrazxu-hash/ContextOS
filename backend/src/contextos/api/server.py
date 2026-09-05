@@ -23,6 +23,9 @@ from contextos.api.routes.templates import delete_template, delete_template_node
 from contextos.api.routes.tools import list_tools
 from contextos.api.routes.timelines import activate_timeline, list_session_timelines, patch_timeline, remove_timeline
 from contextos.api.routes.workflow import get_node_catalog
+from contextos.api.routes.workflow_runs import get_workflow_run, post_workflow_run
+from contextos.api.routes.workflow_tools import list_workflow_tools
+from contextos.api.routes.workflows import get_workflow, get_workflow_version, get_workflow_versions, post_workflow, post_workflow_publish, post_workflow_validate, put_workflow_draft
 from contextos.provider.base.chat_client import ChatCompletionClient
 from contextos.provider.deepseek_anthropic import create_deepseek_client_from_env, describe_deepseek_env
 from contextos.runtime.agent.events import RuntimeEvent, RuntimeEventContractError, runtime_event_to_legacy_event
@@ -74,6 +77,8 @@ from contextos.tool.executor import FakeReadOnlyTool
 from contextos.tool.executor_registry import ToolExecutorRegistry
 from contextos.tool.registry.metadata import SideEffect, ToolMetadata
 from contextos.tool.registry.registry import ToolRegistry
+from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+from contextos.workflow_v2.runtime.runs import InMemoryWorkflowV2RunStore, WorkflowV2RunService
 
 
 @dataclass
@@ -86,6 +91,8 @@ class RuntimeServices:
     conversation_group_repository: InMemoryConversationGroupRepository
     trace_repository: InMemoryTraceRepository
     template_service: TemplateService
+    workflow_v2_definition_service: WorkflowV2DefinitionService
+    workflow_v2_run_store: InMemoryWorkflowV2RunStore
     agent_version_repository: InMemoryAgentVersionRepository
     agent_test_run_store: InMemoryAgentTestRunStore
     graph_cache: CompiledGraphCache
@@ -143,6 +150,16 @@ class RuntimeServices:
     @property
     def agent_version_service(self) -> AgentVersionService:
         return AgentVersionService(self.agent_version_repository)
+
+    @property
+    def workflow_v2_run_service(self) -> WorkflowV2RunService:
+        return WorkflowV2RunService(
+            self.workflow_v2_definition_service,
+            self.workflow_v2_run_store,
+            llm_client=self.llm_client,
+            tool_registry=self.tool_registry,
+            tool_executor_registry=self.tool_executor_registry,
+        )
 
     @property
     def publish_service(self) -> PublishService:
@@ -282,6 +299,8 @@ def create_demo_services(
     conversation_group_repository = InMemoryConversationGroupRepository(store)
     trace_repository = InMemoryTraceRepository()
     template_service = TemplateService(store)
+    workflow_v2_definition_service = WorkflowV2DefinitionService(store)
+    workflow_v2_run_store = InMemoryWorkflowV2RunStore()
     agent_version_repository = InMemoryAgentVersionRepository(store)
     agent_test_run_store = InMemoryAgentTestRunStore()
     graph_cache = CompiledGraphCache()
@@ -295,6 +314,8 @@ def create_demo_services(
         conversation_group_repository,
         trace_repository,
         template_service,
+        workflow_v2_definition_service,
+        workflow_v2_run_store,
         agent_version_repository,
         agent_test_run_store,
         graph_cache,
@@ -488,6 +509,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 self._send_route_response(list_tools(services.tool_registry))
                 return
 
+            if len(segments) == 2 and segments == ["api", "workflow-tools"]:
+                self._send_route_response(list_workflow_tools(services.tool_registry))
+                return
+
             if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "draft":
                 self._send_route_response(get_agent_draft(segments[2], services.template_service))
                 return
@@ -502,6 +527,22 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 3 and segments[:2] == ["api", "templates"]:
                 self._send_route_response(get_template(segments[2], services.template_service))
+                return
+
+            if len(segments) == 3 and segments[:2] == ["api", "workflows"]:
+                self._send_route_response(get_workflow(segments[2], services.workflow_v2_definition_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflows"] and segments[3] == "versions":
+                self._send_route_response(get_workflow_versions(segments[2], services.workflow_v2_definition_service))
+                return
+
+            if len(segments) == 5 and segments[:2] == ["api", "workflows"] and segments[3] == "versions":
+                self._send_route_response(get_workflow_version(segments[2], int(segments[4]), services.workflow_v2_definition_service))
+                return
+
+            if len(segments) == 3 and segments[:2] == ["api", "workflow-runs"]:
+                self._send_route_response(get_workflow_run(segments[2], services.workflow_v2_run_service))
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "sessions"]:
@@ -598,6 +639,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 self._send_route_response(post_template(payload, services.template_service))
                 return
 
+            if len(segments) == 2 and segments == ["api", "workflows"]:
+                self._send_route_response(post_workflow(payload, services.workflow_v2_definition_service))
+                return
+
             if len(segments) == 4 and segments[:2] == ["api", "templates"] and segments[3] == "validate":
                 self._send_route_response(
                     post_template_validate(
@@ -619,6 +664,18 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                         tool_registry=services.tool_registry,
                     )
                 )
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflows"] and segments[3] == "validate":
+                self._send_route_response(post_workflow_validate(segments[2], payload, services.workflow_v2_definition_service, services.tool_registry))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflows"] and segments[3] == "publish":
+                self._send_route_response(post_workflow_publish(segments[2], services.workflow_v2_definition_service, services.tool_registry))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflows"] and segments[3] == "runs":
+                self._send_route_response(post_workflow_run(segments[2], payload, services.workflow_v2_run_service))
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "graph-preview":
@@ -702,6 +759,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "draft":
                 self._send_route_response(put_agent_draft(segments[2], payload, services.template_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflows"] and segments[3] == "draft":
+                self._send_route_response(put_workflow_draft(segments[2], payload, services.workflow_v2_definition_service))
                 return
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})

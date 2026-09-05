@@ -79,4 +79,5 @@ def _empty_state() -> dict[str, dict[str, Any]]:
         "checkpoints": {},
         "templates": {},
         "agent_versions": {},
+        "workflow_v2_definitions": {},
     }

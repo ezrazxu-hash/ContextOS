@@ -24,6 +24,16 @@ test("T70 Workflow API client maps agent draft validate publish version and test
   });
 
   await api.fetchAgentDraft("research-agent");
+  await api.createWorkflow({ id: "support-flow", name: "Support Flow" });
+  await api.fetchWorkflow("support-flow");
+  await api.saveWorkflowDraft("support-flow", { schemaVersion: 2, revision: 1 });
+  await api.validateWorkflow("support-flow", { schemaVersion: 2 });
+  await api.listWorkflowTools();
+  await api.publishWorkflow("support-flow");
+  await api.listWorkflowVersions("support-flow");
+  await api.fetchWorkflowVersion("support-flow", 1);
+  await api.startWorkflowRun("support-flow", { version: 1, input: { message: "hello" } });
+  await api.fetchWorkflowRun("workflow_run_1");
   await api.listAgents();
   await api.listTools();
   await api.saveAgentDraft("research-agent", { schema_version: "1.0" });
@@ -44,6 +54,16 @@ test("T70 Workflow API client maps agent draft validate publish version and test
     calls.map((call) => [call.method, call.path]),
     [
       ["GET", "/agents/research-agent/draft"],
+      ["POST", "/workflows"],
+      ["GET", "/workflows/support-flow"],
+      ["PUT", "/workflows/support-flow/draft"],
+      ["POST", "/workflows/support-flow/validate"],
+      ["GET", "/workflow-tools"],
+      ["POST", "/workflows/support-flow/publish"],
+      ["GET", "/workflows/support-flow/versions"],
+      ["GET", "/workflows/support-flow/versions/1"],
+      ["POST", "/workflows/support-flow/runs"],
+      ["GET", "/workflow-runs/workflow_run_1"],
       ["GET", "/agents"],
       ["GET", "/tools"],
       ["PUT", "/agents/research-agent/draft"],
@@ -61,7 +81,11 @@ test("T70 Workflow API client maps agent draft validate publish version and test
       ["SSE", "/sse/agent-test-runs/test_run_1"],
     ],
   );
-  assert.deepEqual(calls[3].options.body, { schema_version: "1.0" });
+  assert.deepEqual(calls.find((call) => call.path === "/workflows").options.body, { id: "support-flow", name: "Support Flow" });
+  assert.deepEqual(calls.find((call) => call.path === "/workflows/support-flow/draft").options.body, { schemaVersion: 2, revision: 1 });
+  assert.deepEqual(calls.find((call) => call.path === "/workflows/support-flow/validate").options.body, { schemaVersion: 2 });
+  assert.deepEqual(calls.find((call) => call.path === "/workflows/support-flow/runs").options.body, { version: 1, input: { message: "hello" } });
+  assert.deepEqual(calls[13].options.body, { schema_version: "1.0" });
   assert.deepEqual(calls.find((call) => call.path === "/templates/research-agent" && call.method === "PATCH").options.body, { name: "Renamed Workflow" });
   assert.deepEqual(calls.find((call) => call.path === "/agent-versions/research-agent_v1/test-runs").options.body, { input: "hello" });
   assert.deepEqual(calls.find((call) => call.path === "/sessions").options.body, {

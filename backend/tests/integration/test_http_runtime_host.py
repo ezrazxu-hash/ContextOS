@@ -96,6 +96,272 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(loaded["id"], published["id"])
         self.assertEqual(loaded["manifest"]["schema_version"], "1.0")
 
+    def test_host_creates_workflow_v2_definition_by_default(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            created = post_json(f"{host.url}/api/workflows", {"id": "support-flow", "name": "Support Flow"})
+        finally:
+            host.stop()
+
+        self.assertEqual(created["id"], "support-flow")
+        self.assertEqual(created["schemaVersion"], 2)
+        self.assertEqual(created["nodes"], [])
+        self.assertEqual(created["edges"], [])
+
+    def test_host_round_trips_workflow_v2_draft_with_revision_conflict(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            created = post_json(f"{host.url}/api/workflows", {"id": "support-flow", "name": "Support Flow"})
+            loaded = get_json(f"{host.url}/api/workflows/support-flow")
+            saved = put_json(
+                f"{host.url}/api/workflows/support-flow/draft",
+                {**loaded, "nodes": [{"id": "agent-1", "type": "agent"}]},
+            )
+            conflict = put_json_error(f"{host.url}/api/workflows/support-flow/draft", {**loaded, "nodes": []})
+            reloaded = get_json(f"{host.url}/api/workflows/support-flow")
+        finally:
+            host.stop()
+
+        self.assertEqual(created["revision"], 1)
+        self.assertEqual(loaded, created)
+        self.assertEqual(saved["revision"], 2)
+        self.assertEqual(reloaded["nodes"], [{"id": "agent-1", "type": "agent"}])
+        self.assertEqual(conflict["status"], 409)
+        self.assertEqual(conflict["body"]["error"]["code"], "workflow.revision_conflict")
+
+    def test_host_validates_workflow_v2_topology(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            created = post_json(
+                f"{host.url}/api/workflows",
+                {
+                    "id": "support-flow",
+                    "name": "Support Flow",
+                    "nodes": [{"id": "agent-1", "type": "agent", "config": {"instruction": "Analyze the request."}}],
+                    "edges": [{"source": "START", "target": "missing"}],
+                },
+            )
+            validation = post_json(f"{host.url}/api/workflows/support-flow/validate", {})
+        finally:
+            host.stop()
+
+        self.assertEqual(created["schemaVersion"], 2)
+        self.assertFalse(validation["valid"])
+        self.assertEqual(validation["errors"][0]["code"], "missing_end_node")
+        self.assertEqual(validation["errors"][1]["code"], "unknown_node")
+
+    def test_host_lists_workflow_tools_over_v2_catalog_api(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            catalog = get_json(f"{host.url}/api/workflow-tools")
+        finally:
+            host.stop()
+
+        self.assertEqual(catalog["tools"][0]["id"], "context.echo")
+        self.assertEqual(catalog["tools"][0]["name"], "Context Echo")
+        self.assertIn("inputSchema", catalog["tools"][0])
+        self.assertNotIn("tool_node", json.dumps(catalog))
+
+    def test_host_publishes_workflow_v2_versions_as_immutable_snapshots(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            post_json(f"{host.url}/api/workflows", {"id": "invalid-flow", "name": "Invalid Flow", "nodes": [{"id": "agent-1", "type": "agent"}]})
+            invalid_publish = post_json_error(f"{host.url}/api/workflows/invalid-flow/publish", {})
+            created = post_json(f"{host.url}/api/workflows", valid_workflow_v2_definition("First instruction"))
+            v1 = post_json(f"{host.url}/api/workflows/support-flow/publish", {})
+            saved = put_json(
+                f"{host.url}/api/workflows/support-flow/draft",
+                {**created, **valid_workflow_v2_definition("Second instruction")},
+            )
+            v2 = post_json(f"{host.url}/api/workflows/support-flow/publish", {})
+            versions = get_json(f"{host.url}/api/workflows/support-flow/versions")
+            version_one = get_json(f"{host.url}/api/workflows/support-flow/versions/1")
+        finally:
+            host.stop()
+
+        self.assertEqual(invalid_publish["status"], 422)
+        self.assertEqual(invalid_publish["body"]["error"]["code"], "workflow.validation_failed")
+        self.assertEqual(v1["version"], 1)
+        self.assertEqual(saved["revision"], 2)
+        self.assertEqual(v2["version"], 2)
+        self.assertEqual([item["version"] for item in versions["versions"]], [1, 2])
+        self.assertEqual(version_one["definition"]["nodes"][0]["config"]["instruction"], "First instruction")
+        self.assertEqual(v2["definition"]["nodes"][0]["config"]["instruction"], "Second instruction")
+
+    def test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient('{"summary": "Need API work"}'))
+        host.start()
+        try:
+            before = get_json(f"{host.url}/api/sessions/demo-session/messages")
+            post_json(f"{host.url}/api/workflows", valid_workflow_v2_definition("Transient node instruction"))
+            published = post_json(f"{host.url}/api/workflows/support-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/support-flow/runs",
+                {"version": published["version"], "input": {"message": "Please classify this request"}},
+            )
+            loaded = get_json(f"{host.url}/api/workflow-runs/{started['id']}")
+            after = get_json(f"{host.url}/api/sessions/demo-session/messages")
+        finally:
+            host.stop()
+
+        self.assertEqual(started["status"], "succeeded")
+        self.assertEqual(loaded["output"], {"summary": "Need API work"})
+        self.assertEqual(loaded["workflowVersion"], 1)
+        self.assertEqual([message["id"] for message in after["messages"]], [message["id"] for message in before["messages"]])
+        self.assertNotIn("Transient node instruction", json.dumps(after))
+
+    def test_host_runs_workflow_v2_agent_tool_loop_with_execution_details(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        definition = valid_workflow_v2_definition("Use context echo before answering")
+        definition["tools"] = ["context.echo"]
+        definition["nodes"][0]["config"]["toolPolicy"] = {"mode": "auto", "allowedTools": ["context.echo"]}
+        host = create_http_runtime_host(
+            host="127.0.0.1",
+            port=0,
+            llm_client=SequentialRecordingLlmClient([
+                '{"toolCalls":[{"id":"call-1","name":"context.echo","arguments":{"query":"mars"}}]}',
+                '{"summary": "Echoed mars"}',
+            ]),
+        )
+        host.start()
+        try:
+            post_json(f"{host.url}/api/workflows", definition)
+            published = post_json(f"{host.url}/api/workflows/support-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/support-flow/runs",
+                {"version": published["version"], "input": {"message": "research mars"}},
+            )
+        finally:
+            host.stop()
+
+        self.assertEqual(started["status"], "succeeded")
+        self.assertEqual(started["output"], {"summary": "Echoed mars"})
+        self.assertEqual(
+            [(message["role"], message.get("toolCallId")) for message in started["messages"]],
+            [("user", None), ("assistant", None), ("tool", "call-1"), ("assistant", None)],
+        )
+        self.assertEqual(
+            [step["type"] for step in started["executionDetails"]["nodes"][0]["steps"]],
+            ["llm_call", "tool_call", "tool_result", "llm_call", "schema_validation", "node_result"],
+        )
+
+    def test_host_runs_workflow_v2_condition_branch_from_agent_output_data(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(
+            host="127.0.0.1",
+            port=0,
+            llm_client=SequentialRecordingLlmClient([
+                '{"category":"technical","summary":"API issue"}',
+                '{"summary":"Technical branch"}',
+            ]),
+        )
+        host.start()
+        try:
+            post_json(f"{host.url}/api/workflows", valid_condition_workflow_v2_definition())
+            published = post_json(f"{host.url}/api/workflows/condition-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/condition-flow/runs",
+                {"version": published["version"], "input": {"message": "API request"}},
+            )
+        finally:
+            host.stop()
+
+        self.assertEqual(started["status"], "succeeded")
+        self.assertEqual([result["nodeId"] for result in started["nodeResults"]], ["classify", "route", "technical-agent"])
+        self.assertEqual(started["nodeResults"][1]["data"], {"branch": "technical", "target": "technical-agent"})
+        self.assertEqual(started["output"], {"summary": "Technical branch"})
+
+    def test_host_runs_workflow_v2_end_final_result_binding(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        definition = valid_workflow_v2_definition("Return a summary")
+        definition["nodes"][1]["config"] = {
+            "finalResult": {
+                "message": {"mode": "lastVisibleAssistant"},
+                "artifacts": {"mode": "allVisible"},
+                "data": {"kind": "nodeOutput", "nodeId": "agent-1", "path": ["summary"]},
+            }
+        }
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient('{"summary":"Bound data"}'))
+        host.start()
+        try:
+            post_json(f"{host.url}/api/workflows", definition)
+            published = post_json(f"{host.url}/api/workflows/support-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/support-flow/runs",
+                {"version": published["version"], "input": {"message": "hello"}},
+            )
+        finally:
+            host.stop()
+
+        self.assertEqual(started["status"], "succeeded")
+        self.assertEqual(started["finalResult"], {"message": '{"summary":"Bound data"}', "data": "Bound data", "artifacts": []})
+
+    def test_host_round_trips_and_validates_workflow_v2_agent_node_config(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            created = post_json(f"{host.url}/api/workflows", {"id": "support-flow", "name": "Support Flow"})
+            agent_config = {
+                "name": "Analyze Requirement",
+                "description": "Classify the incoming request",
+                "instruction": "Analyze the user request.",
+                "visibility": "auto",
+                "contextPolicy": {"conversationHistory": True, "userInput": True, "uploadedFiles": False},
+                "outputSchema": None,
+                "toolPolicy": {"mode": "disabled"},
+                "retryPolicy": {"schemaRetryCount": 2, "nodeRetryCount": 1, "timeoutMs": 30000},
+            }
+            saved = put_json(
+                f"{host.url}/api/workflows/support-flow/draft",
+                {
+                    **created,
+                    "nodes": [{"id": "agent-1", "type": "agent", "config": agent_config}, {"id": "end-1", "type": "end"}],
+                    "edges": [{"source": "START", "target": "agent-1"}, {"source": "agent-1", "target": "end-1"}],
+                },
+            )
+            loaded = get_json(f"{host.url}/api/workflows/support-flow")
+            valid = post_json(f"{host.url}/api/workflows/support-flow/validate", {})
+            invalid = post_json(
+                f"{host.url}/api/workflows/support-flow/validate",
+                {
+                    **loaded,
+                    "nodes": [
+                        {"id": "agent-1", "type": "agent", "config": {**agent_config, "instruction": ""}},
+                        {"id": "end-1", "type": "end"},
+                    ],
+                },
+            )
+        finally:
+            host.stop()
+
+        self.assertEqual(saved["revision"], 2)
+        self.assertEqual(loaded["nodes"][0]["config"], agent_config)
+        self.assertTrue(valid["valid"], valid["errors"])
+        self.assertFalse(invalid["valid"])
+        self.assertIn("agent_instruction_required", [error["code"] for error in invalid["errors"]])
+
     def test_host_lists_only_published_agents_for_session_selector(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -1010,6 +1276,22 @@ def put_json(url: str, payload: dict[str, object]) -> dict[str, object]:
         return json.loads(response.read().decode("utf-8"))
 
 
+def put_json_error(url: str, payload: dict[str, object]) -> dict[str, object]:
+    from urllib.error import HTTPError
+
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return {"status": response.status, "body": json.loads(response.read().decode("utf-8"))}
+    except HTTPError as error:
+        return {"status": error.code, "body": json.loads(error.read().decode("utf-8"))}
+
+
 def patch_json(url: str, payload: dict[str, object]) -> dict[str, object]:
     request = Request(
         url,
@@ -1119,6 +1401,96 @@ def workflow_payload(template_id: str, name: str, output: str, position: dict[st
     }
 
 
+def valid_workflow_v2_definition(instruction: str) -> dict[str, object]:
+    return {
+        "id": "support-flow",
+        "name": "Support Flow",
+        "schemaVersion": 2,
+        "tools": [],
+        "nodes": [
+            {
+                "id": "agent-1",
+                "type": "agent",
+                "config": {
+                    "instruction": instruction,
+                    "visibility": "visible",
+                    "toolPolicy": {"mode": "disabled"},
+                    "outputSchema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+                },
+            },
+            {"id": "end-1", "type": "end"},
+        ],
+        "edges": [{"source": "START", "target": "agent-1"}, {"source": "agent-1", "target": "end-1"}],
+    }
+
+
+def valid_condition_workflow_v2_definition() -> dict[str, object]:
+    return {
+        "id": "condition-flow",
+        "name": "Condition Flow",
+        "schemaVersion": 2,
+        "tools": [],
+        "nodes": [
+            {
+                "id": "classify",
+                "type": "agent",
+                "config": {
+                    "instruction": "Classify the request.",
+                    "visibility": "visible",
+                    "toolPolicy": {"mode": "disabled"},
+                    "outputSchema": {
+                        "type": "object",
+                        "required": ["category", "summary"],
+                        "properties": {
+                            "category": {"type": "string", "enum": ["technical", "business", "other"]},
+                            "summary": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "id": "route",
+                "type": "condition",
+                "config": {
+                    "branches": [
+                        {"handle": "technical", "source": {"nodeId": "classify", "path": ["category"]}, "operator": "equals", "value": "technical"}
+                    ],
+                    "defaultTarget": "business-agent",
+                },
+            },
+            {
+                "id": "technical-agent",
+                "type": "agent",
+                "config": {
+                    "instruction": "Handle technical request.",
+                    "visibility": "visible",
+                    "toolPolicy": {"mode": "disabled"},
+                    "outputSchema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+                },
+            },
+            {
+                "id": "business-agent",
+                "type": "agent",
+                "config": {
+                    "instruction": "Handle business request.",
+                    "visibility": "visible",
+                    "toolPolicy": {"mode": "disabled"},
+                    "outputSchema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+                },
+            },
+            {"id": "end-1", "type": "end"},
+        ],
+        "edges": [
+            {"source": "START", "target": "classify"},
+            {"source": "classify", "target": "route"},
+            {"source": "route", "target": "technical-agent", "sourceHandle": "technical"},
+            {"source": "route", "target": "business-agent", "sourceHandle": "default"},
+            {"source": "technical-agent", "target": "end-1"},
+            {"source": "business-agent", "target": "end-1"},
+        ],
+    }
+
+
 def agent_test_run_manifest_payload() -> dict[str, object]:
     return {
         "schema_version": "1.0",
@@ -1156,6 +1528,18 @@ class RecordingLlmClient:
         self.calls.append(messages)
         self.user_messages = [message["content"] for message in messages if message["role"] == "user"]
         return self.response
+
+
+class SequentialRecordingLlmClient:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = list(responses)
+        self.calls: list[list[dict[str, object]]] = []
+
+    def complete(self, messages: list[dict[str, object]]) -> str:
+        self.calls.append(messages)
+        if not self.responses:
+            raise AssertionError("No LLM response fixture left")
+        return self.responses.pop(0)
 
 
 class PromptEchoLlmClient:

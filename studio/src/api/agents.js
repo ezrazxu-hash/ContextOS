@@ -4,6 +4,46 @@ export function createWorkflowApiClient(httpClient) {
   }
 
   return {
+    createWorkflow(payload, options = {}) {
+      return httpClient.request("POST", "/workflows", { ...options, body: payload });
+    },
+
+    fetchWorkflow(workflowId, options = {}) {
+      return httpClient.request("GET", `/workflows/${encodeURIComponent(workflowId)}`, options);
+    },
+
+    saveWorkflowDraft(workflowId, definition, options = {}) {
+      return httpClient.request("PUT", `/workflows/${encodeURIComponent(workflowId)}/draft`, { ...options, body: definition });
+    },
+
+    validateWorkflow(workflowId, definition = {}, options = {}) {
+      return httpClient.request("POST", `/workflows/${encodeURIComponent(workflowId)}/validate`, { ...options, body: definition });
+    },
+
+    listWorkflowTools(options = {}) {
+      return httpClient.request("GET", "/workflow-tools", options);
+    },
+
+    publishWorkflow(workflowId, options = {}) {
+      return httpClient.request("POST", `/workflows/${encodeURIComponent(workflowId)}/publish`, options);
+    },
+
+    listWorkflowVersions(workflowId, options = {}) {
+      return httpClient.request("GET", `/workflows/${encodeURIComponent(workflowId)}/versions`, options);
+    },
+
+    fetchWorkflowVersion(workflowId, version, options = {}) {
+      return httpClient.request("GET", `/workflows/${encodeURIComponent(workflowId)}/versions/${encodeURIComponent(version)}`, options);
+    },
+
+    startWorkflowRun(workflowId, payload, options = {}) {
+      return httpClient.request("POST", `/workflows/${encodeURIComponent(workflowId)}/runs`, { ...options, body: payload });
+    },
+
+    fetchWorkflowRun(runId, options = {}) {
+      return httpClient.request("GET", `/workflow-runs/${encodeURIComponent(runId)}`, options);
+    },
+
     listAgents(options = {}) {
       return httpClient.request("GET", "/agents", options);
     },
