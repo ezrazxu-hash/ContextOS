@@ -77,7 +77,9 @@ from contextos.tool.executor import FakeReadOnlyTool
 from contextos.tool.executor_registry import ToolExecutorRegistry
 from contextos.tool.registry.metadata import SideEffect, ToolMetadata
 from contextos.tool.registry.registry import ToolRegistry
-from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionNotFound, WorkflowV2DefinitionService
+from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+from contextos.workflow_v2.demo_workflows import starter_agent_workflow_v2_definition
 from contextos.workflow_v2.runtime.artifacts import InMemoryWorkflowV2ArtifactStore
 from contextos.workflow_v2.runtime.runs import InMemoryWorkflowV2RunStore, WorkflowV2RunService
 
@@ -330,6 +332,7 @@ def create_demo_services(
     )
 
     _ensure_demo_workflow(services)
+    _ensure_agent_workflow_v2_example(services)
     if store is not None and store.loaded_existing_state:
         return services
 
@@ -430,6 +433,26 @@ def _ensure_demo_workflow(services: RuntimeServices) -> None:
     )
     if not active_version_exists:
         services.publish_service.publish(DEMO_WORKFLOW_TEMPLATE_ID)
+
+
+def _ensure_agent_workflow_v2_example(services: RuntimeServices) -> None:
+    definition = starter_agent_workflow_v2_definition()
+    workflow_id = str(definition["id"])
+    try:
+        services.workflow_v2_definition_service.get(workflow_id)
+    except WorkflowV2DefinitionNotFound:
+        services.workflow_v2_definition_service.create(definition)
+
+    if services.workflow_v2_definition_service.list_versions(workflow_id):
+        return
+
+    services.workflow_v2_definition_service.publish(
+        workflow_id,
+        validator=WorkflowV2DefinitionValidator(
+            tool_registry=services.tool_registry,
+            definition_service=services.workflow_v2_definition_service,
+        ),
+    )
 
 
 def _ensure_demo_workflow_session(services: RuntimeServices) -> None:

@@ -111,6 +111,33 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(created["nodes"], [])
         self.assertEqual(created["edges"], [])
 
+    def test_host_seeds_publishable_agent_workflow_v2_example(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            definition = get_json(f"{host.url}/api/workflows/agent-workflow-v2-draft")
+            versions = get_json(f"{host.url}/api/workflows/agent-workflow-v2-draft/versions")
+            validation = post_json(f"{host.url}/api/workflows/agent-workflow-v2-draft/validate", definition)
+        finally:
+            host.stop()
+
+        self.assertEqual(definition["schemaVersion"], 2)
+        self.assertEqual([node["id"] for node in definition["nodes"]], [
+            "analyze-request",
+            "route-category",
+            "technical-answer",
+            "business-answer",
+            "general-answer",
+            "generate-final",
+            "end-1",
+        ])
+        self.assertEqual(definition["tools"], ["context.echo"])
+        self.assertEqual(definition["nodes"][0]["config"]["toolPolicy"]["allowedTools"], ["context.echo"])
+        self.assertEqual(validation["valid"], True)
+        self.assertGreaterEqual(len(versions["versions"]), 1)
+
     def test_host_round_trips_workflow_v2_draft_with_revision_conflict(self) -> None:
         from contextos.api.server import create_http_runtime_host
 

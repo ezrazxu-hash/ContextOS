@@ -1,6 +1,5 @@
 import { demoFixtures, demoTemplateManifest } from "./test/fixtures/demoRuntime.js";
 import { streamSseEvents } from "./client/sseStream.js";
-import { deserializeGraph, serializeGraph } from "./workflow/manifest/model.js";
 import {
   createSessionWithSelectedAgent,
   fetchPublishedAgentOptions,
@@ -22,7 +21,6 @@ const WORKFLOW_CONFIG_PANEL_MAX_WIDTH = 720;
 const WORKFLOW_V2_DEFAULT_ID = "agent-workflow-v2-draft";
 const app = document.querySelector("#app");
 let routeLoadVersion = 0;
-const demoWorkflowGraph = deserializeGraph(demoTemplateManifest);
 const WORKFLOW_NODE_TYPES = ["prompt", "llm", "tool", "condition", "output"];
 const AGENT_WORKFLOW_V2_NODE_TYPES = ["agent", "condition", "workflow", "end"];
 const WORKFLOW_CONFIG_FIELDS = {
@@ -105,28 +103,20 @@ const state = {
   switchingAgent: false,
   debugIndex: null,
   contextItems: [],
-  workflowSchemaVersion: workflowSchemaVersionFromUrl(),
   workflowV2Workbench: null,
   workflowV2DefinitionReady: false,
-  workflowNodes: demoWorkflowGraph.nodes.map((node, index) => ({
-    ...node,
-    position: node.position ?? { x: 60 + index * 140, y: 80 + (index % 2) * 110 },
-  })),
-  workflowEdges: demoWorkflowGraph.edges.map((edge) => ({
-    from: edge.source,
-    to: edge.target,
-    ...(edge.route ? { condition: edge.route } : {}),
-  })),
+  workflowNodes: [],
+  workflowEdges: [],
   workflowTemplates: [],
-  workflowSelectedTemplateId: demoTemplateManifest.template.id,
-  workflowName: demoTemplateManifest.template.name,
+  workflowSelectedTemplateId: null,
+  workflowName: "Agent Workflow V2 Draft",
   workflowDirty: false,
   workflowSaving: false,
   workflowDrag: null,
   workflowCanvasPan: null,
   workflowConfigResize: null,
   workflowConfigPanelWidth: WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH,
-  workflowSelectedNodeId: "planner",
+  workflowSelectedNodeId: null,
   workflowSelectedEdgeIndex: null,
   workflowEdgeSourceId: null,
   workflowCanvasZoom: 1,
@@ -229,26 +219,11 @@ async function loadRouteData() {
       state.messages = state.debugIndex.messages ?? state.messages;
       state.contextItems = contextFromDebug(state.debugIndex);
     } else if (requestedRoute === "/workflow") {
-      const [templates, tools] = await Promise.all([
-        client.fetchTemplates(),
-        fetchWorkflowTools(client),
-      ]);
+      const tools = await fetchWorkflowTools(client);
       if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
-      state.workflowTemplates = templates.templates ?? [];
       state.workflowToolCatalog = tools;
-      const requestedWorkflowId = workflowIdFromUrl();
-      const templateId = requestedWorkflowId ?? state.workflowSelectedTemplateId;
-      if (templateId && state.workflowTemplates.some((template) => template.id === templateId)) {
-        const template = await client.fetchTemplate(templateId);
-        if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
-        loadWorkflowManifest(template.manifest, template.id, activeWorkflowVersionFromTemplate(template));
-      } else if (state.workflowTemplates.length > 0) {
-        const template = await client.fetchTemplate(state.workflowTemplates[0].id);
-        if (!isCurrentRouteLoad(loadVersion, requestedRoute, requestedSessionId)) return;
-        loadWorkflowManifest(template.manifest, template.id, activeWorkflowVersionFromTemplate(template));
-      } else if (state.workflowTemplates.length === 0) {
-        clearWorkflowDraft();
-      }
+      await workflowV2Workbench().loadWorkflowTools();
+      await workflowV2Workbench().refreshWorkflowVersions();
     }
     state.toast = { tone: "success", text: "Runtime projection ready" };
   } catch (error) {
@@ -444,106 +419,7 @@ function renderToolRelations(message) {
 }
 
 function renderWorkflow() {
-  if (state.workflowSchemaVersion === 1) return renderWorkflowLegacy();
   return renderWorkflowV2();
-}
-
-function renderWorkflowLegacy() {
-  const selected = state.workflowNodes.find((node) => node.id === state.workflowSelectedNodeId) ?? null;
-  const edgeSource = state.workflowEdgeSourceId ?? state.workflowSelectedNodeId ?? "START";
-  const configPanelWidth = workflowConfigPanelWidth();
-  return `
-    <section class="workflow-page">
-      <div class="page-head">
-        <div><h1 data-testid="main-title">Workflow Builder</h1><p>Workflow manifests from Runtime.</p></div>
-        <div class="actions">
-          <button class="secondary" data-action="switch-workflow-v2" data-target-url="/workflow?schemaVersion=2">Agent Workflow V2</button>
-          ${state.workflowSelectedTemplateId ? `<div class="session-menu-host workflow-menu-host">
-            <button data-action="toggle-workflow-menu" data-menu-workflow-id="${escapeAttr(state.workflowSelectedTemplateId)}" class="secondary session-menu-trigger" aria-label="Workflow actions for ${escapeAttr(state.workflowName)}" aria-haspopup="menu" aria-expanded="${state.openWorkflowMenuId === state.workflowSelectedTemplateId}" title="Workflow actions" ${state.deletingWorkflowId === state.workflowSelectedTemplateId || state.renamingWorkflowId === state.workflowSelectedTemplateId ? "disabled" : ""}>...</button>
-          </div>` : ""}
-          <button class="secondary" data-action="add-workflow-node">Add Prompt</button>
-          <button class="secondary" data-action="validate-workflow" data-testid="workflow-validate" ${state.workflowPreviewing ? "disabled" : ""}>${state.workflowPreviewing ? "Validating" : "Validate"}</button>
-          <button class="secondary" data-action="preview-workflow-graph" data-testid="workflow-preview" ${state.workflowPreviewing ? "disabled" : ""}>Preview Graph</button>
-          <button class="secondary" data-action="publish-workflow" data-testid="workflow-publish" ${state.workflowPublishing || !state.workflowSelectedTemplateId ? "disabled" : ""}>${state.workflowPublishing ? "Publishing" : "Publish"}</button>
-          <button class="secondary" data-action="test-workflow" data-testid="workflow-test" ${state.workflowTesting || !state.workflowPublishedVersion ? "disabled" : ""}>${state.workflowTesting ? "Testing" : "Test"}</button>
-          <button class="secondary" data-action="use-workflow-agent" data-testid="workflow-use-agent" ${!state.workflowPublishedVersion ? "disabled" : ""}>Use Agent</button>
-          <button data-action="save-workflow" data-testid="workflow-save" ${state.workflowSaving ? "disabled" : ""}>${state.workflowSaving ? "Saving" : "Save"}</button>
-        </div>
-      </div>
-      <div class="workflow-surface" data-testid="workflow-workbench" style="--workflow-config-panel-width:${configPanelWidth}px">
-        <div class="node-palette">
-          <section>
-            <h2>Workflows</h2>
-            <button data-action="create-workflow" data-testid="workflow-new">+ New Workflow</button>
-            <div data-testid="workflow-list">${state.workflowTemplates.map((template) => {
-              const selected = state.workflowSelectedTemplateId === template.id;
-              const label = displayResourceLabel(template);
-              const menuOpen = state.openWorkflowMenuId === template.id;
-              const mutating = state.deletingWorkflowId === template.id || state.renamingWorkflowId === template.id;
-              return `
-                <div class="session-row workflow-row ${menuOpen ? "menu-open" : ""}">
-                  <button data-action="open-workflow" data-workflow-id="${escapeAttr(template.id)}" class="nav-item ${selected ? "selected" : ""}" aria-pressed="${selected}" title="${escapeAttr(template.id)}">
-                    <span data-testid="workspace-item-label">${escapeHtml(label)}</span><small>${escapeHtml(template.version ?? "workflow")}</small>
-                  </button>
-                  <div class="session-menu-host workflow-menu-host">
-                    <button data-action="toggle-workflow-menu" data-menu-workflow-id="${escapeAttr(template.id)}" class="session-menu-trigger" aria-label="Workflow actions for ${escapeAttr(label)}" aria-haspopup="menu" aria-expanded="${menuOpen}" title="Workflow actions" ${mutating ? "disabled" : ""}>...</button>
-                  </div>
-                </div>
-              `;
-            }).join("")}</div>
-          </section>
-          <section>
-            <h2>Node Library</h2>
-            ${WORKFLOW_NODE_TYPES.map((type) => `<button data-action="add-workflow-node" data-node-type="${type}">${type.toUpperCase()}</button>`).join("")}
-          </section>
-        </div>
-        <div class="graph-canvas" data-testid="workflow-canvas" data-zoom="${workflowZoomAttr()}">
-          ${renderWorkflowCanvasContent()}
-          <div class="workflow-zoom-indicator" aria-live="polite">${Math.round(state.workflowCanvasZoom * 100)}%</div>
-        </div>
-        <div class="workflow-config-resize-handle" data-testid="workflow-config-resize-handle" role="separator" tabindex="0" aria-label="Resize Basic Info panel" aria-orientation="vertical" aria-valuemin="${WORKFLOW_CONFIG_PANEL_MIN_WIDTH}" aria-valuemax="${WORKFLOW_CONFIG_PANEL_MAX_WIDTH}" aria-valuenow="${configPanelWidth}"></div>
-        <div class="node-config" data-testid="workflow-node-config">
-          <section class="node-config-section basic-info">
-            <h2>Basic Info</h2>
-            <label class="config-field">Name<input data-testid="workflow-name" value="${escapeAttr(state.workflowName)}" /></label>
-            ${selected ? `<div class="node-config-meta"><div><span>ID</span><strong>${escapeHtml(selected.id)}</strong></div><div><span>Type</span><strong>${escapeHtml(selected.type)}</strong></div></div>` : "<p class=\"muted\">Select a node.</p>"}
-          </section>
-          <section class="node-config-section node-config-fields">
-            <h2>Node Config</h2>
-            ${renderWorkflowNodeConfig(selected)}
-          </section>
-          ${selected ? `<section class="node-config-section danger-zone">
-            <h2>Danger Zone</h2>
-            <button class="danger subtle-danger" data-action="delete-workflow-node" data-testid="workflow-delete-node" data-node-id="${escapeAttr(selected.id)}">Delete Node</button>
-          </section>` : ""}
-          <section class="node-config-section edge-builder">
-            <h2>Edge Builder</h2>
-            <label>Source${renderWorkflowEndpointSelect("workflow-edge-source", "select-edge-source", edgeSource, workflowSourceOptions())}</label>
-            <label>Target${renderWorkflowEndpointSelect("workflow-edge-target", "select-edge-target", workflowDefaultTarget(edgeSource), workflowTargetOptions())}</label>
-            ${renderWorkflowRouteSelect(edgeSource)}
-            <button data-action="connect-workflow-edge" data-testid="workflow-connect-edge">Connect</button>
-            <div class="edge-list" data-testid="workflow-edge-list">
-              ${state.workflowEdges.length === 0 ? "<p>No edges yet.</p>" : state.workflowEdges.map((edge, index) => `
-                <div class="workflow-edge ${state.workflowSelectedEdgeIndex === index ? "selected" : ""}" data-testid="workflow-edge">
-                  <span>${escapeHtml(edge.from ?? edge.source)} -> ${escapeHtml(edge.to ?? edge.target)}${edge.condition || edge.route ? ` (${escapeHtml(edge.condition ?? edge.route)})` : ""}</span>
-                  <button class="secondary" data-action="delete-workflow-edge" data-edge-index="${index}" aria-label="Delete edge ${index + 1}">Delete</button>
-                </div>
-              `).join("")}
-            </div>
-          </section>
-          <section class="node-config-section graph-preview-section">
-            <h2>Graph Preview</h2>
-            ${renderWorkflowGraphPreview()}
-          </section>
-          <section class="node-config-section agent-test-section">
-            <h2>Agent Test</h2>
-            <label>Input<textarea data-testid="workflow-test-input" rows="3">${escapeHtml(state.workflowTestInput)}</textarea></label>
-            ${renderWorkflowTestRun()}
-          </section>
-        </div>
-      </div>
-    </section>
-  `;
 }
 
 function renderWorkflowV2() {
@@ -554,7 +430,6 @@ function renderWorkflowV2() {
       <div class="page-head">
         <div><h1 data-testid="main-title">Agent Workflow V2</h1><p>Schema Version 2 drafts use Agent and control-flow nodes.</p></div>
         <div class="actions">
-          <button class="secondary" data-action="switch-workflow-legacy" data-target-url="/workflow?schemaVersion=1">Legacy Workflow</button>
           <button class="secondary" data-action="validate-workflow-v2" data-testid="workflow-v2-validate">Validate</button>
           <button class="secondary" data-action="publish-workflow-v2" data-testid="workflow-v2-publish">Publish</button>
           <button class="secondary" data-action="run-workflow-v2" data-testid="workflow-v2-run">Run</button>
@@ -1823,13 +1698,6 @@ async function handleAction(event) {
       state.messageMutationId = null;
       render();
     }
-  } else if (action === "add-workflow-node") {
-    addWorkflowNode(target.dataset.nodeType ?? "prompt");
-    render();
-  } else if (action === "switch-workflow-v2") {
-    await navigate(target.dataset.targetUrl ?? "/workflow?schemaVersion=2");
-  } else if (action === "switch-workflow-legacy") {
-    await navigate(target.dataset.targetUrl ?? "/workflow");
   } else if (action === "add-workflow-v2-node") {
     addWorkflowV2Node(target.dataset.nodeType ?? "agent");
     render();
@@ -1844,47 +1712,6 @@ async function handleAction(event) {
     await publishWorkflowV2();
   } else if (action === "run-workflow-v2") {
     await runWorkflowV2();
-  } else if (action === "select-edge-source") {
-    state.workflowEdgeSourceId = target.dataset.edgeSourceId ?? target.value ?? null;
-    render();
-  } else if (action === "connect-workflow-edge") {
-    connectWorkflowEdge();
-    render();
-  } else if (action === "delete-workflow-edge") {
-    deleteWorkflowEdge(Number(target.dataset.edgeIndex));
-    render();
-  } else if (action === "delete-workflow-node") {
-    deleteWorkflowNode(target.dataset.nodeId);
-    render();
-  } else if (action === "select-workflow-edge") {
-    event.stopPropagation();
-    selectWorkflowEdge(Number(target.dataset.edgeIndex));
-    render();
-  } else if (action === "preview-workflow-graph") {
-    await previewWorkflowGraph();
-  } else if (action === "validate-workflow") {
-    await validateWorkflowDraft();
-  } else if (action === "publish-workflow") {
-    await publishWorkflow();
-  } else if (action === "test-workflow") {
-    await testWorkflowAgent();
-  } else if (action === "use-workflow-agent") {
-    await useWorkflowAgent();
-  } else if (action === "create-workflow") {
-    createWorkflowDraft();
-    render();
-  } else if (action === "open-workflow") {
-    await openWorkflow(target.dataset.workflowId);
-  } else if (action === "rename-workflow") {
-    await renameWorkflow(target.dataset.renameWorkflowId);
-  } else if (action === "delete-workflow") {
-    await deleteWorkflow(target.dataset.deleteWorkflowId);
-  } else if (action === "save-workflow") {
-    await saveWorkflow();
-  } else if (action === "select-workflow-node") {
-    state.workflowSelectedNodeId = target.dataset.nodeId;
-    state.workflowSelectedEdgeIndex = null;
-    render();
   } else if (action === "not-implemented") {
     state.toast = { tone: "warning", text: "Not implemented in the current HTTP Runtime" };
     render();
@@ -2827,10 +2654,6 @@ function workflowIdFromUrl() {
   return new URLSearchParams(window.location.search).get("templateId");
 }
 
-function workflowSchemaVersionFromUrl() {
-  return Number(new URLSearchParams(window.location.search).get("schemaVersion")) === 1 ? 1 : 2;
-}
-
 function nextWorkflowAfterDelete(workflows, deletedWorkflowId) {
   const deletedIndex = workflows.findIndex((workflow) => workflow.id === deletedWorkflowId);
   const remaining = workflows.filter((workflow) => workflow.id !== deletedWorkflowId);
@@ -2884,7 +2707,7 @@ function workflowV2Workbench() {
       apiClient: runtimeClient(),
       workflowDefinition: createStarterWorkflowV2Definition({ id: WORKFLOW_V2_DEFAULT_ID, name: "Agent Workflow V2 Draft" }),
     });
-    workbench.selectNode("agent-1");
+    workbench.selectNode("analyze-request");
     state.workflowV2Workbench = workbench;
   }
   return state.workflowV2Workbench;
@@ -3404,7 +3227,6 @@ function applyUrlSelection() {
   state.selection.timelineId = params.get("timelineId") ?? state.selection.timelineId ?? DEFAULT_TIMELINE_ID;
   state.selection.messageId = params.get("messageId");
   state.selection.traceId = params.get("traceId");
-  state.workflowSchemaVersion = workflowSchemaVersionFromUrl();
 }
 
 function scrollConversationToBottom() {
