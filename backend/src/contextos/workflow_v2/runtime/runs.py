@@ -2,21 +2,41 @@ from __future__ import annotations
 
 import json
 import asyncio
+import threading
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from contextos.runtime.persistence.json_store import JsonRuntimeStore
 from contextos.tool.executor_registry import ToolExecutorError, ToolExecutorRegistry, ToolInputValidationError
 from contextos.tool.registry.registry import ToolRegistry
 from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionNotFound, WorkflowV2DefinitionService, WorkflowV2PublishedVersionNotFound
 from contextos.workflow_v2.application.json_schema import WorkflowV2JsonSchemaService
 from contextos.workflow_v2.runtime.artifacts import InMemoryWorkflowV2ArtifactStore
 
+COLLECTION = "workflow_v2_runs"
+
 
 class WorkflowV2RunNotFound(Exception):
     pass
+
+
+class WorkflowV2CancellationToken:
+    def __init__(self) -> None:
+        self._cancelled = threading.Event()
+
+    @property
+    def cancelled_event(self) -> threading.Event:
+        return self._cancelled
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled.is_set()
 
 
 @dataclass(frozen=True)
@@ -32,6 +52,7 @@ class WorkflowV2RunRecord:
     messages: list[dict[str, Any]]
     artifacts: list[dict[str, Any]]
     execution_details: dict[str, Any]
+    events: list[dict[str, Any]]
     error: dict[str, Any] | None
     created_at: str
 
@@ -45,29 +66,46 @@ class WorkflowV2RunRecord:
             "output": deepcopy(self.output),
             "finalResult": deepcopy(self.final_result),
             "nodeResults": deepcopy(self.node_results),
-            "messages": deepcopy(self.messages),
+            "messages": _messages_with_sequence(self.messages),
             "artifacts": deepcopy(self.artifacts),
             "executionDetails": deepcopy(self.execution_details),
+            "events": deepcopy(self.events),
             "error": deepcopy(self.error),
             "createdAt": self.created_at,
         }
 
 
 class InMemoryWorkflowV2RunStore:
-    def __init__(self) -> None:
+    def __init__(self, store: JsonRuntimeStore | None = None) -> None:
+        self._store = store
         self._runs: dict[str, dict[str, Any]] = {}
+        self._lock = threading.RLock()
+        if self._store is not None:
+            self._runs = {str(record["id"]): deepcopy(record) for record in self._store.list_records(COLLECTION)}
 
     def save(self, run: dict[str, Any]) -> dict[str, Any]:
-        self._runs[str(run["id"])] = deepcopy(run)
+        with self._lock:
+            self._runs[str(run["id"])] = deepcopy(run)
+            if self._store is not None:
+                self._store.save_record(COLLECTION, str(run["id"]), run)
         return self.get(str(run["id"]))
 
     def get(self, run_id: str) -> dict[str, Any]:
-        if run_id not in self._runs:
-            raise WorkflowV2RunNotFound(run_id)
-        return deepcopy(self._runs[run_id])
+        with self._lock:
+            if run_id not in self._runs:
+                if self._store is not None:
+                    persisted = self._store.get_record(COLLECTION, run_id)
+                    if persisted is not None:
+                        self._runs[run_id] = persisted
+                        return deepcopy(persisted)
+                raise WorkflowV2RunNotFound(run_id)
+            return deepcopy(self._runs[run_id])
 
 
 class WorkflowV2RunService:
+    _cancellations: dict[str, WorkflowV2CancellationToken] = {}
+    _cancellations_lock = threading.RLock()
+
     def __init__(
         self,
         definition_service: WorkflowV2DefinitionService,
@@ -103,8 +141,77 @@ class WorkflowV2RunService:
         )
         return self._store.save(run)
 
+    def start_async(self, *, workflow_id: str, version: int, input_payload: dict[str, Any]) -> dict[str, Any]:
+        published = self._definition_service.get_version(workflow_id, version)
+        definition = published["definition"]
+        run_id = f"workflow_run_{uuid4().hex}"
+        token = WorkflowV2CancellationToken()
+        with self._cancellations_lock:
+            self._cancellations[run_id] = token
+        running = _running_run(run_id, workflow_id, version, input_payload)
+        self._store.save(running)
+
+        def worker() -> None:
+            try:
+                run = _execute_single_agent_run(
+                    run_id=run_id,
+                    workflow_id=workflow_id,
+                    workflow_version=version,
+                    definition=definition,
+                    input_payload=deepcopy(input_payload),
+                    definition_service=self._definition_service,
+                    llm_client=self._llm_client,
+                    tool_registry=self._tool_registry,
+                    tool_executor_registry=self._tool_executor_registry,
+                    artifact_store=self._artifact_store,
+                    cancellation_token=token,
+                )
+                self._store.save(run)
+            finally:
+                with self._cancellations_lock:
+                    self._cancellations.pop(run_id, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return self._store.get(run_id)
+
+    def cancel(self, run_id: str) -> dict[str, Any]:
+        with self._cancellations_lock:
+            token = self._cancellations.get(run_id)
+        if token is not None:
+            token.cancel()
+        run = self._store.get(run_id)
+        if run.get("status") in {"succeeded", "failed", "cancelled"}:
+            return run
+        error = {"code": "WORKFLOW_CANCELLED", "message": "Workflow run cancelled"}
+        events = run.get("events", [])
+        if isinstance(events, list):
+            _emit_event(events, run_id, None, "WorkflowFailed", {"status": "cancelled", "error": deepcopy(error)})
+        run.update({"status": "cancelled", "error": error})
+        return self._store.save(run)
+
     def get(self, run_id: str) -> dict[str, Any]:
         return self._store.get(run_id)
+
+
+def _running_run(run_id: str, workflow_id: str, workflow_version: int, input_payload: dict[str, Any]) -> dict[str, Any]:
+    events: list[dict[str, Any]] = []
+    _emit_event(events, run_id, None, "WorkflowStarted", {"status": "running"})
+    return WorkflowV2RunRecord(
+        id=run_id,
+        workflow_id=workflow_id,
+        workflow_version=workflow_version,
+        status="running",
+        input=deepcopy(input_payload),
+        output=None,
+        final_result=None,
+        node_results=[],
+        messages=[_user_message(input_payload)],
+        artifacts=[],
+        execution_details={"nodes": []},
+        events=events,
+        error=None,
+        created_at=_now(),
+    ).to_dict()
 
 
 def _execute_single_agent_run(
@@ -121,10 +228,15 @@ def _execute_single_agent_run(
     artifact_store: InMemoryWorkflowV2ArtifactStore | None = None,
     workflow_depth: int = 0,
     initial_messages: list[dict[str, Any]] | None = None,
+    cancellation_token: WorkflowV2CancellationToken | None = None,
 ) -> dict[str, Any]:
     artifact_store = artifact_store or InMemoryWorkflowV2ArtifactStore()
+    limits = _runtime_limits(definition)
+    started_at = time.monotonic()
     message_history = [*deepcopy(initial_messages or []), _user_message(input_payload)]
     execution_details = {"nodes": []}
+    events: list[dict[str, Any]] = []
+    _emit_event(events, run_id, None, "WorkflowStarted", {"status": "running"})
     node_results: list[dict[str, Any]] = []
     node_outputs: dict[str, Any] = {}
     node_by_id = _node_by_id(definition)
@@ -132,32 +244,47 @@ def _execute_single_agent_run(
     last_output: dict[str, Any] | None = None
     end_node: dict[str, Any] | None = None
     steps_remaining = max(len(node_by_id) * 4, 1)
+    node_executions = 0
 
     while current and current != "END":
+        limit_error = _run_limit_error(limits, started_at)
+        if limit_error is not None:
+            return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, **limit_error)
+        if _is_cancelled(cancellation_token):
+            return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, "WORKFLOW_CANCELLED", "Workflow run cancelled")
         steps_remaining -= 1
         if steps_remaining < 0:
-            return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, "workflow.graph_cycle", "Workflow graph did not terminate")
+            return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, "workflow.graph_cycle", "Workflow graph did not terminate")
         node = node_by_id.get(current)
         if node is None:
-            return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, "workflow.unknown_node", f"Workflow node not found: {current}")
+            return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, "workflow.unknown_node", f"Workflow node not found: {current}")
         if node.get("type") == "end":
             end_node = node
             break
+        node_id = str(node["id"])
+        node_executions += 1
+        if node_executions > limits["maxNodeExecutions"]:
+            return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, "WORKFLOW_LIMIT_EXCEEDED", "Runtime limit exceeded: maxNodeExecutions", limit="maxNodeExecutions")
+        _emit_event(events, run_id, node_id, "NodeStarted", {"status": "running", "nodeType": node.get("type")})
         if node.get("type") == "agent":
-            result = _run_agent_node(node, definition, message_history, execution_details, llm_client, tool_registry, tool_executor_registry, run_id, artifact_store)
+            result = _run_agent_node(node, definition, message_history, execution_details, llm_client, tool_registry, tool_executor_registry, run_id, artifact_store, events, limits, started_at, cancellation_token)
             node_results.append(result["nodeResult"])
             if not result["ok"]:
-                return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, **result["error"])
+                _emit_event(events, run_id, node_id, "NodeFailed", {"status": "failed", "error": deepcopy(result["error"])})
+                return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, **result["error"])
+            _emit_event(events, run_id, node_id, "NodeCompleted", {"status": "succeeded", "data": deepcopy(result["output"])})
             last_output = result["output"]
-            node_outputs[str(node["id"])] = deepcopy(last_output)
-            current = _edge_target(definition, str(node["id"]), "")
+            node_outputs[node_id] = deepcopy(last_output)
+            current = _edge_target(definition, node_id, "")
             continue
         if node.get("type") == "condition":
             result = _run_condition_node(node, definition, node_outputs)
             node_results.append(result["nodeResult"])
-            execution_details["nodes"].append({"nodeId": node["id"], "steps": result["steps"]})
+            execution_details["nodes"].append({"nodeId": node_id, "steps": result["steps"]})
             if not result["ok"]:
-                return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, **result["error"])
+                _emit_event(events, run_id, node_id, "NodeFailed", {"status": "failed", "error": deepcopy(result["error"])})
+                return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, **result["error"])
+            _emit_event(events, run_id, node_id, "NodeCompleted", {"status": "succeeded", "data": deepcopy(result["nodeResult"].get("data"))})
             current = str(result["target"])
             continue
         if node.get("type") == "workflow":
@@ -172,18 +299,26 @@ def _execute_single_agent_run(
                 tool_executor_registry,
                 artifact_store,
                 workflow_depth,
+                limits,
+                cancellation_token,
             )
             node_results.append(result["nodeResult"])
-            execution_details["nodes"].append({"nodeId": node["id"], "steps": result["steps"]})
+            execution_details["nodes"].append({"nodeId": node_id, "steps": result["steps"]})
+            _append_child_events(events, run_id, result.get("events", []))
             if not result["ok"]:
-                return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, **result["error"])
+                _emit_event(events, run_id, node_id, "NodeFailed", {"status": "failed", "error": deepcopy(result["error"])})
+                return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, **result["error"])
+            _emit_event(events, run_id, node_id, "NodeCompleted", {"status": "succeeded", "data": deepcopy(result["output"])})
             last_output = result["output"]
-            node_outputs[str(node["id"])] = deepcopy(last_output)
-            current = _edge_target(definition, str(node["id"]), "")
+            node_outputs[node_id] = deepcopy(last_output)
+            current = _edge_target(definition, node_id, "")
             continue
-        return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, "workflow.unsupported_node", f"Unsupported runtime node type: {node.get('type')}")
+        _emit_event(events, run_id, node_id, "NodeFailed", {"status": "failed", "error": {"code": "workflow.unsupported_node"}})
+        return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, "workflow.unsupported_node", f"Unsupported runtime node type: {node.get('type')}")
 
-    artifacts = artifact_store.list_by_run(run_id)
+    artifacts = _run_artifact_refs(artifact_store.list_by_run(run_id), node_results)
+    final_result = _build_final_result(end_node, message_history, node_outputs, artifacts)
+    _emit_event(events, run_id, None, "WorkflowCompleted", {"status": "succeeded", "finalResult": deepcopy(final_result)})
     return WorkflowV2RunRecord(
         id=run_id,
         workflow_id=workflow_id,
@@ -191,11 +326,12 @@ def _execute_single_agent_run(
         status="succeeded",
         input=input_payload,
         output=last_output,
-        final_result=_build_final_result(end_node, message_history, node_outputs, artifacts),
+        final_result=final_result,
         node_results=node_results,
         messages=message_history,
         artifacts=artifacts,
         execution_details=execution_details,
+        events=events,
         error=None,
         created_at=_now(),
     ).to_dict()
@@ -211,6 +347,10 @@ def _run_agent_node(
     tool_executor_registry: ToolExecutorRegistry | None,
     run_id: str,
     artifact_store: InMemoryWorkflowV2ArtifactStore,
+    events: list[dict[str, Any]],
+    limits: dict[str, Any],
+    started_at: float,
+    cancellation_token: WorkflowV2CancellationToken | None,
 ) -> dict[str, Any]:
     tool_policy = agent_node.get("config", {}).get("toolPolicy", {"mode": "disabled"})
     execution_details["nodes"].append({"nodeId": agent_node["id"], "steps": []})
@@ -219,36 +359,86 @@ def _run_agent_node(
         called_tools: set[str] = set()
         node_artifacts: list[dict[str, Any]] = []
         raw_output = ""
-        max_tool_calls = _positive_int(tool_policy.get("maxToolCalls"), 20) if isinstance(tool_policy, dict) else 20
+        max_tool_calls = limits["maxToolCallsPerNode"]
+        llm_turns = 0
+        tool_call_count = 0
+        schema_retry_count = 0
         while True:
-            raw_output = llm_client.complete(_provider_messages(agent_node, output_schema, message_history, tool_registry, definition))
-            _steps(execution_details).append({"type": "llm_call", "index": _next_llm_index(execution_details)})
+            if _is_cancelled(cancellation_token):
+                return _agent_failure(agent_node, "WORKFLOW_CANCELLED", "Workflow run cancelled")
+            limit_error = _run_limit_error(limits, started_at)
+            if limit_error is not None:
+                return _agent_failure(agent_node, **limit_error)
+            if llm_turns >= limits["maxLlmTurnsPerNode"]:
+                return _agent_failure(agent_node, "WORKFLOW_LIMIT_EXCEEDED", "Runtime limit exceeded: maxLlmTurnsPerNode", limit="maxLlmTurnsPerNode")
+            llm_index = _next_llm_index(execution_details)
+            _emit_event(events, run_id, str(agent_node["id"]), "LlmCallStarted", {"index": llm_index})
+            raw_output = _complete_llm(llm_client, _provider_messages(agent_node, output_schema, message_history, tool_registry, definition), cancellation_token)
+            llm_turns += 1
+            _steps(execution_details).append({"type": "llm_call", "index": llm_index})
+            _emit_event(events, run_id, str(agent_node["id"]), "LlmCallCompleted", {"index": llm_index})
+            if _is_cancelled(cancellation_token):
+                return _agent_failure(agent_node, "WORKFLOW_CANCELLED", "Workflow run cancelled")
+            limit_error = _run_limit_error(limits, started_at)
+            if limit_error is not None:
+                return _agent_failure(agent_node, **limit_error)
             parsed = json.loads(raw_output)
             tool_calls = _tool_calls_from(parsed)
             if not tool_calls:
-                break
+                parsed_data = _payload_data_without_artifacts(parsed)
+                missing_required = _missing_required_tools(tool_policy, called_tools)
+                if missing_required:
+                    return _agent_failure(agent_node, "REQUIRED_TOOL_NOT_CALLED", f"Required tool was not called: {missing_required[0]}")
+                validation = WorkflowV2JsonSchemaService().validate_value(output_schema, parsed_data)
+                _steps(execution_details).append({"type": "schema_validation", "status": "succeeded" if validation["valid"] else "failed"})
+                if not validation["valid"]:
+                    first_error = validation["errors"][0]
+                    _emit_event(events, run_id, str(agent_node["id"]), "SchemaValidationFailed", {"status": "failed", "error": {"message": str(first_error["message"]), "field": str(first_error["path"])}})
+                    if schema_retry_count >= limits["maxSchemaRetries"]:
+                        return _agent_failure(agent_node, "workflow.output_schema_invalid", str(first_error["message"]), field=str(first_error["path"]))
+                    schema_retry_count += 1
+                    continue
+                _emit_event(events, run_id, str(agent_node["id"]), "SchemaValidationSucceeded", {"status": "succeeded"})
+                agent_artifacts = _save_artifacts_from_payload(parsed, run_id, str(agent_node["id"]), artifact_store)
+                node_artifacts.extend(agent_artifacts)
+                assistant_message = {"role": "assistant", "content": _assistant_content(raw_output, parsed_data, agent_artifacts), "visible": _agent_message_visible(agent_node)}
+                if agent_artifacts:
+                    assistant_message["artifacts"] = deepcopy(agent_artifacts)
+                message_history.append(assistant_message)
+                node_result = {"nodeId": agent_node["id"], "status": "succeeded", "data": parsed_data, "artifacts": deepcopy(node_artifacts)}
+                _steps(execution_details).append({"type": "node_result", "status": "succeeded", "data": deepcopy(parsed_data), "artifacts": deepcopy(node_artifacts)})
+                return {"ok": True, "nodeResult": node_result, "output": parsed_data}
             message_history.append({"role": "assistant", "content": str(parsed.get("message", "")) if isinstance(parsed, dict) else "", "toolCalls": deepcopy(tool_calls)})
             for tool_call in tool_calls:
-                if len(called_tools) >= max_tool_calls:
-                    return _agent_failure(agent_node, "MAX_TOOL_CALLS_EXCEEDED", f"Max tool calls per node exceeded: {max_tool_calls}")
+                if tool_call_count >= max_tool_calls:
+                    return _agent_failure(agent_node, "WORKFLOW_LIMIT_EXCEEDED", "Runtime limit exceeded: maxToolCallsPerNode", limit="maxToolCallsPerNode")
                 tool_error = _validate_tool_call(tool_call, tool_policy, tool_registry)
-                _steps(execution_details).append({"type": "tool_call", "toolCallId": tool_call["id"], "name": tool_call["name"], "arguments": deepcopy(tool_call["arguments"])})
+                _steps(execution_details).append({"type": "tool_call", "toolCallId": tool_call["id"], "name": tool_call["name"]})
+                _emit_event(events, run_id, str(agent_node["id"]), "ToolCallStarted", {"toolCallId": tool_call["id"], "name": tool_call["name"]})
                 if tool_error is not None:
+                    _emit_event(events, run_id, str(agent_node["id"]), "ToolCallCompleted", {"toolCallId": tool_call["id"], "name": tool_call["name"], "status": "failed", "error": deepcopy(tool_error)})
                     return _agent_failure(agent_node, **tool_error)
                 try:
                     result = _execute_tool(tool_call, tool_executor_registry, _tool_timeout(agent_node, tool_policy))
                 except asyncio.TimeoutError:
                     _append_failed_tool_result(message_history, execution_details, tool_call, "TOOL_TIMEOUT", "Tool execution timed out")
+                    _emit_event(events, run_id, str(agent_node["id"]), "ToolCallCompleted", {"toolCallId": tool_call["id"], "name": tool_call["name"], "status": "failed", "error": {"code": "TOOL_TIMEOUT", "message": "Tool execution timed out"}})
                     return _agent_failure(agent_node, "TOOL_TIMEOUT", "Tool execution timed out")
                 except ToolExecutorError as error:
                     field = error.field if isinstance(error, ToolInputValidationError) else None
                     code = "TOOL_ARGUMENT_INVALID" if field else "TOOL_EXECUTION_FAILED"
                     _append_failed_tool_result(message_history, execution_details, tool_call, code, str(error), field=field)
+                    event_error: dict[str, Any] = {"code": code, "message": str(error)}
+                    if field is not None:
+                        event_error["field"] = field
+                    _emit_event(events, run_id, str(agent_node["id"]), "ToolCallCompleted", {"toolCallId": tool_call["id"], "name": tool_call["name"], "status": "failed", "error": event_error})
                     return _agent_failure(agent_node, code, str(error), field=field)
                 except Exception as error:
                     _append_failed_tool_result(message_history, execution_details, tool_call, "TOOL_EXECUTION_FAILED", str(error))
+                    _emit_event(events, run_id, str(agent_node["id"]), "ToolCallCompleted", {"toolCallId": tool_call["id"], "name": tool_call["name"], "status": "failed", "error": {"code": "TOOL_EXECUTION_FAILED", "message": str(error)}})
                     return _agent_failure(agent_node, "TOOL_EXECUTION_FAILED", str(error))
                 called_tools.add(tool_call["name"])
+                tool_call_count += 1
                 tool_artifacts = _save_artifacts_from_tool_result(result, run_id, str(agent_node["id"]), artifact_store)
                 node_artifacts.extend(tool_artifacts)
                 tool_data = _tool_result_data(result)
@@ -260,25 +450,7 @@ def _run_agent_node(
                 if tool_artifacts:
                     tool_result_step["artifacts"] = deepcopy(tool_artifacts)
                 _steps(execution_details).append(tool_result_step)
-        parsed = json.loads(raw_output)
-        agent_artifacts = _save_artifacts_from_payload(parsed, run_id, str(agent_node["id"]), artifact_store)
-        node_artifacts.extend(agent_artifacts)
-        parsed_data = _payload_data_without_artifacts(parsed)
-        assistant_message = {"role": "assistant", "content": _assistant_content(raw_output, parsed_data, agent_artifacts), "visible": _agent_message_visible(agent_node)}
-        if agent_artifacts:
-            assistant_message["artifacts"] = deepcopy(agent_artifacts)
-        message_history.append(assistant_message)
-        missing_required = _missing_required_tools(tool_policy, called_tools)
-        if missing_required:
-            return _agent_failure(agent_node, "REQUIRED_TOOL_NOT_CALLED", f"Required tool was not called: {missing_required[0]}")
-        validation = WorkflowV2JsonSchemaService().validate_value(output_schema, parsed_data)
-        _steps(execution_details).append({"type": "schema_validation", "status": "succeeded" if validation["valid"] else "failed"})
-        if not validation["valid"]:
-            first_error = validation["errors"][0]
-            return _agent_failure(agent_node, "workflow.output_schema_invalid", str(first_error["message"]), field=str(first_error["path"]))
-        node_result = {"nodeId": agent_node["id"], "status": "succeeded", "data": parsed_data, "artifacts": deepcopy(node_artifacts)}
-        _steps(execution_details).append({"type": "node_result", "status": "succeeded", "data": deepcopy(parsed_data), "artifacts": deepcopy(node_artifacts)})
-        return {"ok": True, "nodeResult": node_result, "output": parsed_data}
+                _emit_event(events, run_id, str(agent_node["id"]), "ToolCallCompleted", {"toolCallId": tool_call["id"], "name": tool_call["name"], "status": "succeeded"})
     except json.JSONDecodeError as error:
         return _agent_failure(agent_node, "workflow.output_parse_failed", str(error), field="$")
     except Exception as error:
@@ -338,6 +510,8 @@ def _run_workflow_ref_node(
     tool_executor_registry: ToolExecutorRegistry | None,
     artifact_store: InMemoryWorkflowV2ArtifactStore,
     workflow_depth: int,
+    limits: dict[str, Any] | None = None,
+    cancellation_token: WorkflowV2CancellationToken | None = None,
 ) -> dict[str, Any]:
     config = node.get("config", {}) if isinstance(node.get("config", {}), dict) else {}
     workflow_id = str(config.get("workflowId", config.get("workflow_id", "")))
@@ -346,7 +520,8 @@ def _run_workflow_ref_node(
     steps = [{"type": "workflow_ref_start", "workflowId": workflow_id, "workflowVersion": version}]
     if definition_service is None:
         return _workflow_ref_failure(node, steps, "workflow_ref.definition_service_missing", "Workflow definition service is not available")
-    if workflow_depth >= 8:
+    depth_limit = limits["maxWorkflowDepth"] if isinstance(limits, dict) else 8
+    if workflow_depth >= depth_limit:
         return _workflow_ref_failure(node, steps, "workflow_ref.depth_limit_exceeded", "Workflow depth limit exceeded")
     if not workflow_id or not isinstance(version, int):
         return _workflow_ref_failure(node, steps, "workflow_ref.version_required", "Workflow Ref node requires an explicit published version")
@@ -365,6 +540,8 @@ def _run_workflow_ref_node(
     if not input_validation["valid"]:
         first_error = input_validation["errors"][0]
         return _workflow_ref_failure(node, steps, "workflow_ref.input_schema_invalid", str(first_error["message"]), field=str(first_error["path"]))
+    if _is_cancelled(cancellation_token):
+        return _workflow_ref_failure(node, steps, "WORKFLOW_CANCELLED", "Workflow run cancelled")
     inherited_messages = message_history if message_context_mode == "inherit" else None
     child_run = _execute_single_agent_run(
         run_id=f"workflow_run_{uuid4().hex}",
@@ -379,11 +556,14 @@ def _run_workflow_ref_node(
         artifact_store=artifact_store,
         workflow_depth=workflow_depth + 1,
         initial_messages=inherited_messages,
+        cancellation_token=cancellation_token,
     )
     if message_context_mode == "inherit":
         message_history.extend(child_run["messages"][len(inherited_messages or []):])
     if child_run["status"] != "succeeded":
         child_error = child_run.get("error") if isinstance(child_run.get("error"), dict) else {}
+        if child_error.get("code") == "WORKFLOW_CANCELLED":
+            return _workflow_ref_failure(node, [*steps, {"type": "workflow_ref_result", "status": "cancelled", "error": child_error}], "WORKFLOW_CANCELLED", str(child_error.get("message", "Workflow run cancelled")))
         if child_error.get("code") == "workflow_ref.depth_limit_exceeded":
             return _workflow_ref_failure(node, [*steps, {"type": "workflow_ref_result", "status": "failed", "error": child_error}], str(child_error["code"]), str(child_error.get("message", "Workflow depth limit exceeded")))
         return _workflow_ref_failure(node, [*steps, {"type": "workflow_ref_result", "status": "failed", "error": child_run.get("error")}], "workflow_ref.child_failed", "Child workflow failed", field=workflow_id)
@@ -405,7 +585,7 @@ def _run_workflow_ref_node(
             "childRunId": child_run["id"],
         },
     }
-    return {"ok": True, "output": data, "nodeResult": node_result, "steps": [*steps, {"type": "workflow_ref_result", "status": "succeeded", "data": data}]}
+    return {"ok": True, "output": data, "nodeResult": node_result, "steps": [*steps, {"type": "workflow_ref_result", "status": "succeeded", "data": data}], "events": child_run.get("events", [])}
 
 
 def _resolve_workflow_ref_input(bindings: Any, workflow_input: dict[str, Any], node_outputs: dict[str, Any]) -> dict[str, Any]:
@@ -447,11 +627,46 @@ def _validate_contract(schema: Any, value: Any) -> dict[str, Any]:
     return WorkflowV2JsonSchemaService().validate_value(schema, value)
 
 
-def _workflow_ref_failure(node: dict[str, Any], steps: list[dict[str, Any]], code: str, message: str, *, field: str | None = None) -> dict[str, Any]:
+def _workflow_ref_failure(node: dict[str, Any], steps: list[dict[str, Any]], code: str, message: str, *, field: str | None = None, limit: str | None = None) -> dict[str, Any]:
     error: dict[str, Any] = {"code": code, "message": message}
     if field is not None:
         error["field"] = field
+    if limit is not None:
+        error["limit"] = limit
     return {"ok": False, "nodeResult": {"nodeId": node["id"], "status": "failed", "data": None, "artifacts": [], "metadata": {}}, "error": error, "steps": [*steps, {"type": "workflow_ref_result", "status": "failed", "error": error}]}
+
+
+def _append_child_events(events: list[dict[str, Any]], run_id: str, child_events: Any) -> None:
+    if not isinstance(child_events, list):
+        return
+    for event in child_events:
+        if not isinstance(event, dict):
+            continue
+        payload = deepcopy(event.get("payload", {})) if isinstance(event.get("payload", {}), dict) else {}
+        payload.setdefault("childRunId", event.get("runId"))
+        _emit_event(events, run_id, event.get("nodeId"), str(event.get("eventType", "message")), payload)
+
+
+def _run_artifact_refs(run_artifacts: list[dict[str, Any]], node_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for artifact in [
+        *run_artifacts,
+        *[
+            artifact
+            for result in node_results
+            if isinstance(result.get("artifacts"), list)
+            for artifact in result["artifacts"]
+        ],
+    ]:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_id = str(artifact.get("id", ""))
+        if not artifact_id or artifact_id in seen:
+            continue
+        seen.add(artifact_id)
+        refs.append(deepcopy(artifact))
+    return refs
 
 
 def _build_final_result(
@@ -616,10 +831,12 @@ def _edge_target(definition: dict[str, Any], source: str, handle: str) -> str:
     return ""
 
 
-def _agent_failure(agent_node: dict[str, Any], code: str, message: str, *, field: str | None = None) -> dict[str, Any]:
+def _agent_failure(agent_node: dict[str, Any], code: str, message: str, *, field: str | None = None, limit: str | None = None) -> dict[str, Any]:
     error: dict[str, Any] = {"code": code, "message": message}
     if field is not None:
         error["field"] = field
+    if limit is not None:
+        error["limit"] = limit
     return {"ok": False, "nodeResult": {"nodeId": agent_node["id"], "status": "failed", "data": None}, "error": error}
 
 
@@ -761,6 +978,53 @@ def _positive_int(value: Any, default: int) -> int:
     return value if isinstance(value, int) and value > 0 else default
 
 
+def _runtime_limits(definition: dict[str, Any]) -> dict[str, Any]:
+    configured = definition.get("runtimeLimits", definition.get("runtime_limits", {}))
+    if not isinstance(configured, dict):
+        configured = {}
+    return {
+        "maxLlmTurnsPerNode": _positive_int(configured.get("maxLlmTurnsPerNode", configured.get("max_llm_turns_per_node")), 12),
+        "maxToolCallsPerNode": _positive_int(configured.get("maxToolCallsPerNode", configured.get("max_tool_calls_per_node")), 32),
+        "maxNodeExecutions": _positive_int(configured.get("maxNodeExecutions", configured.get("max_node_executions")), 128),
+        "maxWorkflowDepth": _positive_int(configured.get("maxWorkflowDepth", configured.get("max_workflow_depth")), 8),
+        "maxSchemaRetries": _positive_int(configured.get("maxSchemaRetries", configured.get("max_schema_retries")), 0),
+        "workflowTimeoutMs": configured.get("workflowTimeoutMs", configured.get("workflow_timeout_ms")),
+    }
+
+
+def _run_limit_error(limits: dict[str, Any], started_at: float) -> dict[str, Any] | None:
+    timeout_ms = limits.get("workflowTimeoutMs")
+    if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+        elapsed_ms = (time.monotonic() - started_at) * 1000
+        if elapsed_ms > timeout_ms:
+            return {
+                "code": "WORKFLOW_LIMIT_EXCEEDED",
+                "message": "Runtime limit exceeded: workflowTimeoutMs",
+                "limit": "workflowTimeoutMs",
+            }
+    return None
+
+
+def _is_cancelled(cancellation_token: WorkflowV2CancellationToken | None) -> bool:
+    return cancellation_token is not None and cancellation_token.is_cancelled()
+
+
+def _complete_llm(llm_client, messages: list[dict[str, Any]], cancellation_token: WorkflowV2CancellationToken | None) -> str:
+    try:
+        return llm_client.complete(messages, {"cancellationToken": cancellation_token})
+    except TypeError:
+        return llm_client.complete(messages)
+
+
+def _messages_with_sequence(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sequenced: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        item = deepcopy(message)
+        item.setdefault("sequence", index + 1)
+        sequenced.append(item)
+    return sequenced
+
+
 def _empty_execution_details() -> dict[str, Any]:
     return {"nodes": []}
 
@@ -773,19 +1037,25 @@ def _failed_run(
     node_results: list[dict[str, Any]],
     messages: list[dict[str, Any]],
     execution_details: dict[str, Any],
+    events: list[dict[str, Any]],
     code: str,
     message: str,
     *,
     field: str | None = None,
+    limit: str | None = None,
 ) -> dict[str, Any]:
     error: dict[str, Any] = {"code": code, "message": message}
     if field is not None:
         error["field"] = field
+    if limit is not None:
+        error["limit"] = limit
+    status = "cancelled" if code == "WORKFLOW_CANCELLED" else "failed"
+    _emit_event(events, run_id, None, "WorkflowFailed", {"status": status, "error": deepcopy(error)})
     return WorkflowV2RunRecord(
         id=run_id,
         workflow_id=workflow_id,
         workflow_version=workflow_version,
-        status="failed",
+        status=status,
         input=input_payload,
         output=None,
         final_result=None,
@@ -793,9 +1063,29 @@ def _failed_run(
         messages=messages,
         artifacts=[],
         execution_details=execution_details,
+        events=events,
         error=error,
         created_at=_now(),
     ).to_dict()
+
+
+def _emit_event(
+    events: list[dict[str, Any]],
+    run_id: str,
+    node_id: str | None,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    event = {
+        "runId": run_id,
+        "nodeId": node_id,
+        "timestamp": _now(),
+        "sequence": len(events) + 1,
+        "eventType": event_type,
+        "payload": deepcopy(payload or {}),
+    }
+    events.append(event)
+    return event
 
 
 def _now() -> str:

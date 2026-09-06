@@ -131,3 +131,62 @@ test("main Workflow page keeps active published version when loading saved templ
   assert.match(summary, /active_version_id/);
   assert.match(summary, /status:\s*"published"/);
 });
+
+test("main Workflow page defaults to Agent Workflow V2 while keeping an explicit legacy fallback", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const renderer = source.slice(source.indexOf("function renderWorkflow()"), source.indexOf("function renderWorkflowCanvasContent()"));
+  const v2Renderer = source.slice(source.indexOf("function renderWorkflowV2()"), source.indexOf("function renderWorkflowV2NodeLibrary()"));
+  const handler = source.slice(source.indexOf("async function handleAction"), source.indexOf("function handleWorkflowNodePointerDown"));
+
+  assert.match(source, /createNewWorkflowDefinition/);
+  assert.match(source, /workflowSchemaVersionFromUrl/);
+  assert.match(source, /workflowSchemaVersionFromUrl\(\)[\s\S]*return Number\(new URLSearchParams\(window\.location\.search\)\.get\("schemaVersion"\)\) === 1 \? 1 : 2/);
+  assert.match(source, /state\.workflowSchemaVersion === 1/);
+  assert.match(renderer, /renderWorkflowLegacy\(\)/);
+  assert.match(renderer, /return renderWorkflowV2\(\)/);
+  assert.match(source, /data-action="switch-workflow-legacy"/);
+  assert.match(source, /schemaVersion=1/);
+  assert.match(v2Renderer, /Agent Workflow V2/);
+  assert.match(v2Renderer, /AGENT_WORKFLOW_V2_NODE_TYPES/);
+  assert.match(v2Renderer, /data-action="add-workflow-v2-node"/);
+  assert.match(handler, /add-workflow-v2-node/);
+  assert.doesNotMatch(v2Renderer, /Add Prompt/);
+});
+
+test("main Workflow V2 page wires draft validate publish and run actions to Workflow V2 APIs", () => {
+  const source = readFileSync(join(studioRoot, "src/main.js"), "utf-8");
+  const v2Renderer = source.slice(source.indexOf("function renderWorkflowV2()"), source.indexOf("function renderWorkflowV2NodeLibrary()"));
+  const listener = source.slice(source.indexOf("const workflowV2RunInput"), source.indexOf("const workflowEdgeSource"));
+  const handler = source.slice(source.indexOf("async function handleAction"), source.indexOf("function handleWorkflowNodePointerDown"));
+  const workbenchFactory = source.slice(source.indexOf("function workflowV2Workbench()"), source.indexOf("function runtimeClient()"));
+  const realClient = source.slice(source.indexOf("function realClient()"), source.indexOf("function mockClient()"));
+  const mockClient = source.slice(source.indexOf("function mockClient()"), source.indexOf("async function getJson"));
+
+  assert.match(source, /createStarterWorkflowV2Definition/);
+  assert.match(workbenchFactory, /workflowDefinition:\s*createStarterWorkflowV2Definition/);
+  assert.match(workbenchFactory, /selectNode\("agent-1"\)/);
+  assert.match(v2Renderer, /data-action="save-workflow-v2-draft"/);
+  assert.match(v2Renderer, /data-action="validate-workflow-v2"/);
+  assert.match(v2Renderer, /data-action="publish-workflow-v2"/);
+  assert.match(v2Renderer, /data-action="run-workflow-v2"/);
+  assert.match(v2Renderer, /data-testid="workflow-v2-agent-instruction"/);
+  assert.match(listener, /workflow-v2-agent-instruction/);
+  assert.match(listener, /updateSelectedAgentConfig/);
+  assert.doesNotMatch(v2Renderer, /data-action="not-implemented" disabled>Save Draft/);
+  assert.match(handler, /save-workflow-v2-draft/);
+  assert.match(handler, /validate-workflow-v2/);
+  assert.match(handler, /publish-workflow-v2/);
+  assert.match(handler, /run-workflow-v2/);
+  assert.match(source, /workflowV2Workbench\(\)/);
+  assert.match(source, /ensureWorkflowV2Definition/);
+  assert.match(realClient, /createWorkflow:/);
+  assert.match(realClient, /saveWorkflowDraft:/);
+  assert.match(realClient, /validateWorkflow:/);
+  assert.match(realClient, /publishWorkflow:/);
+  assert.match(realClient, /startWorkflowRun:/);
+  assert.match(mockClient, /createWorkflow/);
+  assert.match(mockClient, /saveWorkflowDraft/);
+  assert.match(mockClient, /validateWorkflow/);
+  assert.match(mockClient, /publishWorkflow/);
+  assert.match(mockClient, /startWorkflowRun/);
+});

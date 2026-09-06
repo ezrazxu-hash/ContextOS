@@ -303,7 +303,7 @@ class TemplateServiceApiTests(unittest.TestCase):
         self.assertEqual(service.get("research-agent").manifest_payload["template"]["name"], "Research Agent")
 
     def test_template_delete_removes_record_and_persists_to_json_store(self) -> None:
-        from contextos.api.routes.templates import delete_template, get_template, list_templates, post_template
+        from contextos.api.routes.templates import get_template, list_templates, post_template, remove_template
         from contextos.runtime.persistence.json_store import JsonRuntimeStore
         from contextos.template.service import TemplateService
 
@@ -312,7 +312,7 @@ class TemplateServiceApiTests(unittest.TestCase):
             service = TemplateService(JsonRuntimeStore(path))
             post_template(manifest_payload(), service)
 
-            deleted = delete_template("research-agent", service)
+            deleted = remove_template("research-agent", service)
             reloaded_service = TemplateService(JsonRuntimeStore(path))
 
             self.assertEqual(deleted["status"], 200)
@@ -322,7 +322,7 @@ class TemplateServiceApiTests(unittest.TestCase):
 
     def test_template_node_delete_removes_node_edges_ui_and_draft_from_json_store(self) -> None:
         from contextos.api.routes.agents import get_agent_draft, put_agent_draft
-        from contextos.api.routes.templates import delete_template_node, get_template, post_template
+        from contextos.api.routes.templates import get_template, post_template, remove_template_node
         from contextos.runtime.persistence.json_store import JsonRuntimeStore
         from contextos.template.service import TemplateService
 
@@ -335,8 +335,8 @@ class TemplateServiceApiTests(unittest.TestCase):
             post_template(manifest, service)
             put_agent_draft("research-agent", draft, service)
 
-            deleted = delete_template_node("research-agent", "tool", service)
-            duplicate = delete_template_node("research-agent", "tool", service)
+            deleted = remove_template_node("research-agent", "tool", service)
+            duplicate = remove_template_node("research-agent", "tool", service)
             reloaded_service = TemplateService(JsonRuntimeStore(path))
             persisted = get_template("research-agent", reloaded_service)["body"]["manifest"]
             persisted_draft = get_agent_draft("research-agent", reloaded_service)["body"]["draft_manifest"]

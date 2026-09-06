@@ -345,6 +345,101 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(content["contentType"], "text/plain")
         self.assertEqual(content["body"], b"hello artifact")
 
+    def test_host_reloads_workflow_v2_run_history_detail_from_persistent_store(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage_path = Path(temp_dir) / "runtime-state.json"
+            first_host = create_http_runtime_host(
+                host="127.0.0.1",
+                port=0,
+                llm_client=RecordingLlmClient('{"summary":"History ready","artifacts":[{"name":"history.txt","mimeType":"text/plain","content":"persisted"}]}'),
+                storage_path=storage_path,
+            )
+            first_host.start()
+            try:
+                post_json(f"{first_host.url}/api/workflows", valid_workflow_v2_definition("Create history"))
+                published = post_json(f"{first_host.url}/api/workflows/support-flow/publish", {})
+                started = post_json(
+                    f"{first_host.url}/api/workflows/support-flow/runs",
+                    {"version": published["version"], "input": {"message": "make history"}},
+                )
+                run_id = started["id"]
+                artifact_id = started["artifacts"][0]["id"]
+            finally:
+                first_host.stop()
+
+            second_host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient("{}"), storage_path=storage_path)
+            second_host.start()
+            try:
+                loaded = get_json(f"{second_host.url}/api/workflow-runs/{run_id}")
+                nodes = get_json(f"{second_host.url}/api/workflow-runs/{run_id}/nodes")
+                messages = get_json(f"{second_host.url}/api/workflow-runs/{run_id}/messages")
+                artifacts = get_json(f"{second_host.url}/api/workflow-runs/{run_id}/artifacts")
+                content = get_response(f"{second_host.url}/api/workflow-artifacts/{artifact_id}/content")
+            finally:
+                second_host.stop()
+
+        self.assertEqual(loaded["status"], "succeeded")
+        self.assertEqual(nodes["nodes"][0]["nodeId"], "agent-1")
+        self.assertEqual(nodes["nodes"][0]["nodeResult"]["data"], {"summary": "History ready"})
+        self.assertEqual([message["sequence"] for message in messages["messages"]], [1, 2])
+        self.assertEqual(artifacts["artifacts"], loaded["artifacts"])
+        self.assertEqual(content["body"], b"persisted")
+        self.assertNotIn("content", json.dumps(loaded["artifacts"]))
+
+    def test_host_streams_workflow_v2_run_events_over_sse(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=RecordingLlmClient('{"summary":"SSE ready"}'))
+        host.start()
+        try:
+            post_json(f"{host.url}/api/workflows", valid_workflow_v2_definition("Return a summary"))
+            published = post_json(f"{host.url}/api/workflows/support-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/support-flow/runs",
+                {"version": published["version"], "input": {"message": "hello"}},
+            )
+            sse = get_text(f"{host.url}/api/workflow-runs/{started['id']}/events")
+        finally:
+            host.stop()
+
+        self.assertIn("event: WorkflowStarted", sse)
+        self.assertIn("event: NodeStarted", sse)
+        self.assertIn("event: NodeCompleted", sse)
+        self.assertIn("event: WorkflowCompleted", sse)
+        events = parse_sse_events(sse)
+        self.assertEqual([event["data"]["sequence"] for event in events], list(range(1, len(events) + 1)))
+        self.assertEqual(events[-1]["data"]["payload"]["status"], "succeeded")
+
+    def test_host_cancels_running_workflow_v2_run(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        llm = BlockingRecordingLlmClient('{"summary":"Cancelled before next node"}')
+        host = create_http_runtime_host(host="127.0.0.1", port=0, llm_client=llm)
+        host.start()
+        try:
+            definition = valid_workflow_v2_definition("Return slowly")
+            definition["id"] = "cancel-flow"
+            definition["name"] = "Cancel Flow"
+            post_json(f"{host.url}/api/workflows", definition)
+            published = post_json(f"{host.url}/api/workflows/cancel-flow/publish", {})
+            started = post_json(
+                f"{host.url}/api/workflows/cancel-flow/runs",
+                {"version": published["version"], "input": {"message": "hello"}, "async": True},
+            )
+            self.assertTrue(llm.entered.wait(timeout=1))
+            cancelled = post_json(f"{host.url}/api/workflow-runs/{started['id']}/cancel", {})
+            llm.release.set()
+            loaded = wait_for_http_run(f"{host.url}/api/workflow-runs/{started['id']}")
+        finally:
+            host.stop()
+
+        self.assertEqual(started["status"], "running")
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(loaded["status"], "cancelled")
+        self.assertEqual(loaded["error"]["code"], "WORKFLOW_CANCELLED")
+
     def test_host_runs_workflow_v2_workflow_ref_child_workflow(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -1448,6 +1543,17 @@ def get_json_error(url: str) -> dict[str, object]:
         return {"status": error.code, "body": json.loads(error.read().decode("utf-8"))}
 
 
+def wait_for_http_run(url: str) -> dict[str, object]:
+    import time
+
+    for _ in range(100):
+        run = get_json(url)
+        if run["status"] in {"succeeded", "failed", "cancelled"}:
+            return run
+        time.sleep(0.01)
+    raise AssertionError("Workflow run did not reach a terminal state")
+
+
 def sse_token_text(sse: str) -> str:
     parts: list[str] = []
     for frame in sse.split("\n\n"):
@@ -1461,6 +1567,23 @@ def sse_token_text(sse: str) -> str:
         if event_type == "token" and data is not None:
             parts.append(str(data["content"]))
     return "".join(parts)
+
+
+def parse_sse_events(sse: str) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for frame in sse.split("\n\n"):
+        if not frame.strip():
+            continue
+        event_type = None
+        data = None
+        for line in frame.splitlines():
+            if line.startswith("event: "):
+                event_type = line.removeprefix("event: ")
+            if line.startswith("data: "):
+                data = json.loads(line.removeprefix("data: "))
+        if event_type is not None and data is not None:
+            events.append({"type": event_type, "data": data})
+    return events
 
 
 def workflow_payload(template_id: str, name: str, output: str, position: dict[str, int]) -> dict[str, object]:
@@ -1687,6 +1810,23 @@ class RecordingLlmClient:
     def complete(self, messages: list[dict[str, str]]) -> str:
         self.calls.append(messages)
         self.user_messages = [message["content"] for message in messages if message["role"] == "user"]
+        return self.response
+
+
+class BlockingRecordingLlmClient:
+    def __init__(self, response: str) -> None:
+        import threading
+
+        self.response = response
+        self.calls: list[list[dict[str, str]]] = []
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def complete(self, messages: list[dict[str, str]], options=None) -> str:
+        del options
+        self.calls.append(messages)
+        self.entered.set()
+        self.release.wait(timeout=2)
         return self.response
 
 

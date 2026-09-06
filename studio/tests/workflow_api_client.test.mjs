@@ -34,8 +34,12 @@ test("T70 Workflow API client maps agent draft validate publish version and test
   await api.fetchWorkflowVersion("support-flow", 1);
   await api.startWorkflowRun("support-flow", { version: 1, input: { message: "hello" } });
   await api.fetchWorkflowRun("workflow_run_1");
+  await api.cancelWorkflowRun("workflow_run_1");
+  await api.fetchWorkflowRunNodes("workflow_run_1");
+  await api.fetchWorkflowRunMessages("workflow_run_1");
   await api.listWorkflowRunArtifacts("workflow_run_1");
   await api.downloadWorkflowArtifactContent("artifact_1");
+  await collect(api.streamWorkflowRunEvents("workflow_run_1"));
   await api.listAgents();
   await api.listTools();
   await api.saveAgentDraft("research-agent", { schema_version: "1.0" });
@@ -66,8 +70,12 @@ test("T70 Workflow API client maps agent draft validate publish version and test
       ["GET", "/workflows/support-flow/versions/1"],
       ["POST", "/workflows/support-flow/runs"],
       ["GET", "/workflow-runs/workflow_run_1"],
+      ["POST", "/workflow-runs/workflow_run_1/cancel"],
+      ["GET", "/workflow-runs/workflow_run_1/nodes"],
+      ["GET", "/workflow-runs/workflow_run_1/messages"],
       ["GET", "/workflow-runs/workflow_run_1/artifacts"],
       ["GET", "/workflow-artifacts/artifact_1/content"],
+      ["SSE", "/workflow-runs/workflow_run_1/events"],
       ["GET", "/agents"],
       ["GET", "/tools"],
       ["PUT", "/agents/research-agent/draft"],

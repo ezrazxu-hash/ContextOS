@@ -44,6 +44,18 @@ export function createWorkflowApiClient(httpClient) {
       return httpClient.request("GET", `/workflow-runs/${encodeURIComponent(runId)}`, options);
     },
 
+    cancelWorkflowRun(runId, options = {}) {
+      return httpClient.request("POST", `/workflow-runs/${encodeURIComponent(runId)}/cancel`, options);
+    },
+
+    fetchWorkflowRunNodes(runId, options = {}) {
+      return httpClient.request("GET", `/workflow-runs/${encodeURIComponent(runId)}/nodes`, options);
+    },
+
+    fetchWorkflowRunMessages(runId, options = {}) {
+      return httpClient.request("GET", `/workflow-runs/${encodeURIComponent(runId)}/messages`, options);
+    },
+
     listWorkflowRunArtifacts(runId, options = {}) {
       return httpClient.request("GET", `/workflow-runs/${encodeURIComponent(runId)}/artifacts`, options);
     },
@@ -54,6 +66,13 @@ export function createWorkflowApiClient(httpClient) {
         return httpClient.download(path, options);
       }
       return httpClient.request("GET", path, options);
+    },
+
+    streamWorkflowRunEvents(runId, options = {}) {
+      if (!httpClient.streamSse) {
+        throw new Error("httpClient.streamSse is required for workflow run events");
+      }
+      return httpClient.streamSse(`/workflow-runs/${encodeURIComponent(runId)}/events`, options);
     },
 
     listAgents(options = {}) {

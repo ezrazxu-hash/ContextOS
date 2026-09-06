@@ -19,11 +19,11 @@ from contextos.api.routes.messages import patch_message, soft_delete_message
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
 from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, patch_session, patch_session_agent, post_session, post_session_message, remove_session
-from contextos.api.routes.templates import delete_template, delete_template_node, get_template, list_templates, patch_template, post_template, post_template_compile, post_template_run, post_template_validate, put_template
+from contextos.api.routes.templates import get_template, list_templates, patch_template, post_template, post_template_compile, post_template_run, post_template_validate, put_template, remove_template, remove_template_node
 from contextos.api.routes.tools import list_tools
 from contextos.api.routes.timelines import activate_timeline, list_session_timelines, patch_timeline, remove_timeline
 from contextos.api.routes.workflow import get_node_catalog
-from contextos.api.routes.workflow_runs import get_workflow_artifact_content, get_workflow_run, get_workflow_run_artifacts, post_workflow_run
+from contextos.api.routes.workflow_runs import get_workflow_artifact_content, get_workflow_run, get_workflow_run_artifacts, get_workflow_run_messages, get_workflow_run_nodes, iter_workflow_run_event_frames, post_workflow_run, post_workflow_run_cancel
 from contextos.api.routes.workflow_tools import list_workflow_tools
 from contextos.api.routes.workflows import get_workflow, get_workflow_version, get_workflow_versions, post_workflow, post_workflow_publish, post_workflow_validate, put_workflow_draft
 from contextos.provider.base.chat_client import ChatCompletionClient
@@ -303,8 +303,8 @@ def create_demo_services(
     trace_repository = InMemoryTraceRepository()
     template_service = TemplateService(store)
     workflow_v2_definition_service = WorkflowV2DefinitionService(store)
-    workflow_v2_run_store = InMemoryWorkflowV2RunStore()
-    workflow_v2_artifact_store = InMemoryWorkflowV2ArtifactStore()
+    workflow_v2_run_store = InMemoryWorkflowV2RunStore(store)
+    workflow_v2_artifact_store = InMemoryWorkflowV2ArtifactStore(store)
     agent_version_repository = InMemoryAgentVersionRepository(store)
     agent_test_run_store = InMemoryAgentTestRunStore()
     graph_cache = CompiledGraphCache()
@@ -550,6 +550,18 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 self._send_route_response(get_workflow_run(segments[2], services.workflow_v2_run_service))
                 return
 
+            if len(segments) == 4 and segments[:2] == ["api", "workflow-runs"] and segments[3] == "events":
+                self._send_sse(iter_workflow_run_event_frames(segments[2], services.workflow_v2_run_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflow-runs"] and segments[3] == "nodes":
+                self._send_route_response(get_workflow_run_nodes(segments[2], services.workflow_v2_run_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflow-runs"] and segments[3] == "messages":
+                self._send_route_response(get_workflow_run_messages(segments[2], services.workflow_v2_run_service))
+                return
+
             if len(segments) == 4 and segments[:2] == ["api", "workflow-runs"] and segments[3] == "artifacts":
                 self._send_route_response(get_workflow_run_artifacts(segments[2], services.workflow_v2_run_service, services.workflow_v2_artifact_store))
                 return
@@ -693,6 +705,10 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
 
             if len(segments) == 4 and segments[:2] == ["api", "workflows"] and segments[3] == "runs":
                 self._send_route_response(post_workflow_run(segments[2], payload, services.workflow_v2_run_service))
+                return
+
+            if len(segments) == 4 and segments[:2] == ["api", "workflow-runs"] and segments[3] == "cancel":
+                self._send_route_response(post_workflow_run_cancel(segments[2], services.workflow_v2_run_service))
                 return
 
             if len(segments) == 4 and segments[:2] == ["api", "agents"] and segments[3] == "graph-preview":
@@ -865,11 +881,11 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 return
 
             if len(segments) == 5 and segments[:2] == ["api", "templates"] and segments[3] == "nodes":
-                self._send_route_response(delete_template_node(segments[2], segments[4], services.template_service))
+                self._send_route_response(remove_template_node(segments[2], segments[4], services.template_service))
                 return
 
             if len(segments) == 3 and segments[:2] == ["api", "templates"]:
-                self._send_route_response(delete_template(segments[2], services.template_service))
+                self._send_route_response(remove_template(segments[2], services.template_service))
                 return
 
             self._send_json(404, {"error": {"code": "route.not_found", "message": "Route not found"}})

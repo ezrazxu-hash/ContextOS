@@ -120,16 +120,16 @@ Tool Result
 | T08 | [x] | 隐式 Agent Tool Loop 与运行详情 | 是 | T05、T07 |
 | T09 | [x] | Condition Node 与 Schema Driven 分支 | 是 | T04、T07 |
 | T10 | [x] | End Node 与 FinalResult 绑定 | 是 | T07、T09 |
-| T11 | [ ] | Artifact 全链路与附件结果展示 | 是 | T08、T10 |
-| T12 | [ ] | Workflow Ref Node / 子 Workflow | 是 | T06、T10 |
-| T13 | [ ] | Schema Registry、ValueRef 与失效引用校验 | 是 | T09、T12 |
-| T14 | [ ] | Runtime Event + SSE 实时执行轨迹 | 是 | T07、T08 |
-| T15 | [ ] | Cancel、Runtime Limits 与失败态闭环 | 是 | T14 |
-| T16 | [ ] | Run 持久化、历史详情与调试页面 | 是 | T14、T15 |
-| T17 | [ ] | 编辑器 Simple / Advanced 模式与最终 UX 收口 | 是 | T13、T16 |
-| T18 | [ ] | V2 端到端样例 Workflow 与回归测试 | 是 | T10～T17 |
-| T19 | [ ] | Legacy 迁移入口与废弃代码清理准备 | 是 | T18 |
-| T20 | [ ] | Legacy 清理与 V2 默认化 | 是 | T19，且满足清理前置条件 |
+| T11 | [x] | Artifact 全链路与附件结果展示 | 是 | T08、T10 |
+| T12 | [x] | Workflow Ref Node / 子 Workflow | 是 | T06、T10 |
+| T13 | [x] | Schema Registry、ValueRef 与失效引用校验 | 是 | T09、T12 |
+| T14 | [x] | Runtime Event + SSE 实时执行轨迹 | 是 | T07、T08 |
+| T15 | [x] | Cancel、Runtime Limits 与失败态闭环 | 是 | T14 |
+| T16 | [x] | Run 持久化、历史详情与调试页面 | 是 | T14、T15 |
+| T17 | [x] | 编辑器 Simple / Advanced 模式与最终 UX 收口 | 是 | T13、T16 |
+| T18 | [x] | V2 端到端样例 Workflow 与回归测试 | 是 | T10～T17 |
+| T19 | [x] | Legacy 迁移入口与废弃代码清理准备 | 是 | T18 |
+| T20 | [!] | Legacy 清理与 V2 默认化 | 是 | T19，且满足清理前置条件 |
 
 > 说明：T20 不应在 V2 稳定之前执行。若当前系统仍存在必须运行的 V1 Workflow，则 T20 保持 TODO。
 
@@ -1760,7 +1760,7 @@ Analyze Requirement / category
 
 ## T14 — Runtime Event + SSE 实时执行轨迹
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P1  
 **依赖：** T07、T08
 
@@ -1840,15 +1840,37 @@ Graph 仍只展示业务 Node；隐式 LLM/Tool Loop 放在 Execution Panel。
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/runtime/runs.py`
+  - `backend/src/contextos/api/routes/workflow_runs.py`
+  - `backend/src/contextos/api/server.py`
+  - `backend/tests/unit/test_workflow_v2_events.py`
+  - `backend/tests/integration/test_http_runtime_host.py`
+  - `studio/src/api/agents.js`
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/tests/workflow_api_client.test.mjs`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
 - 实现说明：
+  - `WorkflowV2RunService` 在 V2 run 中记录统一 `events` 序列，包含 Workflow/Node/LLM/Tool/Schema/terminal 事件；每个事件包含 `runId`、`nodeId`、`timestamp`、单调递增 `sequence`、`eventType` 和 `payload`。
+  - Agent loop 在 LLM 调用、Tool 调用/结果、Schema Validation、Node 完成/失败处写入事件；Graph 画布仍只暴露 Agent / Condition / Workflow / End 业务节点。
+  - 新增 `GET /api/workflow-runs/{runId}/events` SSE 入口，按 Artifact/Run route 旁路最小接入，回放该 run 的事件帧。
+  - 前端 API client 新增 `streamWorkflowRunEvents()`；Workbench 新增 `subscribeRunEvents()` 和内部事件 reducer，用事件恢复 Canvas 节点运行状态、Execution Timeline 与 Agent 内部执行详情。
+  - SSE 断开时 Workbench 标记 `streamStatus=disconnected`，不把未收到完成事件的 run 误标为成功。
 - 测试结果：
+  - RED：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_events tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_streams_workflow_v2_run_events_over_sse` 初始失败于缺少 `run["events"]` 和 `/events` 404。
+  - RED：`node --test tests/workflow_api_client.test.mjs tests/workflow_v2_workbench.test.mjs` 初始失败于缺少 `streamWorkflowRunEvents()` 和 `subscribeRunEvents()`。
+  - T14 后端定向：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_events tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_streams_workflow_v2_run_events_over_sse` 通过，3 tests OK。
+  - T00-T14 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.unit.test_workflow_v2_artifacts tests.unit.test_workflow_v2_workflow_ref_runtime tests.unit.test_workflow_v2_events tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_workflow_ref_child_workflow tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_blocks_workflow_ref_publish_when_input_mapping_type_is_incompatible tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_streams_workflow_v2_run_events_over_sse tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，67 tests OK。
+  - T14 前端定向：`node --test tests/workflow_api_client.test.mjs tests/workflow_v2_workbench.test.mjs` 通过，22 tests passed。
+  - T00-T14 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，48 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py` 通过；`npm run lint` 通过；`npm run build` 通过。
 - 风险/遗留：
+  - 当前 V2 Run API 仍沿用既有同步执行模型；SSE 端点可回放已记录事件序列，后续 T15/T16 如需真正运行中取消和跨重启历史详情，会在现有事件模型上继续收敛，不在 T14 引入额外消息总线。
 
 ---
 
 ## T15 — Cancel、Runtime Limits 与失败态闭环
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P1  
 **依赖：** T14
 
@@ -1922,15 +1944,39 @@ SUB_WORKFLOW_FAILED
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/runtime/runs.py`
+  - `backend/src/contextos/api/routes/workflow_runs.py`
+  - `backend/src/contextos/api/server.py`
+  - `backend/tests/unit/test_workflow_v2_limits_and_cancel.py`
+  - `backend/tests/integration/test_http_runtime_host.py`
+  - `studio/src/api/agents.js`
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/tests/workflow_api_client.test.mjs`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
 - 实现说明：
+  - `WorkflowV2RunService` 增加后台线程形式的最小 async run 能力、运行中记录、线程安全内存 run store、run cancellation token registry 与 `cancel(runId)`。
+  - V2 runtime 统一读取 `runtimeLimits`，覆盖 `maxLlmTurnsPerNode`、`maxToolCallsPerNode`、`maxNodeExecutions`、`maxWorkflowDepth`、`maxSchemaRetries`、`workflowTimeoutMs`，并在超限时返回可读 `WORKFLOW_LIMIT_EXCEEDED` + `limit`。
+  - Agent loop 在 LLM 调用、Tool 调用、schema validation retry、workflow timeout 与 cancellation 点位执行检查；schema validation 失败会按 `maxSchemaRetries` 受限重试并记录 schema validation detail/event。
+  - Workflow Ref 子流程执行透传父 run cancellation token；父 run 取消后子 workflow 不继续调度后续 Agent node。
+  - 新增 `POST /api/workflow-runs/{runId}/cancel`，并允许 `POST /api/workflows/{id}/runs` 使用 `{"async": true}` 启动可取消 run。
+  - 前端 API client 增加 `cancelWorkflowRun`；V2 Workbench 对 running run 暴露 `cancel` action，取消后展示 `cancelled`，limit exceeded 展示具体限制类型。
 - 测试结果：
+  - RED：新增 T15 后端测试初始失败于缺少 `start_async/cancel`、缺少 HTTP cancel route、runtime limit 未生效；补充 schema retry 与子 workflow cancel token 测试后，分别失败于 schema 失败不重试、子 workflow 取消后仍调用第二个 LLM。
+  - RED：新增 T15 前端测试初始失败于缺少 `api.cancelWorkflowRun`、Workbench 未暴露 `cancel` action、limit failure 未提供可读 failure view。
+  - T15 后端定向：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_limits_and_cancel tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_cancels_running_workflow_v2_run` 通过，8 tests OK。
+  - T00-T15 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.unit.test_workflow_v2_artifacts tests.unit.test_workflow_v2_workflow_ref_runtime tests.unit.test_workflow_v2_events tests.unit.test_workflow_v2_limits_and_cancel tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_workflow_ref_child_workflow tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_blocks_workflow_ref_publish_when_input_mapping_type_is_incompatible tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_streams_workflow_v2_run_events_over_sse tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_cancels_running_workflow_v2_run tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，75 tests OK。
+  - T15 前端定向：`node --test tests/workflow_api_client.test.mjs tests/workflow_v2_workbench.test.mjs` 通过，24 tests passed。
+  - T00-T15 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，50 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py` 通过；`npm run lint` 通过；`npm run build` 通过。
 - 风险/遗留：
+  - 当前 async run 是为取消闭环引入的最小后台线程实现；T16 会继续在现有 run store/event 模型上补持久化历史与调试详情。
+  - Tool cancellation 目前通过传入 LLM cancellation token 和 tool timeout/节点间检查闭环；Python coroutine 工具无法被外部线程强制中断，长阻塞 tool 仍需工具实现自身尊重取消或配置超时。
 
 ---
 
 ## T16 — Run 持久化、历史详情与调试页面
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P1  
 **依赖：** T14、T15
 
@@ -2007,15 +2053,40 @@ GET /api/workflow-runs/{runId}/artifacts
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/runtime/persistence/json_store.py`
+  - `backend/src/contextos/workflow_v2/runtime/runs.py`
+  - `backend/src/contextos/workflow_v2/runtime/artifacts.py`
+  - `backend/src/contextos/api/routes/workflow_runs.py`
+  - `backend/src/contextos/api/server.py`
+  - `backend/tests/unit/test_workflow_v2_run_history.py`
+  - `backend/tests/integration/test_http_runtime_host.py`
+  - `studio/src/api/agents.js`
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/tests/workflow_api_client.test.mjs`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
 - 实现说明：
+  - `JsonRuntimeStore` 增加 `workflow_v2_runs` 与 `workflow_v2_artifacts` 集合，沿用现有 JSON runtime-state 文件，不新增数据库或外部依赖。
+  - `InMemoryWorkflowV2RunStore` 增加可选 `JsonRuntimeStore`，启动 host 时通过同一个 `storage_path` 持久化并可跨实例恢复 run record。
+  - `InMemoryWorkflowV2ArtifactStore` 增加可选 `JsonRuntimeStore`，artifact content 使用 base64 保存，外部 run/artifact refs 仍不暴露 `content` 或 `storageKey`。
+  - Workflow run messages 返回时补齐递增 `sequence`；execution events 继续使用 T14 事件序列；tool execution detail 不再保存原始 tool arguments。
+  - 新增 `GET /api/workflow-runs/{runId}/nodes` 与 `GET /api/workflow-runs/{runId}/messages`，`/artifacts` 与 artifact content 下载支持从持久化 store 恢复。
+  - 前端 API client 增加 `fetchWorkflowRunNodes`、`fetchWorkflowRunMessages`；V2 Workbench 增加 `loadRunDetail(runId)`，将底层 trace 分区放入 `runPanel.historyDetail`，默认聊天消息区不承载历史 trace。
 - 测试结果：
+  - RED：新增后端持久化测试初始失败于 `InMemoryWorkflowV2RunStore(store)` 不支持；HTTP 重启后读取 run 返回 404；前端测试失败于缺少 `fetchWorkflowRunNodes/fetchWorkflowRunMessages` 与 `loadRunDetail`。
+  - T16 后端定向：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_run_history tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_reloads_workflow_v2_run_history_detail_from_persistent_store` 通过，2 tests OK。
+  - T00-T16 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.unit.test_workflow_v2_artifacts tests.unit.test_workflow_v2_workflow_ref_runtime tests.unit.test_workflow_v2_events tests.unit.test_workflow_v2_limits_and_cancel tests.unit.test_workflow_v2_run_history tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_reloads_workflow_v2_run_history_detail_from_persistent_store tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_workflow_ref_child_workflow tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_blocks_workflow_ref_publish_when_input_mapping_type_is_incompatible tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_streams_workflow_v2_run_events_over_sse tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_cancels_running_workflow_v2_run tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，77 tests OK。
+  - T16 前端定向：`node --test tests/workflow_api_client.test.mjs tests/workflow_v2_workbench.test.mjs` 通过，25 tests passed。
+  - T00-T16 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，51 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py src/contextos/runtime/persistence/json_store.py` 通过；`npm run lint` 通过；`npm run build` 通过。
 - 风险/遗留：
+  - T16 采用当前项目已有 JSON runtime-state 作为最小持久化；未引入数据库表级 repository。后续若需要高并发/分页查询，可在同一接口后演进。
+  - `/nodes`、`/messages` 当前从完整 run record 派生，满足历史调试读取；若后续需要独立索引，可拆分为真正的 node/message/event collections。
 
 ---
 
 ## T17 — 编辑器 Simple / Advanced 模式与最终 UX 收口
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P2  
 **依赖：** T13、T16
 
@@ -2109,15 +2180,30 @@ Simple 模式不得暴露 $state、Prompt/LLM/Tool Node 等底层概念。
 ### 实施记录
 
 - 主要修改文件：
+  - `studio/src/pages/Workflow/WorkflowV2Workbench.js`
+  - `studio/tests/workflow_v2_workbench.test.mjs`
 - 实现说明：
+  - V2 Workbench 增加默认 `simple` 编辑模式和 `setEditorMode("simple" | "advanced")`，切换模式不修改 workflow definition。
+  - 新增 `nodeConfig.visibleGroups`：Simple Mode 对 Agent 只暴露 `Goal / Output / Tools / Branch`；Advanced Mode 额外暴露 `JSON Schema / Retry / Timeout / Context Sources / Message Context Strategy / Runtime Detail`。
+  - 保留既有 `nodeConfig.groups`，避免破坏已有 Inspector view-model 消费方；高级配置仍保存在原 DTO 中，切回 Simple 后保存 draft 不丢失。
+  - Agent/Condition/Workflow node card 增加面向用户的 compact summary：Agent 显示 output fields 和 tools count；Condition 显示 source field 和 branch count；Workflow 显示 referenced workflow/version/input/output summary。
+  - `validationPanel` 增加 `locators`，基于后端 validation issue 的 `nodeId/node_id` 与 `field` 定位到 Node Config 面板；后端 metadata/validation 能力复用 T05/T13 已有 tool catalog、workflow contract 和 node-level validation detail，不新增第二套业务模型。
 - 测试结果：
+  - RED：新增 Workbench T17 测试初始失败于缺少 `setEditorMode`、`editorMode`、`visibleGroups`、非 Agent compact card 和 validation locator。
+  - T17 前端定向：`node --test tests/workflow_v2_workbench.test.mjs` 通过，25 tests passed。
+  - 续验修正：补充 `node_id` snake_case 后端 issue 的 Validation Locator 覆盖；`node --test tests/workflow_v2_workbench.test.mjs` 通过，25 tests passed。
+  - T00-T17 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，54 tests passed。
+  - 后端相关验证：`$env:PYTHONPATH='src'; python -m unittest tests.unit.test_workflow_v2_validator tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api` 通过，12 tests OK。
+  - 语法/构建：`npm run lint` 通过；`npm run build` 通过。
 - 风险/遗留：
+  - T17 仍保持当前项目的 view-model 层实现，没有新增真实 DOM 控件或第三方 UI 框架；后续若接入 React/XYFlow 真实组件，可直接消费 `editorMode`、`visibleGroups`、`card.summary` 和 `validationPanel.locators`。
+  - Runtime limit defaults 尚未作为独立 metadata endpoint 暴露；当前前端只需要模式折叠和已存在 validation/tool/workflow metadata，避免为 UI 新建第二套模型。
 
 ---
 
 ## T18 — V2 端到端样例 Workflow 与回归测试
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P0（发布前）  
 **依赖：** T10～T17
 
@@ -2205,15 +2291,33 @@ Fake LLM/Fake Tool 必须能让 CI 稳定执行。
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/demo_workflows.py`
+  - `backend/src/contextos/workflow_v2/runtime/runs.py`
+  - `backend/tests/e2e/test_workflow_v2_release_gate.py`
+  - `studio/src/test/fixtures/workflowV2ReleaseGate.js`
+  - `studio/tests/workflow_v2_release_gate_fixture.test.mjs`
 - 实现说明：
+  - 新增后端 V2 release-gate sample definitions：父 workflow 覆盖 Analyze Request、Condition、Workflow Ref、Business/General 分支、Generate Final、End final result；子 workflow 覆盖 Research Agent、implicit web search tool、Generate Report Agent、implicit file generator artifact。
+  - 新增前端同构 sample fixture，Workbench 可直接打开 release-gate workflow，并验证 V2 node library 仍仅暴露 Agent/Condition/Workflow/End。
+  - `Workflow Ref` 成功返回时向父 run trace 追加子 workflow execution events，并把子 workflow final artifacts 汇总到父 run 的 artifacts/finalResult，确保 T18 样例可从父 run 查看 ToolCall/ToolResult、Artifact 和 End Output。
+  - E2E 使用 Fake LLM + Fake Tool，覆盖 Agent、Condition、Tool Loop、SubWorkflow、Artifact、End、Execution Events，保持 CI 可确定执行。
 - 测试结果：
+  - RED：新增后端 E2E 初始失败于缺少 `contextos.workflow_v2.demo_workflows`；补 fixture 后失败于父 run 未包含子 workflow ToolCall events，定位为 child events 被追加到 condition 分支而非 workflow 分支。
+  - RED：新增前端 fixture 测试初始失败于缺少 `studio/src/test/fixtures/workflowV2ReleaseGate.js`。
+  - T18 后端定向：`$env:PYTHONPATH='src'; python -m unittest tests.e2e.test_workflow_v2_release_gate` 通过，1 test OK。
+  - T18 前端定向：`node --test tests/workflow_v2_release_gate_fixture.test.mjs` 通过，1 test passed。
+  - T00-T18 后端回归：`$env:PYTHONPATH='src'; python -m unittest tests.e2e.test_workflow_v2_release_gate tests.unit.test_workflow_v2_entry tests.unit.test_workflow_v2_definition_service tests.unit.test_workflow_v2_json_schema tests.unit.test_workflow_v2_validator tests.unit.test_workflow_v2_tool_policy tests.unit.test_workflow_v2_runtime tests.unit.test_workflow_v2_condition_runtime tests.unit.test_workflow_v2_end_result tests.unit.test_workflow_v2_artifacts tests.unit.test_workflow_v2_workflow_ref_runtime tests.unit.test_workflow_v2_events tests.unit.test_workflow_v2_limits_and_cancel tests.unit.test_workflow_v2_run_history tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_creates_workflow_v2_definition_by_default tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_workflow_v2_draft_with_revision_conflict tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_validates_workflow_v2_topology tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_round_trips_and_validates_workflow_v2_agent_node_config tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_tools_over_v2_catalog_api tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_publishes_workflow_v2_versions_as_immutable_snapshots tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_single_agent_published_version_without_persisting_instruction tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_agent_tool_loop_with_execution_details tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_condition_branch_from_agent_output_data tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_end_final_result_binding tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_lists_workflow_v2_artifact_refs_and_downloads_content_by_artifact_id tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_reloads_workflow_v2_run_history_detail_from_persistent_store tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_runs_workflow_v2_workflow_ref_child_workflow tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_blocks_workflow_ref_publish_when_input_mapping_type_is_incompatible tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_streams_workflow_v2_run_events_over_sse tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_host_cancels_running_workflow_v2_run tests.integration.test_http_runtime_host.HttpRuntimeHostTests.test_bound_session_chat_uses_workflow_runtime_and_legacy_still_works` 通过，78 tests OK。
+  - T00-T18 前端回归：`node --test tests/workflow_api_client.test.mjs tests/http_client.test.mjs tests/workflow_v2_entry.test.mjs tests/workflow_v2_draft_store.test.mjs tests/workflow_v2_builder.test.mjs tests/workflow_v2_schema_builder.test.mjs tests/workflow_v2_tool_policy_editor.test.mjs tests/workflow_v2_workbench.test.mjs tests/workflow_v2_release_gate_fixture.test.mjs tests/workflow_builder.test.mjs tests/workflow_node_registry.test.mjs` 通过，55 tests passed。
+  - 语法/构建：`python -m compileall -q src/contextos/workflow_v2 src/contextos/api/routes/workflow_runs.py src/contextos/api/server.py` 通过；`node --check src/test/fixtures/workflowV2ReleaseGate.js` 通过；`npm run lint` 通过；`npm run build` 通过。
 - 风险/遗留：
+  - 样例中的 `web.search`、`file.generate` 为测试内 Fake Tool；生产工具接入仍复用现有 ToolRegistry/ToolExecutorRegistry。
+  - 子 workflow events 以父 run event stream 追加呈现，并通过 `childRunId` 保留来源；后续如需独立 nested trace viewer，可基于现有事件 payload 演进。
 
 ---
 
 ## T19 — Legacy 迁移入口与废弃代码清理准备
 
-**状态：** [ ] TODO  
+**状态：** [x] DONE  
 **优先级：** P1  
 **依赖：** T18
 
@@ -2260,16 +2364,34 @@ Fake LLM/Fake Tool 必须能让 CI 稳定执行。
 ### 实施记录
 
 - 主要修改文件：
+  - `backend/src/contextos/workflow_v2/migration.py`
+  - `backend/tests/unit/test_workflow_v2_legacy_migration.py`
+  - `studio/src/pages/Workflow/index.js`
+  - `studio/tests/workflow_v2_entry.test.mjs`
 - 实现说明：
+  - 新增 V1 清理准备边界工具：统计 Legacy Workflow、输出 Deprecated 路径、声明旧字段保留策略、检测 V2 包对 Legacy Runtime 的静态依赖。
+  - 新增安全的 `create_v2_copy_from_legacy_manifest` / `createV2CopyFromLegacyDefinition`，只创建空 V2 手动重建壳并保留名称、来源与 Legacy node types，不自动转换 Prompt/LLM/Tool 语义。
+  - Legacy Workflow 页面 view 暴露 `legacy.status = "legacy"` 与 `create-v2-copy` 操作；新建 Workflow helper 默认生成 `schemaVersion: 2`。
+  - 2026-09-06 补齐浏览器主入口：`studio/src/main.js` 的 `/workflow` 真实页面增加 `schemaVersion=2` 可见切换；默认 `/workflow` / `templateId` 仍走 Legacy，点击 `Agent Workflow V2` 或直接访问 `/workflow?schemaVersion=2` 进入 V2 页面，V2 节点库仅暴露 `agent`、`condition`、`workflow`、`end`。
 - 测试结果：
+  - RED：新增 T19 后端测试最初因缺少 `contextos.workflow_v2.migration` 失败；新增前端测试最初因缺少 Legacy 状态/复制入口与 V2 新建 helper 失败。
+  - GREEN：`python -m unittest tests.unit.test_workflow_v2_legacy_migration`，3 tests OK。
+  - 回归：`python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_legacy_chat_runtime tests.integration.test_http_runtime_host`，58 tests OK。
+  - 前端：`node --test tests/workflow_v2_entry.test.mjs`，4 tests pass。
+  - 语法检查：`python -m compileall -q src/contextos/workflow_v2`、`node --check src/pages/Workflow/index.js` 均通过。
 - Legacy 清理清单：
+  - `studio/src/pages/Workflow/WorkflowWorkbench.js`：Legacy Workflow Editor，Deprecated，待确认无用户页面依赖后删除。
+  - `backend/src/contextos/runtime/agent/legacy_runtime.py`：Legacy Chat Runtime，Deprecated，待 V1 数据与外部调用者迁移/退役后删除。
+  - `backend/src/contextos/api/server.py` 中 Legacy Workflow API 入口：Deprecated，待回滚窗口关闭后删除。
+  - 当前 `backend/src/contextos/workflow_v2/**/*.py` 对 Legacy Runtime 静态依赖检测结果为 0。
 - 风险/遗留：
+  - 本任务不删除 Legacy，不修改旧数据字段；T20 仍需生产/目标环境 V1 数据、外部调用者和回滚方案确认后才可执行。
 
 ---
 
 ## T20 — Legacy 清理与 V2 默认化
 
-**状态：** [ ] TODO  
+**状态：** [!] Blocked  
 **优先级：** P2 / 最后执行  
 **依赖：** T19 + 清理前置条件全部满足
 
@@ -2277,10 +2399,10 @@ Fake LLM/Fake Tool 必须能让 CI 稳定执行。
 
 只有以下全部满足才允许执行：
 
-- [ ] T18 E2E 全通过。
+- [x] T18 E2E 全通过。
 - [ ] 已确认生产/目标环境无必须依赖 Legacy Runner 的 Workflow，或已经完成迁移。
-- [ ] V2 新建、编辑、发布、运行、调试均稳定。
-- [ ] V2 自动化测试覆盖旧功能中仍需保留的行为。
+- [x] V2 新建、编辑、发布、运行、调试均稳定（本地自动化与浏览器 smoke 已验证；生产流量仍需按阻塞项确认）。
+- [x] V2 自动化测试覆盖旧功能中仍需保留的行为（T18 release gate、V2 workbench/API/runtime 相关回归已覆盖）。
 - [ ] 已完成备份/可回滚方案。
 
 ### 目标
@@ -2348,10 +2470,43 @@ Legacy routes
 ### 实施记录
 
 - 主要删除/修改文件：
+  - 未删除 Legacy 代码；仅更新本实施记录。原因：清理前置条件尚未全部满足，按 T20 Prompt 必须停止，不得强删。
+  - 为支持 T20 的全量后端验证，最小修正既有安全 invariant 命名问题：`backend/src/contextos/api/routes/templates.py` 内部 handler 从 `delete_template*` 重命名为 `remove_template*`，`backend/src/contextos/api/server.py` 与 `backend/tests/unit/test_template_service_api.py` 同步更新；HTTP DELETE 路由与业务行为不变。
+  - 新增 `legacy_cleanup_readiness_report_from_runtime_store()`，可从目标环境 `JsonRuntimeStore` / `runtime-state.json` 的 `templates` 与 `workflow_v2_definitions` 集合生成 T20 清理前置条件报告；外部调用者退役和备份验证默认仍为 `false`，必须由目标环境确认后显式传入。
+  - 新增 CLI 入口：`python -m contextos.workflow_v2.migration --runtime-state <runtime-state.json>`，输出 JSON readiness report，便于目标环境人工确认前置条件。
+  - 2026-09-06 默认化与可用化补强：`/workflow` 默认进入 Agent Workflow V2，显式 Legacy 回退为 `/workflow?schemaVersion=1`；V2 页面接入 Save Draft / Validate / Publish / Run 的真实 Workflow V2 API。
+  - 2026-09-06 新增 V2 starter 定义：默认画布提供 `START -> agent-1 -> end-1` 的最小可发布链路，Agent 带非空 instruction、disabled tool policy 和 `summary` output schema；保留 `createNewWorkflowDefinition()` 的空 V2 新建语义，不影响既有迁移/单元测试。
+  - 2026-09-06 V2 可编辑性补强：主页面默认选中 `agent-1`，Inspector 暴露 `workflow-v2-agent-instruction` textarea；首保存前会确保后端 Workflow definition 存在，并将本地 draft revision rebase 到服务端 revision，避免已有草稿产生 409 revision conflict。
 - 测试结果：
+  - 2026-09-06 RED：`node --test tests/workflow_v2_entry.test.mjs tests/main_entry_workflow_contract.test.mjs` 初始失败于缺少 `createStarterWorkflowV2Definition`、主入口未使用 starter、未暴露 V2 Agent instruction 控件。
+  - 2026-09-06 GREEN：`node --test tests/workflow_v2_entry.test.mjs tests/main_entry_workflow_contract.test.mjs`，16 tests pass。
+  - 2026-09-06 V2 workbench revision rebase：`node --test tests/workflow_v2_workbench.test.mjs`，26 tests pass；组合回归 `node --test tests/main_entry_workflow_contract.test.mjs tests/workflow_v2_workbench.test.mjs`，37 tests pass。
+  - 2026-09-06 浏览器 smoke（真实 dev server `http://localhost:5173/workflow`）：默认标题为 `Agent Workflow V2`；默认节点为 `agent-1` / `end-1`；Save Draft 返回 `Saved agent-workflow-v2-draft`；Publish 返回 `Published v2`；Run 返回 `Run succeeded` 并在 run panel 显示 version 2 和输出 summary；console/page error 为空。
+  - 2026-09-06 静态确认：`rg -n "\b(prompt|llm|tool)\b|\$state\." studio/src/pages/Workflow/WorkflowV2Workbench.js studio/src/features/workflow-v2 studio/src/test/fixtures/workflowV2ReleaseGate.js backend/src/contextos/workflow_v2` 未发现普通 V2 配置 `$state.`；`tool` 命中均属于 Agent Tool Policy / Runtime 内部能力或说明文案，未将旧 Tool Node 加回 V2 Graph。
+  - 2026-09-06 前端全量：`node --test tests/*.test.mjs`，322 tests pass；`npm run lint` 通过；`npm run build` 通过。
+  - 2026-09-06 后端相关回归：`python -m unittest tests.unit.test_workflow_v2_legacy_migration tests.e2e.test_workflow_v2_release_gate tests.unit.test_workflow_v2_validator tests.integration.test_http_runtime_host`，68 tests OK；`python -m compileall -q src/contextos/workflow_v2 src/contextos/api` 通过。
+  - T18 E2E：`python -m unittest tests.e2e.test_workflow_v2_release_gate`，1 test OK。
+  - T19 相关回归已通过：`python -m unittest tests.unit.test_workflow_v2_entry tests.unit.test_legacy_chat_runtime tests.integration.test_http_runtime_host`，58 tests OK。
+  - T19 前端入口测试已通过：`node --test tests/workflow_v2_entry.test.mjs`，4 tests pass。
+  - 2026-09-06 可见入口回归：RED 后新增 `main Workflow page exposes a visible Agent Workflow V2 switch without replacing the legacy default`；GREEN 验证 `node --test tests/main_entry_workflow_contract.test.mjs`，10 tests pass；相关 V2 回归 `node --test tests/workflow_v2_entry.test.mjs tests/workflow_v2_workbench.test.mjs tests/main_entry_workflow_contract.test.mjs`，39 tests pass；Studio 全量 `node --test tests/*.test.mjs`，319 tests pass；`npm run lint`、`npm run build` 通过。
+  - 安全 invariant RED/GREEN：`python -m unittest backend.tests.e2e.test_security_invariants.SecurityInvariantE2ETests.test_business_api_has_no_physical_delete_or_purge_endpoint` 初始失败于 route source 中存在 `def delete_`；命名修正后通过，1 test OK。
+  - 模板 API 回归：`python -m unittest backend.tests.unit.test_template_service_api`，13 tests OK。
+  - 全量后端：`python -m unittest discover backend/tests`，495 tests OK。
+  - 全量前端 Node 测试：`node --test tests/*.mjs`，318 tests pass。
+  - 前端语法/构建续验：`npm run lint`、`npm run build` 均通过。
+  - T20 readiness helper / CLI：`python -m unittest backend.tests.unit.test_workflow_v2_legacy_migration`，5 tests OK。
 - 数据迁移结果：
+  - BLOCKED：当前本地环境无法确认生产/目标环境是否仍存在必须依赖 Legacy Runner 的 V1 Workflow。
+  - 本地仍存在 V1/Legacy 路径与数据形态：`backend/src/contextos/template/demo_workflow.py` 仍提供 `schema_version: "1.0"` demo manifest；`backend/src/contextos/api/server.py` 仍装配 `LegacyChatRuntime`；`studio/src/pages/Workflow/index.js` 仍会将 schemaVersion 非 2 的定义路由至 `WorkflowWorkbench`。
 - 回滚点：
+  - 当前 HEAD：`b90e883`。
+  - 尚未建立可用于生产 Legacy 删除的备份/回滚执行方案；搜索只发现通用回滚描述，未发现 T20 专用备份/回滚完成记录。
 - 风险/遗留：
+  - 阻塞项 1：生产/目标环境 V1 Workflow 存量未确认，不能证明“无必须依赖 Legacy Runner 的 Workflow，或已经完成迁移”。
+  - 阻塞项 2：V1 API 是否存在外部调用者未确认。
+  - 阻塞项 3：备份/可回滚方案未完成并验证。
+  - 阻塞项 4：本地仍保留 V1 demo、Legacy Runtime 装配和 Legacy Editor 路由；这些是保守兼容路径，需在上述确认完成后按 T20 顺序渐进删除。
+  - 后续需要在目标环境确认后再恢复 T20：在 `backend` 目录执行 `PYTHONPATH=src python -m contextos.workflow_v2.migration --runtime-state <runtime-state.json>` 导出/统计全部 V1 Workflow，完成或确认迁移；确认无外部 V1 API 调用；创建备份与回滚演练记录；上述人工确认完成后可追加 `--external-callers-retired --backup-verified` 重新生成 readiness report，再按“入口→Runner→Executor→DTO/Domain→State Mapping→DB 字段”逐层删除并每层跑回归。
 
 ---
 

@@ -14,6 +14,7 @@ export function createWorkflowV2Workbench(options = {}) {
     validationIssues: [],
     toolCatalog: [],
     workflowCatalog: Array.isArray(options.workflowCatalog) ? options.workflowCatalog.map(cloneDefinition) : [],
+    editorMode: options.editorMode === "advanced" ? "advanced" : "simple",
     versions: [],
     lastRun: null,
     saveStatus: "saved",
@@ -116,6 +117,17 @@ export function createWorkflowV2Workbench(options = {}) {
       state.selectedNodeId = builder.view().nodes.some((node) => node.id === nodeId) ? nodeId : null;
       return this.view();
     },
+    setEditorMode(mode) {
+      state.editorMode = mode === "advanced" ? "advanced" : "simple";
+      return this.view();
+    },
+    setDraftRevision(revision) {
+      const numeric = Number(revision);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        state.definition = { ...state.definition, revision: Math.floor(numeric) };
+      }
+      return this.view();
+    },
     validate() {
       const validation = builder.validate();
       const referenceIssues = schemaReferenceIssues(state.definition, state.workflowCatalog);
@@ -163,10 +175,59 @@ export function createWorkflowV2Workbench(options = {}) {
       if (!apiClient.startWorkflowRun) {
         throw new Error("apiClient.startWorkflowRun is required");
       }
-      state.lastRun = { status: "running", runId: null, workflowVersion: payload.version, output: null, error: null, finalResult: null, artifacts: [], nodeResults: [], messages: [], executionDetails: { nodes: [] } };
+      state.lastRun = { status: "running", streamStatus: "idle", runId: null, workflowVersion: payload.version, output: null, error: null, finalResult: null, artifacts: [], nodeResults: [], messages: [], executionDetails: { nodes: [] }, timeline: [], nodeStatuses: new Map(), lastSequence: 0 };
       const run = await apiClient.startWorkflowRun(state.definition.id, cloneDefinition(payload));
       state.lastRun = normalizeRun(run);
       return cloneDefinition(run);
+    },
+    async subscribeRunEvents(options = {}) {
+      if (!state.lastRun?.runId) {
+        throw new Error("No workflow run is available");
+      }
+      if (!apiClient.streamWorkflowRunEvents) {
+        throw new Error("apiClient.streamWorkflowRunEvents is required");
+      }
+      state.lastRun.streamStatus = "connected";
+      try {
+        for await (const rawEvent of apiClient.streamWorkflowRunEvents(state.lastRun.runId, options)) {
+          applyRunEvent(state.lastRun, normalizeRunEvent(rawEvent));
+        }
+        state.lastRun.streamStatus = "closed";
+      } catch (error) {
+        state.lastRun.streamStatus = "disconnected";
+        throw error;
+      }
+      return this.view();
+    },
+    async cancelRun() {
+      if (!state.lastRun?.runId) {
+        throw new Error("No workflow run is available");
+      }
+      if (!apiClient.cancelWorkflowRun) {
+        throw new Error("apiClient.cancelWorkflowRun is required");
+      }
+      const run = await apiClient.cancelWorkflowRun(state.lastRun.runId);
+      state.lastRun = normalizeRun(run);
+      return cloneDefinition(run);
+    },
+    async loadRunDetail(runId) {
+      if (!apiClient.fetchWorkflowRun) {
+        throw new Error("apiClient.fetchWorkflowRun is required");
+      }
+      const run = await apiClient.fetchWorkflowRun(runId);
+      const [nodes, messages, artifacts] = await Promise.all([
+        apiClient.fetchWorkflowRunNodes ? apiClient.fetchWorkflowRunNodes(runId) : { nodes: [] },
+        apiClient.fetchWorkflowRunMessages ? apiClient.fetchWorkflowRunMessages(runId) : { messages: [] },
+        apiClient.listWorkflowRunArtifacts ? apiClient.listWorkflowRunArtifacts(runId) : { artifacts: [] },
+      ]);
+      state.lastRun = normalizeRun(run);
+      state.lastRun.messages = [];
+      state.lastRun.historyDetail = {
+        nodes: Array.isArray(nodes.nodes) ? nodes.nodes.map(cloneDefinition) : [],
+        messages: Array.isArray(messages.messages) ? messages.messages.map(messageView) : [],
+        artifacts: Array.isArray(artifacts.artifacts) ? artifacts.artifacts.map(artifactRef) : [],
+      };
+      return this.view();
     },
     async downloadArtifact(artifactId) {
       if (!apiClient.downloadWorkflowArtifactContent) {
@@ -190,17 +251,19 @@ export function createWorkflowV2Workbench(options = {}) {
       return {
         kind: "agent-workflow-v2-workbench",
         schemaVersion: 2,
+        editorMode: state.editorMode,
         nodeLibrary: {
           items: builder.nodeLibrary(),
         },
         canvas: {
           role: "workflow-v2-canvas",
-          nodes: workflowView.nodes.map((node) => ({ ...cardNode(node), runStatus: nodeRunStatusById.get(node.id) ?? "pending" })),
+          nodes: workflowView.nodes.map((node) => ({ ...cardNode(node, state), runStatus: nodeRunStatusById.get(node.id) ?? "pending" })),
           edges: workflowView.edges.map(canvasEdge),
         },
         nodeConfig: {
           selectedNodeId: state.selectedNodeId,
           groups: selectedNode?.type === "agent" ? agentInspectorGroups() : selectedNode?.type === "condition" ? conditionInspectorGroups() : selectedNode?.type === "end" ? endInspectorGroups() : selectedNode?.type === "workflow" ? workflowInspectorGroups() : [],
+          visibleGroups: selectedNode ? visibleInspectorGroups(selectedNode, state.editorMode) : [],
           value: selectedNode?.type === "agent" || selectedNode?.type === "workflow" ? cloneDefinition(selectedNode.config ?? {}) : null,
           schemaBuilder: selectedNode?.type === "agent"
             ? createWorkflowV2SchemaBuilder(selectedNode.config?.outputSchema ?? null).view()
@@ -224,6 +287,7 @@ export function createWorkflowV2Workbench(options = {}) {
         },
         validationPanel: {
           issues: state.validationIssues.map(cloneIssue),
+          locators: validationLocators(state.validationIssues),
         },
         workflowTools: {
           catalog: state.toolCatalog.map(cloneDefinition),
@@ -245,8 +309,13 @@ export function createWorkflowV2Workbench(options = {}) {
 }
 
 function normalizeRun(run) {
+  const nodeStatuses = new Map();
+  (Array.isArray(run.nodeResults) ? run.nodeResults : []).forEach((result) => {
+    nodeStatuses.set(result.nodeId, result.status);
+  });
   return {
     status: run.status,
+    streamStatus: run.streamStatus ?? "closed",
     runId: run.id ?? run.runId ?? null,
     workflowVersion: run.workflowVersion,
     output: run.output ?? null,
@@ -256,18 +325,18 @@ function normalizeRun(run) {
     nodeResults: Array.isArray(run.nodeResults) ? run.nodeResults.map(cloneDefinition) : [],
     messages: Array.isArray(run.messages) ? run.messages.map(messageView) : [],
     executionDetails: run.executionDetails ? executionDetailsView(run.executionDetails) : { nodes: [] },
+    timeline: Array.isArray(run.events) ? run.events.map(normalizeRunEvent) : [],
+    historyDetail: run.historyDetail ?? null,
+    nodeStatuses,
+    lastSequence: Array.isArray(run.events) ? run.events.reduce((max, event) => Math.max(max, Number(event.sequence) || 0), 0) : 0,
   };
 }
 
 function nodeRunStatuses(run) {
-  const statuses = new Map();
-  if (!run?.nodeResults) {
-    return statuses;
+  if (run?.nodeStatuses) {
+    return new Map(run.nodeStatuses);
   }
-  run.nodeResults.forEach((result) => {
-    statuses.set(result.nodeId, result.status);
-  });
-  return statuses;
+  return new Map();
 }
 
 function runPanel(run) {
@@ -280,6 +349,18 @@ function runPanel(run) {
     messages: run.messages.map(cloneDefinition),
     executionDetails: cloneDefinition(run.executionDetails),
   };
+  if (run.streamStatus && run.streamStatus !== "closed") {
+    panel.streamStatus = run.streamStatus;
+  }
+  if (run.status === "running") {
+    panel.actions = ["cancel"];
+  }
+  if (run.error?.code === "WORKFLOW_LIMIT_EXCEEDED") {
+    panel.failure = failureView(run.error);
+  }
+  if (run.timeline.length > 0) {
+    panel.timeline = run.timeline.map(cloneDefinition);
+  }
   if (run.finalResult) {
     panel.finalResult = {
       ...cloneDefinition(run.finalResult),
@@ -289,11 +370,131 @@ function runPanel(run) {
   if (run.artifacts.length > 0) {
     panel.artifacts = artifactsView(run.artifacts);
   }
+  if (run.historyDetail) {
+    panel.historyDetail = historyDetailView(run);
+  }
   const details = nodeExecutionDetails(run);
   if (details.some((node) => node.artifacts.length > 0)) {
     panel.nodeExecutionDetails = details;
   }
   return panel;
+}
+
+function historyDetailView(run) {
+  const tabs = ["result", "timeline", "nodes", "messages"];
+  if ((run.historyDetail.artifacts ?? []).length > 0 || run.artifacts.length > 0) {
+    tabs.push("artifacts");
+  }
+  if (run.error) {
+    tabs.push("error");
+  }
+  return {
+    tabs,
+    workflowVersion: run.workflowVersion,
+    status: run.status,
+    output: cloneDefinition(run.output),
+    finalResult: run.finalResult ? cloneDefinition(run.finalResult) : null,
+    timeline: run.timeline.map(cloneDefinition),
+    nodes: (run.historyDetail.nodes ?? []).map(cloneDefinition),
+    messages: (run.historyDetail.messages ?? []).map(cloneDefinition),
+    artifacts: artifactsView(run.historyDetail.artifacts ?? run.artifacts),
+    error: run.error ? cloneDefinition(run.error) : null,
+  };
+}
+
+function applyRunEvent(run, event) {
+  if (!event || event.sequence <= run.lastSequence) {
+    return;
+  }
+  run.lastSequence = event.sequence;
+  run.timeline.push(cloneDefinition(event));
+  if (event.eventType === "WorkflowStarted") {
+    run.status = "running";
+  }
+  if (event.eventType === "WorkflowCompleted") {
+    run.status = "succeeded";
+    run.finalResult = event.payload?.finalResult ? cloneDefinition(event.payload.finalResult) : run.finalResult;
+  }
+  if (event.eventType === "WorkflowFailed") {
+    run.status = event.payload?.status === "cancelled" ? "cancelled" : "failed";
+    run.error = event.payload?.error ? cloneDefinition(event.payload.error) : run.error;
+  }
+  if (event.nodeId && event.eventType === "NodeStarted") {
+    run.nodeStatuses.set(event.nodeId, "running");
+  }
+  if (event.nodeId && event.eventType === "NodeCompleted") {
+    run.nodeStatuses.set(event.nodeId, "succeeded");
+    upsertNodeResult(run, event.nodeId, "succeeded", event.payload?.data ?? null);
+  }
+  if (event.nodeId && event.eventType === "NodeFailed") {
+    run.nodeStatuses.set(event.nodeId, "failed");
+    upsertNodeResult(run, event.nodeId, "failed", null);
+  }
+  appendExecutionStepFromEvent(run, event);
+}
+
+function failureView(error) {
+  return {
+    code: error.code,
+    message: error.message,
+    limit: error.limit ?? null,
+    nodeId: error.nodeId ?? null,
+  };
+}
+
+function normalizeRunEvent(rawEvent) {
+  const event = rawEvent?.data?.eventType ? rawEvent.data : rawEvent;
+  return {
+    runId: event?.runId ?? null,
+    nodeId: event?.nodeId ?? null,
+    timestamp: event?.timestamp ?? null,
+    sequence: Number(event?.sequence) || 0,
+    eventType: event?.eventType ?? rawEvent?.type ?? "message",
+    payload: event?.payload ?? {},
+  };
+}
+
+function upsertNodeResult(run, nodeId, status, data) {
+  const existing = run.nodeResults.find((result) => result.nodeId === nodeId);
+  if (existing) {
+    existing.status = status;
+    if (data !== null) {
+      existing.data = cloneDefinition(data);
+    }
+    return;
+  }
+  run.nodeResults.push({ nodeId, status, data });
+}
+
+function appendExecutionStepFromEvent(run, event) {
+  if (!event.nodeId) {
+    return;
+  }
+  const node = executionNode(run, event.nodeId);
+  if (event.eventType === "LlmCallStarted") {
+    node.steps.push({ type: "llm_call", index: event.payload?.index ?? null, status: "running" });
+  }
+  if (event.eventType === "ToolCallStarted") {
+    node.steps.push({ type: "tool_call", toolCallId: event.payload?.toolCallId ?? null, name: event.payload?.name ?? null });
+  }
+  if (event.eventType === "ToolCallCompleted") {
+    node.steps.push({ type: "tool_result", toolCallId: event.payload?.toolCallId ?? null, name: event.payload?.name ?? null, status: event.payload?.status ?? null, error: event.payload?.error ?? null });
+  }
+  if (event.eventType === "SchemaValidationSucceeded" || event.eventType === "SchemaValidationFailed") {
+    node.steps.push({ type: "schema_validation", status: event.payload?.status ?? (event.eventType === "SchemaValidationSucceeded" ? "succeeded" : "failed"), error: event.payload?.error ?? null });
+  }
+  if (event.eventType === "NodeCompleted") {
+    node.steps.push({ type: "node_result", status: "succeeded", data: event.payload?.data ?? null });
+  }
+}
+
+function executionNode(run, nodeId) {
+  let node = run.executionDetails.nodes.find((item) => item.nodeId === nodeId);
+  if (!node) {
+    node = { nodeId, steps: [] };
+    run.executionDetails.nodes.push(node);
+  }
+  return node;
 }
 
 function nextNodeId(type, state) {
@@ -366,11 +567,40 @@ function canvasEdge(edge, index) {
   return { ...edge, id: `${index}:${edge.source}->${edge.target}` };
 }
 
-function cardNode(node) {
+function cardNode(node, state) {
+  const config = node.config ?? {};
+  if (node.type === "condition") {
+    return {
+      ...node,
+      card: {
+        title: config.name || node.id,
+        subtitle: "Condition",
+        summary: {
+          sourceField: firstConditionSourceField(config),
+          branchCount: Array.isArray(config.branches) ? config.branches.length : 0,
+        },
+      },
+    };
+  }
+  if (node.type === "workflow") {
+    const referenced = state.workflowCatalog.find((workflow) => workflow.id === config.workflowId) ?? null;
+    return {
+      ...node,
+      card: {
+        title: config.name || node.id,
+        subtitle: "Workflow",
+        summary: {
+          workflowId: config.workflowId ?? null,
+          version: config.version ?? null,
+          input: schemaSummary(referenced?.inputSchema),
+          output: schemaSummary(referenced?.outputSchema),
+        },
+      },
+    };
+  }
   if (node.type !== "agent") {
     return node;
   }
-  const config = node.config ?? {};
   return {
     ...node,
     card: {
@@ -383,6 +613,72 @@ function cardNode(node) {
       },
     },
   };
+}
+
+function visibleInspectorGroups(node, editorMode) {
+  if (node.type === "agent") {
+    const simple = [
+      { id: "goal", label: "Goal" },
+      { id: "output", label: "Output" },
+      { id: "tools", label: "Tools" },
+      { id: "branch", label: "Branch / Next" },
+    ];
+    if (editorMode !== "advanced") {
+      return simple;
+    }
+    return [
+      ...simple,
+      { id: "jsonSchema", label: "JSON Schema" },
+      { id: "retry", label: "Retry" },
+      { id: "timeout", label: "Timeout" },
+      { id: "contextSources", label: "Context Sources" },
+      { id: "messageContextStrategy", label: "Message Context Strategy" },
+      { id: "runtimeDetail", label: "Runtime Detail" },
+    ];
+  }
+  if (node.type === "workflow" && editorMode === "advanced") {
+    return [
+      { id: "workflow", label: "Workflow" },
+      { id: "input", label: "Input Mapping" },
+      { id: "messageContextStrategy", label: "Message Context Strategy" },
+    ];
+  }
+  if (node.type === "condition") {
+    return [
+      { id: "source", label: "Source" },
+      { id: "branches", label: "Branches" },
+    ];
+  }
+  return [];
+}
+
+function validationLocators(issues) {
+  return issues
+    .map((issue) => {
+      const nodeId = issue.nodeId ?? issue.node_id ?? null;
+      if (!nodeId) {
+        return null;
+      }
+      return {
+        nodeId,
+        field: issue.field ?? null,
+        target: { panel: "nodeConfig", nodeId },
+      };
+    })
+    .filter(Boolean);
+}
+
+function firstConditionSourceField(config) {
+  const branch = Array.isArray(config.branches) ? config.branches[0] : null;
+  const source = branch?.source;
+  return source?.path?.join(".") ?? null;
+}
+
+function schemaSummary(schema) {
+  if (!schema || schema.type !== "object") {
+    return [];
+  }
+  return Object.keys(schema.properties ?? {});
 }
 
 function agentInspectorGroups() {

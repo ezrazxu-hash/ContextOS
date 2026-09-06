@@ -49,7 +49,7 @@ def patch_template(template_id: str, payload: dict[str, object], template_servic
     return {"status": 200, "body": record.to_dict()}
 
 
-def delete_template(template_id: str, template_service: TemplateService) -> dict[str, object]:
+def remove_template(template_id: str, template_service: TemplateService) -> dict[str, object]:
     try:
         record = template_service.remove(template_id)
     except TemplateNotFound:
@@ -57,7 +57,7 @@ def delete_template(template_id: str, template_service: TemplateService) -> dict
     return {"status": 200, "body": record.to_dict()}
 
 
-def delete_template_node(template_id: str, node_id: str, template_service: TemplateService) -> dict[str, object]:
+def remove_template_node(template_id: str, node_id: str, template_service: TemplateService) -> dict[str, object]:
     try:
         record, removed_edge_count = template_service.remove_node(template_id, node_id)
     except TemplateNotFound:

@@ -172,6 +172,35 @@ test("T03 V2 workbench saves refreshed agent configuration through draft API", a
   assert.equal(workbench.view().draft.revision, 2);
 });
 
+test("T20 V2 workbench can rebase the local draft revision before saving", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const saves = [];
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async saveWorkflowDraft(workflowId, definition) {
+        saves.push({ workflowId, definition });
+        return { ...definition, revision: 8 };
+      },
+    },
+    workflowDefinition: {
+      id: "agent-workflow-v2-draft",
+      name: "Agent Workflow V2 Draft",
+      schemaVersion: 2,
+      revision: 1,
+      nodes: [],
+      edges: [],
+    },
+  });
+
+  workbench.dropLibraryNode("agent", { x: 20, y: 30 });
+  workbench.setDraftRevision(7);
+  await workbench.saveDraft();
+
+  assert.equal(saves[0].definition.revision, 7);
+  assert.equal(saves[0].definition.nodes[0].id, "agent-1");
+  assert.equal(workbench.view().draft.revision, 8);
+});
+
 test("T04 V2 workbench edits output schema through builder view and saves draft", async () => {
   const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
   const saves = [];
@@ -722,6 +751,270 @@ test("T13 V2 workbench flags condition and workflow mappings when upstream schem
   workbench.selectNode("research");
   assert.deepEqual(workbench.view().nodeConfig.workflowInspector.issues.map((issue) => issue.code), ["workflow_ref_source_field_not_found"]);
   assert.equal(JSON.stringify(workbench.view().draft).includes("$state."), false);
+});
+
+test("T14 V2 workbench applies workflow run SSE events to canvas status and timeline", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const events = [
+    { eventType: "WorkflowStarted", runId: "workflow_run_1", sequence: 1, nodeId: null, payload: { status: "running" } },
+    { eventType: "NodeStarted", runId: "workflow_run_1", sequence: 2, nodeId: "agent-1", payload: { status: "running" } },
+    { eventType: "LlmCallStarted", runId: "workflow_run_1", sequence: 3, nodeId: "agent-1", payload: { index: 1 } },
+    { eventType: "ToolCallStarted", runId: "workflow_run_1", sequence: 4, nodeId: "agent-1", payload: { toolCallId: "call-1", name: "context.echo" } },
+    { eventType: "ToolCallCompleted", runId: "workflow_run_1", sequence: 5, nodeId: "agent-1", payload: { toolCallId: "call-1", name: "context.echo", status: "succeeded" } },
+    { eventType: "NodeCompleted", runId: "workflow_run_1", sequence: 6, nodeId: "agent-1", payload: { status: "succeeded", data: { summary: "Done" } } },
+    { eventType: "WorkflowCompleted", runId: "workflow_run_1", sequence: 7, nodeId: null, payload: { status: "succeeded" } },
+  ];
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async startWorkflowRun() {
+        return { id: "workflow_run_1", status: "running", workflowVersion: 1, nodeResults: [] };
+      },
+      streamWorkflowRunEvents() {
+        return events;
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  await workbench.startRun({ version: 1, input: { message: "hello" } });
+  await workbench.subscribeRunEvents();
+
+  const view = workbench.view();
+  assert.equal(view.runPanel.status, "succeeded");
+  assert.equal(view.canvas.nodes.find((node) => node.id === "agent-1").runStatus, "succeeded");
+  assert.deepEqual(view.runPanel.timeline.map((event) => event.eventType), events.map((event) => event.eventType));
+  assert.deepEqual(view.runPanel.executionDetails.nodes[0].steps.map((step) => step.type), ["llm_call", "tool_call", "tool_result", "node_result"]);
+});
+
+test("T14 V2 workbench keeps disconnected SSE runs non-successful", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async startWorkflowRun() {
+        return { id: "workflow_run_1", status: "running", workflowVersion: 1, nodeResults: [] };
+      },
+      async *streamWorkflowRunEvents() {
+        yield { eventType: "WorkflowStarted", runId: "workflow_run_1", sequence: 1, nodeId: null, payload: { status: "running" } };
+        yield { eventType: "NodeStarted", runId: "workflow_run_1", sequence: 2, nodeId: "agent-1", payload: { status: "running" } };
+        throw new Error("network disconnected");
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  await workbench.startRun({ version: 1, input: { message: "hello" } });
+  await assert.rejects(() => workbench.subscribeRunEvents(), /network disconnected/);
+
+  const view = workbench.view();
+  assert.equal(view.runPanel.status, "running");
+  assert.equal(view.runPanel.streamStatus, "disconnected");
+  assert.equal(view.canvas.nodes.find((node) => node.id === "agent-1").runStatus, "running");
+});
+
+test("T15 V2 workbench exposes cancel action for running workflow runs", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const calls = [];
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async startWorkflowRun() {
+        return { id: "workflow_run_1", status: "running", workflowVersion: 1, nodeResults: [] };
+      },
+      async cancelWorkflowRun(runId) {
+        calls.push(["cancel", runId]);
+        return { id: runId, status: "cancelled", workflowVersion: 1, error: { code: "WORKFLOW_CANCELLED", message: "Workflow run cancelled" }, nodeResults: [] };
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  await workbench.startRun({ version: 1, input: { message: "hello" }, async: true });
+  assert.deepEqual(workbench.view().runPanel.actions, ["cancel"]);
+
+  await workbench.cancelRun();
+
+  assert.deepEqual(calls, [["cancel", "workflow_run_1"]]);
+  assert.equal(workbench.view().runPanel.status, "cancelled");
+  assert.equal(workbench.view().runPanel.error.code, "WORKFLOW_CANCELLED");
+});
+
+test("T15 V2 workbench shows concrete runtime limit failures", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async startWorkflowRun() {
+        return {
+          id: "workflow_run_1",
+          status: "failed",
+          workflowVersion: 1,
+          error: {
+            code: "WORKFLOW_LIMIT_EXCEEDED",
+            message: "Runtime limit exceeded: maxToolCallsPerNode",
+            limit: "maxToolCallsPerNode",
+            nodeId: "agent-1",
+          },
+          nodeResults: [{ nodeId: "agent-1", status: "failed", data: null }],
+          executionDetails: { nodes: [{ nodeId: "agent-1", steps: [{ type: "tool_result", status: "failed", error: { code: "WORKFLOW_LIMIT_EXCEEDED" } }] }] },
+        };
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  await workbench.startRun({ version: 1, input: { message: "hello" } });
+
+  assert.deepEqual(workbench.view().runPanel.failure, {
+    code: "WORKFLOW_LIMIT_EXCEEDED",
+    message: "Runtime limit exceeded: maxToolCallsPerNode",
+    limit: "maxToolCallsPerNode",
+    nodeId: "agent-1",
+  });
+  assert.equal(workbench.view().canvas.nodes.find((node) => node.id === "agent-1").runStatus, "failed");
+});
+
+test("T16 V2 workbench loads historical run detail without mixing trace into chat", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const calls = [];
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async fetchWorkflowRun(runId) {
+        calls.push(["run", runId]);
+        return {
+          id: runId,
+          status: "succeeded",
+          workflowVersion: 1,
+          output: { summary: "History ready" },
+          finalResult: { message: "History ready", data: { summary: "History ready" }, artifacts: [{ id: "artifact_1", name: "history.txt", mimeType: "text/plain" }] },
+          nodeResults: [{ nodeId: "agent-1", status: "succeeded", data: { summary: "History ready" } }],
+          events: [{ sequence: 1, eventType: "WorkflowStarted", payload: { status: "running" } }],
+        };
+      },
+      async fetchWorkflowRunNodes(runId) {
+        calls.push(["nodes", runId]);
+        return { nodes: [{ nodeId: "agent-1", status: "succeeded", nodeResult: { data: { summary: "History ready" } }, steps: [{ type: "llm_call", index: 1 }] }] };
+      },
+      async fetchWorkflowRunMessages(runId) {
+        calls.push(["messages", runId]);
+        return { messages: [{ sequence: 1, role: "user", content: "make history" }, { sequence: 2, role: "assistant", content: "History ready" }] };
+      },
+      async listWorkflowRunArtifacts(runId) {
+        calls.push(["artifacts", runId]);
+        return { artifacts: [{ id: "artifact_1", name: "history.txt", mimeType: "text/plain" }] };
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  await workbench.loadRunDetail("workflow_run_history");
+  const panel = workbench.view().runPanel;
+
+  assert.deepEqual(calls, [["run", "workflow_run_history"], ["nodes", "workflow_run_history"], ["messages", "workflow_run_history"], ["artifacts", "workflow_run_history"]]);
+  assert.deepEqual(panel.historyDetail.tabs, ["result", "timeline", "nodes", "messages", "artifacts"]);
+  assert.deepEqual(panel.historyDetail.nodes[0].nodeResult.data, { summary: "History ready" });
+  assert.deepEqual(panel.historyDetail.messages.map((message) => message.sequence), [1, 2]);
+  assert.deepEqual(panel.messages, []);
+  assert.equal(panel.historyDetail.artifacts[0].name, "history.txt");
+});
+
+test("T17 V2 workbench defaults to simple mode and folds advanced agent details", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  workbench.selectNode("agent-1");
+  const simple = workbench.view();
+  workbench.setEditorMode("advanced");
+  const advanced = workbench.view();
+
+  assert.equal(simple.editorMode, "simple");
+  assert.deepEqual(simple.nodeConfig.visibleGroups.map((group) => group.id), ["goal", "output", "tools", "branch"]);
+  assert.deepEqual(advanced.nodeConfig.visibleGroups.map((group) => group.id), [
+    "goal",
+    "output",
+    "tools",
+    "branch",
+    "jsonSchema",
+    "retry",
+    "timeout",
+    "contextSources",
+    "messageContextStrategy",
+    "runtimeDetail",
+  ]);
+  assert.equal(JSON.stringify(simple).includes("$state"), false);
+  assert.equal(JSON.stringify(simple).includes("PromptNode"), false);
+  assert.equal(JSON.stringify(simple).includes("LlmNode"), false);
+  assert.equal(JSON.stringify(simple).includes("ToolNode"), false);
+});
+
+test("T17 V2 workbench preserves advanced config while switching modes and saving draft", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const savedDefinitions = [];
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async saveWorkflowDraft(workflowId, definition) {
+        savedDefinitions.push({ workflowId, definition });
+        return { ...definition, revision: 2 };
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  workbench.selectNode("agent-1");
+  workbench.setEditorMode("advanced");
+  workbench.updateSelectedAgentConfig({
+    retryPolicy: { schemaRetryCount: 2, nodeRetryCount: 1, timeoutMs: 30000 },
+    contextPolicy: { conversationHistory: true, userInput: true, uploadedFiles: false },
+  });
+  workbench.setEditorMode("simple");
+  await workbench.saveDraft();
+
+  assert.equal(workbench.view().editorMode, "simple");
+  assert.deepEqual(savedDefinitions[0].definition.nodes[0].config.retryPolicy, { schemaRetryCount: 2, nodeRetryCount: 1, timeoutMs: 30000 });
+  assert.deepEqual(savedDefinitions[0].definition.nodes[0].config.contextPolicy, { conversationHistory: true, userInput: true, uploadedFiles: false });
+});
+
+test("T17 V2 workbench provides compact node cards and validation locators", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async validateWorkflow() {
+        return {
+          valid: false,
+          errors: [
+            { code: "condition_default_target_missing", field: "nodes[1].config.defaultTarget", message: "Default target is missing", nodeId: "route" },
+            { code: "workflow_ref_version_required", field: "nodes[2].config.version", message: "Version is required", node_id: "child" },
+          ],
+        };
+      },
+    },
+    workflowCatalog: [{ id: "child-flow", name: "Child Flow", versions: [{ version: 1 }], inputSchema: { type: "object", properties: {} }, outputSchema: { type: "object", properties: { summary: { type: "string" } } } }],
+    workflowDefinition: {
+      ...conditionWorkbenchWorkflowDefinition(),
+      nodes: [
+        ...conditionWorkbenchWorkflowDefinition().nodes,
+        { id: "child", type: "workflow", config: { workflowId: "child-flow", version: 1, inputBindings: {} } },
+      ],
+    },
+  });
+
+  const result = await workbench.validateWithBackend();
+  const view = workbench.view();
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(view.canvas.nodes.find((node) => node.id === "classify").card.summary.output, ["category", "confidence", "summary"]);
+  assert.equal(view.canvas.nodes.find((node) => node.id === "classify").card.summary.tools, 0);
+  assert.equal(view.canvas.nodes.find((node) => node.id === "route").card.summary.branchCount, 0);
+  assert.equal(view.canvas.nodes.find((node) => node.id === "child").card.summary.workflowId, "child-flow");
+  assert.deepEqual(view.validationPanel.locators[0], {
+    nodeId: "route",
+    field: "nodes[1].config.defaultTarget",
+    target: { panel: "nodeConfig", nodeId: "route" },
+  });
+  assert.deepEqual(view.validationPanel.locators[1], {
+    nodeId: "child",
+    field: "nodes[2].config.version",
+    target: { panel: "nodeConfig", nodeId: "child" },
+  });
 });
 
 function validWorkbenchWorkflowDefinition() {

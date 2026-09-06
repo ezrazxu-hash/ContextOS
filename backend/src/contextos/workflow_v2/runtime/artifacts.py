@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
+
+from contextos.runtime.persistence.json_store import JsonRuntimeStore
+
+COLLECTION = "workflow_v2_artifacts"
 
 
 class WorkflowV2ArtifactNotFound(Exception):
@@ -47,9 +52,15 @@ class WorkflowV2ArtifactContent:
 
 
 class InMemoryWorkflowV2ArtifactStore:
-    def __init__(self) -> None:
+    def __init__(self, store: JsonRuntimeStore | None = None) -> None:
+        self._store = store
         self._artifacts: dict[str, WorkflowV2ArtifactContent] = {}
         self._run_index: dict[str, list[str]] = {}
+        if self._store is not None:
+            for item in self._store.list_records(COLLECTION):
+                record = _artifact_from_dict(item)
+                self._artifacts[record.id] = record
+                self._run_index.setdefault(record.run_id, []).append(record.id)
 
     def save(self, *, run_id: str, created_by_node_id: str, artifact: dict[str, Any]) -> dict[str, Any]:
         content = _artifact_content(artifact.get("content", b""))
@@ -66,6 +77,8 @@ class InMemoryWorkflowV2ArtifactStore:
         )
         self._artifacts[record.id] = record
         self._run_index.setdefault(run_id, []).append(record.id)
+        if self._store is not None:
+            self._store.save_record(COLLECTION, record.id, _artifact_to_dict(record))
         return record.ref()
 
     def list_by_run(self, run_id: str) -> list[dict[str, Any]]:
@@ -85,3 +98,31 @@ def _artifact_content(value: Any) -> bytes:
     if isinstance(value, str):
         return value.encode("utf-8")
     return b""
+
+
+def _artifact_to_dict(record: WorkflowV2ArtifactContent) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "runId": record.run_id,
+        "name": record.name,
+        "mimeType": record.mime_type,
+        "contentBase64": base64.b64encode(record.content).decode("ascii"),
+        "createdByNodeId": record.created_by_node_id,
+        "visible": record.visible,
+        "createdAt": record.created_at,
+        "metadata": deepcopy(record.metadata),
+    }
+
+
+def _artifact_from_dict(record: dict[str, Any]) -> WorkflowV2ArtifactContent:
+    return WorkflowV2ArtifactContent(
+        id=str(record["id"]),
+        run_id=str(record["runId"]),
+        name=str(record["name"]),
+        mime_type=str(record["mimeType"]),
+        content=base64.b64decode(str(record.get("contentBase64", ""))),
+        created_by_node_id=str(record["createdByNodeId"]),
+        visible=record.get("visible") is not False,
+        created_at=str(record["createdAt"]),
+        metadata=deepcopy(record.get("metadata")) if isinstance(record.get("metadata"), dict) else {},
+    )

@@ -80,4 +80,6 @@ def _empty_state() -> dict[str, dict[str, Any]]:
         "templates": {},
         "agent_versions": {},
         "workflow_v2_definitions": {},
+        "workflow_v2_runs": {},
+        "workflow_v2_artifacts": {},
     }
