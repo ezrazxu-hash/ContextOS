@@ -38,6 +38,16 @@ class WorkflowV2ConditionRuntimeTests(unittest.TestCase):
             {"handle": "low", "source": {"nodeId": "classify", "path": ["confidence"]}, "operator": "greaterThanOrEqual", "value": 0.5},
             {"handle": "high", "source": {"nodeId": "classify", "path": ["confidence"]}, "operator": "greaterThanOrEqual", "value": 0.8},
         ]
+        definition["edges"] = [
+            {"source": "START", "target": "classify"},
+            {"source": "classify", "target": "route"},
+            {"source": "route", "target": "technical-agent", "sourceHandle": "low"},
+            {"source": "route", "target": "business-agent", "sourceHandle": "high"},
+            {"source": "route", "target": "fallback-agent", "sourceHandle": "default"},
+            {"source": "technical-agent", "target": "end-1"},
+            {"source": "business-agent", "target": "end-1"},
+            {"source": "fallback-agent", "target": "end-1"},
+        ]
         definitions.create(definition)
         definitions.publish("condition-flow", validator=WorkflowV2DefinitionValidator())
         llm = SequentialJsonLlmClient([
@@ -76,6 +86,31 @@ class WorkflowV2ConditionRuntimeTests(unittest.TestCase):
         self.assertEqual(run["status"], "succeeded")
         self.assertEqual(run["nodeResults"][1]["data"], {"branch": "default", "target": "business-agent"})
         self.assertEqual(run["nodeResults"][2]["nodeId"], "business-agent")
+
+    def test_condition_branch_target_is_resolved_from_graph_edge_before_legacy_target_field(self) -> None:
+        from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+        from contextos.workflow_v2.runtime.runs import InMemoryWorkflowV2RunStore, WorkflowV2RunService
+
+        definitions = WorkflowV2DefinitionService()
+        definition = condition_workflow("equals", "technical")
+        definition["nodes"][1]["config"]["branches"][0]["target"] = "business-agent"
+        definitions.create(definition)
+        definitions.publish("condition-flow", validator=WorkflowV2DefinitionValidator())
+        llm = SequentialJsonLlmClient([
+            '{"category":"technical","confidence":0.91,"summary":"API issue"}',
+            '{"summary":"Graph edge wins"}',
+        ])
+
+        run = WorkflowV2RunService(definitions, InMemoryWorkflowV2RunStore(), llm_client=llm).start(
+            workflow_id="condition-flow",
+            version=1,
+            input_payload={"message": "API request"},
+        )
+
+        self.assertEqual(run["status"], "succeeded")
+        self.assertEqual(run["nodeResults"][1]["data"], {"branch": "technical", "target": "technical-agent"})
+        self.assertEqual(run["nodeResults"][2]["nodeId"], "technical-agent")
 
     def test_condition_missing_field_fails_without_calling_next_agent(self) -> None:
         from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService

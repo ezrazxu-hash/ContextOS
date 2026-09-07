@@ -105,6 +105,20 @@ export function createWorkflowV2Workbench(options = {}) {
       syncDefinition(state, builder);
       return { accepted: true, edge: canvasEdge(view.edges[view.edges.length - 1], view.edges.length - 1) };
     },
+    updateCanvasEdge(edgeId, patch) {
+      const view = builder.updateEdge(edgeId, patch);
+      syncDefinition(state, builder);
+      refreshReferenceIssues(state);
+      const edgeIndex = edgeIndexFromId(edgeId);
+      const edge = edgeIndex >= 0 ? view.edges[edgeIndex] ?? null : null;
+      return { edge: edge ? canvasEdge(edge, edgeIndex) : null };
+    },
+    removeCanvasEdge(edgeId) {
+      const view = builder.removeEdge(edgeId);
+      syncDefinition(state, builder);
+      refreshReferenceIssues(state);
+      return view;
+    },
     removeNode(nodeId) {
       const view = builder.removeNode(nodeId);
       if (state.selectedNodeId === nodeId) {
@@ -257,9 +271,14 @@ export function createWorkflowV2Workbench(options = {}) {
         },
         canvas: {
           role: "workflow-v2-canvas",
-          nodes: workflowView.nodes.map((node) => ({ ...cardNode(node, state), runStatus: nodeRunStatusById.get(node.id) ?? "pending" })),
+          nodes: workflowView.nodes.map((node) => ({
+            ...cardNode(node, state),
+            handles: nodeHandles(node, workflowView.edges),
+            runStatus: nodeRunStatusById.get(node.id) ?? "pending",
+          })),
           edges: workflowView.edges.map(canvasEdge),
         },
+        edgeConfig: edgeConfigView(workflowView),
         nodeConfig: {
           selectedNodeId: state.selectedNodeId,
           groups: selectedNode?.type === "agent" ? agentInspectorGroups() : selectedNode?.type === "condition" ? conditionInspectorGroups() : selectedNode?.type === "end" ? endInspectorGroups() : selectedNode?.type === "workflow" ? workflowInspectorGroups() : [],
@@ -564,7 +583,57 @@ function workflowToolIds(definition) {
 }
 
 function canvasEdge(edge, index) {
-  return { ...edge, id: `${index}:${edge.source}->${edge.target}` };
+  return { ...edge, id: `${index}:${edge.source}->${edge.target}`, label: edge.sourceHandle || "success" };
+}
+
+function edgeIndexFromId(edgeId) {
+  const index = Number(String(edgeId).split(":", 1)[0]);
+  return Number.isInteger(index) && index >= 0 ? index : -1;
+}
+
+function edgeConfigView(workflowView) {
+  const nodes = workflowView.nodes ?? [];
+  return {
+    sources: [
+      { id: "START", label: "START", type: "start", handles: [{ id: "", label: "success" }] },
+      ...nodes
+        .filter((node) => node.type !== "end")
+        .map((node) => ({ id: node.id, label: node.config?.name || node.id, type: node.type, handles: nodeHandles(node, workflowView.edges).outputs })),
+    ],
+    targets: [
+      ...nodes.map((node) => ({ id: node.id, label: node.config?.name || node.id, type: node.type })),
+      { id: "END", label: "END", type: "end" },
+    ],
+    edges: workflowView.edges.map(canvasEdge),
+  };
+}
+
+function nodeHandles(node, edges = []) {
+  const inputs = [{ id: "in", label: "in" }];
+  if (node.type === "end") {
+    return { inputs, outputs: [] };
+  }
+  if (node.type === "condition") {
+    const edgeHandles = edges
+      .filter((edge) => edge.source === node.id && edge.sourceHandle)
+      .map((edge) => ({ id: String(edge.sourceHandle), label: String(edge.sourceHandle) }));
+    const branchHandles = Array.isArray(node.config?.branches)
+      ? node.config.branches.map((branch) => branch?.handle).filter(Boolean).map((handle) => ({ id: String(handle), label: String(handle) }))
+      : [];
+    return { inputs, outputs: uniqueHandles([...branchHandles, ...edgeHandles, { id: "default", label: "default" }]) };
+  }
+  return { inputs, outputs: [{ id: "", label: "success" }] };
+}
+
+function uniqueHandles(handles) {
+  const seen = new Set();
+  return handles.filter((handle) => {
+    if (!handle?.id || seen.has(handle.id)) {
+      return false;
+    }
+    seen.add(handle.id);
+    return true;
+  });
 }
 
 function cardNode(node, state) {

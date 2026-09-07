@@ -98,3 +98,28 @@ test("T20 main Workflow V2 page wires draft validate publish and run actions to 
   assert.match(mockClient, /publishWorkflow/);
   assert.match(mockClient, /startWorkflowRun/);
 });
+
+test("Workflow V2 page exposes graph edge and agent runtime configuration controls", () => {
+  const source = mainSource();
+  const v2Renderer = sourceSlice(source, "function renderWorkflowV2()", "function renderWorkflowV2Inspector");
+  const inspector = sourceSlice(source, "function renderWorkflowV2Inspector", "function renderWorkflowV2NodeLibrary");
+  const listener = sourceSlice(source, "const workflowV2RunInput", "const workflowEdgeSource");
+  const handler = sourceSlice(source, "async function handleAction", "function handleWorkflowNodePointerDown");
+
+  assert.match(v2Renderer, /data-testid="workflow-v2-edge-layer"/);
+  assert.match(v2Renderer, /data-action="connect-workflow-v2-edge"/);
+  assert.match(v2Renderer, /data-action="delete-workflow-v2-edge"/);
+  assert.match(v2Renderer, /data-workflow-v2-edge-field="sourceHandle"/);
+  assert.match(v2Renderer, /class="workflow-v2-handle/);
+  assert.match(inspector, /data-testid="workflow-v2-agent-name"/);
+  assert.match(inspector, /data-testid="workflow-v2-agent-description"/);
+  assert.match(inspector, /data-testid="workflow-v2-output-schema-builder"/);
+  assert.match(inspector, /<option value="enum">enum<\/option>/);
+  assert.match(source, /enumOptions: enumValues/);
+  assert.match(inspector, /data-testid="workflow-v2-tool-policy"/);
+  assert.match(listener, /workflow-v2-agent-name/);
+  assert.match(listener, /workflow-v2-agent-description/);
+  assert.match(handler, /connect-workflow-v2-edge/);
+  assert.match(handler, /delete-workflow-v2-edge/);
+  assert.doesNotMatch(inspector, /\$state\./);
+});

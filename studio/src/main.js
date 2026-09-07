@@ -453,13 +453,18 @@ function renderWorkflowV2() {
         <div class="graph-canvas workflow-v2-canvas" data-testid="workflow-v2-canvas">
           <div class="graph-canvas-viewport">
             <div class="graph-canvas-content">
+              ${renderWorkflowV2Edges(view)}
               ${view.canvas.nodes.length === 0 ? "<p class=\"workflow-v2-empty\">Drop or add an Agent node to start.</p>" : view.canvas.nodes.map((node) => `
-                <button data-action="select-workflow-v2-node" data-node-id="${escapeAttr(node.id)}" class="graph-node workflow-v2-node ${view.nodeConfig.selectedNodeId === node.id ? "selected" : ""}" style="left:${node.position.x}px;top:${node.position.y}px" title="${escapeAttr(node.id)}">
-                  ${escapeHtml(node.type)}<small>${escapeHtml(node.id)}</small>
-                </button>
+                <div class="workflow-v2-node-wrap" style="left:${node.position.x}px;top:${node.position.y}px">
+                  <button data-action="select-workflow-v2-node" data-node-id="${escapeAttr(node.id)}" class="graph-node workflow-v2-node ${view.nodeConfig.selectedNodeId === node.id ? "selected" : ""}" title="${escapeAttr(node.id)}">
+                    ${escapeHtml(node.type)}<small>${escapeHtml(node.id)}</small>
+                  </button>
+                  ${renderWorkflowV2Handles(node)}
+                </div>
               `).join("")}
             </div>
           </div>
+          ${renderWorkflowV2EdgeControls(view)}
         </div>
         <div class="workflow-config-resize-handle" data-testid="workflow-config-resize-handle" role="separator" tabindex="0" aria-label="Resize Agent Workflow V2 panel" aria-orientation="vertical" aria-valuemin="${WORKFLOW_CONFIG_PANEL_MIN_WIDTH}" aria-valuemax="${WORKFLOW_CONFIG_PANEL_MAX_WIDTH}" aria-valuenow="${workflowConfigPanelWidth()}"></div>
         <div class="node-config" data-testid="workflow-v2-node-config">
@@ -500,6 +505,63 @@ function renderWorkflowV2RunPanel(view) {
   `;
 }
 
+function renderWorkflowV2Edges(view) {
+  const nodesById = new Map(view.canvas.nodes.map((node) => [node.id, node]));
+  const lines = view.canvas.edges.map((edge) => {
+    const source = nodesById.get(edge.source);
+    const target = nodesById.get(edge.target);
+    const start = source ? { x: source.position.x + 148, y: source.position.y + 34 } : { x: 20, y: (target?.position.y ?? 20) + 34 };
+    const end = target ? { x: target.position.x, y: target.position.y + 34 } : { x: (source?.position.x ?? 20) + 210, y: (source?.position.y ?? 20) + 34 };
+    const labelX = Math.round((start.x + end.x) / 2);
+    const labelY = Math.round((start.y + end.y) / 2) - 6;
+    return `
+      <g data-edge-id="${escapeAttr(edge.id)}">
+        <line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}"></line>
+        <text x="${labelX}" y="${labelY}">${escapeHtml(edge.label ?? "")}</text>
+      </g>
+    `;
+  }).join("");
+  return `<svg class="workflow-v2-edge-layer" data-testid="workflow-v2-edge-layer" aria-hidden="true">${lines}</svg>`;
+}
+
+function renderWorkflowV2Handles(node) {
+  const outputs = node.handles?.outputs ?? [];
+  return outputs.map((handle) => `
+    <button class="workflow-v2-handle" data-action="connect-workflow-v2-edge-from-handle" data-source-id="${escapeAttr(node.id)}" data-source-handle="${escapeAttr(handle.id)}" title="Connect ${escapeAttr(handle.label)} from ${escapeAttr(node.id)}" aria-label="Connect ${escapeAttr(handle.label)} from ${escapeAttr(node.id)}">
+      ${escapeHtml(handle.label || "out")}
+    </button>
+  `).join("");
+}
+
+function renderWorkflowV2EdgeControls(view) {
+  const sources = view.edgeConfig?.sources ?? [];
+  const targets = view.edgeConfig?.targets ?? [];
+  const defaultSource = view.nodeConfig.selectedNodeId ?? sources[0]?.id ?? "START";
+  const source = sources.find((item) => item.id === defaultSource) ?? sources[0] ?? null;
+  const defaultHandle = source?.handles?.[0]?.id ?? "";
+  const defaultTarget = targets.find((item) => item.id !== defaultSource)?.id ?? targets[0]?.id ?? "END";
+  return `
+    <div class="workflow-v2-edge-panel" data-testid="workflow-v2-edge-panel">
+      <div class="workflow-v2-edge-form">
+        <label>Source<select data-testid="workflow-v2-edge-source">${sources.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === defaultSource ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label>
+        <label>Handle<input data-testid="workflow-v2-edge-handle" value="${escapeAttr(defaultHandle)}" placeholder="success / branch"></label>
+        <label>Target<select data-testid="workflow-v2-edge-target">${targets.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === defaultTarget ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label>
+        <button class="secondary" data-action="connect-workflow-v2-edge">Connect</button>
+      </div>
+      <div class="workflow-v2-edge-list">
+        ${(view.edgeConfig?.edges ?? []).map((edge) => `
+          <div class="workflow-v2-edge-row" data-edge-id="${escapeAttr(edge.id)}">
+            <select aria-label="Edge source" data-workflow-v2-edge-field="source" data-edge-id="${escapeAttr(edge.id)}">${sources.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === edge.source ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select>
+            <input aria-label="Edge handle" data-workflow-v2-edge-field="sourceHandle" data-edge-id="${escapeAttr(edge.id)}" value="${escapeAttr(edge.sourceHandle ?? "")}" placeholder="success">
+            <select aria-label="Edge target" data-workflow-v2-edge-field="target" data-edge-id="${escapeAttr(edge.id)}">${targets.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === edge.target ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select>
+            <button class="icon-button" data-action="delete-workflow-v2-edge" data-edge-id="${escapeAttr(edge.id)}" aria-label="Delete edge">X</button>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderWorkflowV2Inspector(view, selectedNode) {
   if (!selectedNode) {
     return "<p class=\"muted\">No node selected.</p>";
@@ -507,13 +569,98 @@ function renderWorkflowV2Inspector(view, selectedNode) {
   const config = view.nodeConfig.value ?? selectedNode.config ?? {};
   if (selectedNode.type === "agent") {
     return `
+      <label>Name<input data-testid="workflow-v2-agent-name" value="${escapeAttr(config.name ?? "")}"></label>
+      <label>Description<textarea data-testid="workflow-v2-agent-description" rows="3">${escapeHtml(config.description ?? "")}</textarea></label>
       <label>Instruction<textarea data-testid="workflow-v2-agent-instruction" rows="6">${escapeHtml(config.instruction ?? "")}</textarea></label>
+      ${renderWorkflowV2OutputSchemaBuilder(view)}
+      ${renderWorkflowV2ToolPolicy(view)}
       ${view.nodeConfig.visibleGroups.map((group) => `<p>${escapeHtml(group.label ?? group.id)}</p>`).join("")}
     `;
+  }
+  if (selectedNode.type === "condition") {
+    return renderWorkflowV2ConditionInspector(view);
   }
   return view.nodeConfig.visibleGroups.length === 0
     ? "<p class=\"muted\">No editable fields.</p>"
     : view.nodeConfig.visibleGroups.map((group) => `<p>${escapeHtml(group.label ?? group.id)}</p>`).join("");
+}
+
+function renderWorkflowV2OutputSchemaBuilder(view) {
+  const schemaView = view.nodeConfig.schemaBuilder ?? { fields: [] };
+  return `
+    <section class="workflow-v2-inspector-block" data-testid="workflow-v2-output-schema-builder">
+      <h3>Output Schema</h3>
+      <div class="workflow-v2-schema-fields">
+        ${(schemaView.fields ?? []).map((field) => `<span>${escapeHtml(field.name ?? field.path?.join(".") ?? "")}: ${escapeHtml(field.type ?? "string")}${field.required ? " required" : ""}</span>`).join("") || "<span>No fields</span>"}
+      </div>
+      <div class="workflow-v2-inline-form">
+        <input data-testid="workflow-v2-output-field-name" placeholder="field">
+        <select data-testid="workflow-v2-output-field-type">
+          <option value="string">string</option>
+          <option value="number">number</option>
+          <option value="enum">enum</option>
+          <option value="boolean">boolean</option>
+          <option value="array">array</option>
+          <option value="object">object</option>
+        </select>
+        <label class="workflow-v2-check"><input type="checkbox" data-testid="workflow-v2-output-field-required">Required</label>
+        <input data-testid="workflow-v2-output-field-enum" placeholder="enum: a,b">
+        <button class="secondary" data-action="add-workflow-v2-output-field">Add</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderWorkflowV2ToolPolicy(view) {
+  const selector = view.nodeConfig.toolSelector ?? { policy: { mode: "disabled" }, catalog: [], workflowTools: [] };
+  const policy = selector.policy ?? { mode: "disabled" };
+  const workflowSelected = new Set(view.workflowTools?.selectedIds ?? []);
+  const allowed = new Set(policy.allowedTools ?? []);
+  return `
+    <section class="workflow-v2-inspector-block" data-testid="workflow-v2-tool-policy">
+      <h3>Tools</h3>
+      <label>Mode<select data-testid="workflow-v2-tool-mode">
+        ${["disabled", "auto", "required"].map((mode) => `<option value="${mode}" ${policy.mode === mode ? "selected" : ""}>${mode}</option>`).join("")}
+      </select></label>
+      <div class="workflow-v2-tool-list">
+        ${(view.workflowTools?.catalog ?? []).map((tool) => `
+          <label class="workflow-v2-check">
+            <input type="checkbox" data-workflow-v2-workflow-tool="${escapeAttr(tool.id)}" ${workflowSelected.has(tool.id) ? "checked" : ""}>
+            ${escapeHtml(tool.name ?? tool.id)}
+          </label>
+          <label class="workflow-v2-check">
+            <input type="checkbox" data-workflow-v2-agent-tool="${escapeAttr(tool.id)}" ${allowed.has(tool.id) ? "checked" : ""}>
+            Agent
+          </label>
+        `).join("") || "<p class=\"muted\">No tools loaded.</p>"}
+      </div>
+    </section>
+  `;
+}
+
+function renderWorkflowV2ConditionInspector(view) {
+  const inspector = view.nodeConfig.conditionInspector ?? { branches: [], fields: [], targetNodes: [], operatorOptions: [] };
+  const fieldOptions = inspector.fields ?? [];
+  const targetOptions = inspector.targetNodes ?? [];
+  return `
+    <section class="workflow-v2-inspector-block" data-testid="workflow-v2-condition-inspector">
+      <h3>Branches</h3>
+      ${(inspector.branches ?? []).map((branch) => `<p>${escapeHtml(branch.handle ?? "")} -> ${escapeHtml(branch.target ?? edgeTargetForHandle(view, branch.handle) ?? "")}</p>`).join("") || "<p class=\"muted\">No branches.</p>"}
+      <div class="workflow-v2-inline-form">
+        <input data-testid="workflow-v2-condition-branch-handle" placeholder="branch handle">
+        <select data-testid="workflow-v2-condition-source-field">${fieldOptions.map((field) => `<option value="${escapeAttr(`${field.nodeId}:${field.path.join(".")}`)}">${escapeHtml(`${field.nodeId}.${field.path.join(".")} (${field.type})`)}</option>`).join("")}</select>
+        <select data-testid="workflow-v2-condition-operator">${(inspector.operatorOptions ?? []).map((operator) => `<option value="${escapeAttr(operator.value)}">${escapeHtml(operator.label)}</option>`).join("")}</select>
+        <input data-testid="workflow-v2-condition-value" placeholder="value">
+        <select data-testid="workflow-v2-condition-target">${targetOptions.map((node) => `<option value="${escapeAttr(node.id)}">${escapeHtml(node.label)}</option>`).join("")}</select>
+        <button class="secondary" data-action="add-workflow-v2-condition-branch">Add Branch</button>
+      </div>
+    </section>
+  `;
+}
+
+function edgeTargetForHandle(view, handle) {
+  return view.canvas.edges.find((edge) => edge.source === view.nodeConfig.selectedNodeId && (edge.sourceHandle ?? "") === String(handle ?? ""))?.target
+    ?? null;
 }
 
 function renderWorkflowV2NodeLibrary(view) {
@@ -1220,6 +1367,40 @@ function bindEvents() {
   workflowV2AgentInstruction?.addEventListener("input", () => {
     workflowV2Workbench().updateSelectedAgentConfig({ instruction: workflowV2AgentInstruction.value });
   });
+  const workflowV2AgentName = document.querySelector("[data-testid='workflow-v2-agent-name']");
+  workflowV2AgentName?.addEventListener("input", () => {
+    workflowV2Workbench().updateSelectedAgentConfig({ name: workflowV2AgentName.value });
+  });
+  const workflowV2AgentDescription = document.querySelector("[data-testid='workflow-v2-agent-description']");
+  workflowV2AgentDescription?.addEventListener("input", () => {
+    workflowV2Workbench().updateSelectedAgentConfig({ description: workflowV2AgentDescription.value });
+  });
+  document.querySelector("[data-testid='workflow-v2-tool-mode']")?.addEventListener("change", (event) => {
+    updateWorkflowV2ToolPolicy({ mode: event.currentTarget.value });
+  });
+  document.querySelectorAll("[data-workflow-v2-workflow-tool]").forEach((element) => {
+    element.addEventListener("change", () => {
+      const selected = [...document.querySelectorAll("[data-workflow-v2-workflow-tool]")]
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.workflowV2WorkflowTool);
+      workflowV2Workbench().setWorkflowToolRegistry(selected);
+      render();
+    });
+  });
+  document.querySelectorAll("[data-workflow-v2-agent-tool]").forEach((element) => {
+    element.addEventListener("change", () => {
+      const allowedTools = [...document.querySelectorAll("[data-workflow-v2-agent-tool]")]
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.workflowV2AgentTool);
+      updateWorkflowV2ToolPolicy({ allowedTools });
+    });
+  });
+  document.querySelectorAll("[data-workflow-v2-edge-field]").forEach((element) => {
+    element.addEventListener("change", () => {
+      workflowV2Workbench().updateCanvasEdge(element.dataset.edgeId, { [element.dataset.workflowV2EdgeField]: element.value });
+      render();
+    });
+  });
   const workflowEdgeSource = document.querySelector("#workflow-edge-source");
   workflowEdgeSource?.addEventListener("change", () => {
     state.workflowEdgeSourceId = workflowEdgeSource.value;
@@ -1712,10 +1893,101 @@ async function handleAction(event) {
     await publishWorkflowV2();
   } else if (action === "run-workflow-v2") {
     await runWorkflowV2();
+  } else if (action === "connect-workflow-v2-edge") {
+    connectWorkflowV2EdgeFromForm();
+    render();
+  } else if (action === "connect-workflow-v2-edge-from-handle") {
+    connectWorkflowV2Edge(target.dataset.sourceId, target.dataset.sourceHandle ?? "");
+    render();
+  } else if (action === "delete-workflow-v2-edge") {
+    workflowV2Workbench().removeCanvasEdge(target.dataset.edgeId);
+    render();
+  } else if (action === "add-workflow-v2-output-field") {
+    addWorkflowV2OutputFieldFromForm();
+    render();
+  } else if (action === "add-workflow-v2-condition-branch") {
+    addWorkflowV2ConditionBranchFromForm();
+    render();
   } else if (action === "not-implemented") {
     state.toast = { tone: "warning", text: "Not implemented in the current HTTP Runtime" };
     render();
   }
+}
+
+function connectWorkflowV2EdgeFromForm() {
+  const source = document.querySelector("[data-testid='workflow-v2-edge-source']")?.value ?? "START";
+  const sourceHandle = document.querySelector("[data-testid='workflow-v2-edge-handle']")?.value ?? "";
+  const target = document.querySelector("[data-testid='workflow-v2-edge-target']")?.value ?? "";
+  connectWorkflowV2Edge(source, sourceHandle, target);
+}
+
+function connectWorkflowV2Edge(source, sourceHandle = "", target = "") {
+  const view = workflowV2Workbench().view();
+  const resolvedTarget = target || view.edgeConfig.targets.find((item) => item.id !== source)?.id || "END";
+  workflowV2Workbench().connectCanvasEdge(source, resolvedTarget, sourceHandle ? { sourceHandle } : {});
+}
+
+function addWorkflowV2OutputFieldFromForm() {
+  const name = document.querySelector("[data-testid='workflow-v2-output-field-name']")?.value?.trim() ?? "";
+  if (!name) {
+    state.toast = { tone: "error", text: "Output field name is required" };
+    return;
+  }
+  const type = document.querySelector("[data-testid='workflow-v2-output-field-type']")?.value ?? "string";
+  const required = Boolean(document.querySelector("[data-testid='workflow-v2-output-field-required']")?.checked);
+  const enumRaw = document.querySelector("[data-testid='workflow-v2-output-field-enum']")?.value ?? "";
+  const enumValues = enumRaw.split(",").map((value) => value.trim()).filter(Boolean);
+  workflowV2Workbench().addOutputSchemaField({
+    name,
+    type: enumValues.length > 0 ? "enum" : type,
+    required,
+    ...(enumValues.length > 0 ? { enumOptions: enumValues } : {}),
+  });
+}
+
+function addWorkflowV2ConditionBranchFromForm() {
+  const view = workflowV2Workbench().view();
+  const selectedNode = view.canvas.nodes.find((node) => node.id === view.nodeConfig.selectedNodeId);
+  if (!selectedNode || selectedNode.type !== "condition") {
+    state.toast = { tone: "error", text: "Select a Condition node first" };
+    return;
+  }
+  const handle = document.querySelector("[data-testid='workflow-v2-condition-branch-handle']")?.value?.trim() || "branch";
+  const sourceField = document.querySelector("[data-testid='workflow-v2-condition-source-field']")?.value ?? "";
+  const [nodeId, pathText = ""] = sourceField.split(":");
+  const operator = document.querySelector("[data-testid='workflow-v2-condition-operator']")?.value ?? "equals";
+  const rawValue = document.querySelector("[data-testid='workflow-v2-condition-value']")?.value ?? "";
+  const target = document.querySelector("[data-testid='workflow-v2-condition-target']")?.value ?? "";
+  const branches = [...(view.nodeConfig.conditionInspector?.branches ?? []), {
+    handle,
+    source: { nodeId, path: pathText.split(".").filter(Boolean) },
+    operator,
+    value: coerceWorkflowV2ConditionValue(rawValue),
+  }];
+  workflowV2Workbench().updateSelectedConditionConfig({ branches });
+  if (target) {
+    workflowV2Workbench().connectCanvasEdge(selectedNode.id, target, { sourceHandle: handle });
+  }
+}
+
+function updateWorkflowV2ToolPolicy(patch) {
+  const current = workflowV2Workbench().view().nodeConfig.toolSelector?.policy ?? { mode: "disabled" };
+  const mode = patch.mode ?? current.mode ?? "disabled";
+  const allowedTools = patch.allowedTools ?? current.allowedTools ?? [];
+  workflowV2Workbench().updateSelectedToolPolicy({
+    mode,
+    allowedTools: mode === "disabled" ? [] : allowedTools,
+    requiredTools: mode === "required" ? allowedTools : [],
+  });
+  render();
+}
+
+function coerceWorkflowV2ConditionValue(value) {
+  const trimmed = String(value).trim();
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed !== "" && Number.isFinite(Number(trimmed))) return Number(trimmed);
+  return value;
 }
 
 function handleWorkflowNodePointerDown(event) {
@@ -3386,10 +3658,23 @@ function styleTag() {
     .graph-canvas { position: relative; min-height: 0; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(#e8edf3 1px, transparent 1px), linear-gradient(90deg, #e8edf3 1px, transparent 1px), #fff; background-size: 28px 28px; overflow: auto; }
     .graph-canvas-viewport { position: relative; min-width: 100%; min-height: 100%; }
     .graph-canvas-content { position: relative; min-width: 100%; min-height: 100%; transform-origin: 0 0; }
-    .workflow-v2-canvas .graph-canvas-content { min-height: 560px; }
+    .workflow-v2-canvas .graph-canvas-content { min-height: 560px; position: relative; }
     .workflow-v2-empty { margin: 18px; color: var(--muted); }
-    .workflow-v2-node { position: absolute; z-index: 2; }
+    .workflow-v2-edge-layer { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 560px; overflow: visible; pointer-events: none; z-index: 1; }
+    .workflow-v2-edge-layer line { stroke: #64748b; stroke-width: 2; }
+    .workflow-v2-edge-layer text { fill: #334155; font-size: 11px; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; }
+    .workflow-v2-node-wrap { position: absolute; z-index: 2; display: grid; grid-template-columns: minmax(132px, max-content) auto; align-items: center; gap: 8px; }
+    .workflow-v2-node { position: relative; min-width: 132px; }
     .workflow-v2-node.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+    .workflow-v2-handle { min-width: 44px; min-height: 32px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff; color: var(--accent); font-size: 11px; cursor: pointer; }
+    .workflow-v2-edge-panel { border-top: 1px solid var(--line); padding: 10px; background: #ffffff; display: grid; gap: 8px; }
+    .workflow-v2-edge-form, .workflow-v2-edge-row, .workflow-v2-inline-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 8px; align-items: end; }
+    .workflow-v2-edge-row { grid-template-columns: minmax(0, 1fr) 100px minmax(0, 1fr) 44px; align-items: center; }
+    .workflow-v2-edge-panel select, .workflow-v2-edge-panel input, .workflow-v2-inline-form input, .workflow-v2-inline-form select { width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+    .workflow-v2-inspector-block { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .workflow-v2-inspector-block h3 { margin: 0; font-size: 13px; }
+    .workflow-v2-schema-fields, .workflow-v2-tool-list { display: grid; gap: 6px; }
+    .workflow-v2-check { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
     .workflow-zoom-indicator { position: sticky; left: 10px; bottom: 10px; z-index: 4; display: inline-flex; margin: 0 0 10px 10px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: rgba(248,250,252,.92); color: var(--muted); font-size: 11px; font-weight: 700; pointer-events: none; }
     .workflow-edges { position: absolute; inset: 0 auto auto 0; overflow: visible; pointer-events: auto; }
     .workflow-edge-line { stroke: #64748b; stroke-width: 2; marker-end: url(#workflow-edge-arrow); pointer-events: none; }

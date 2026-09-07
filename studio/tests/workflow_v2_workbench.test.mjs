@@ -26,10 +26,33 @@ test("T02 V2 workbench exposes editable canvas state and basic inspector selecti
   assert.deepEqual(view.nodeLibrary.items.map((node) => node.type), ["agent", "condition", "workflow", "end"]);
   assert.deepEqual(view.canvas.nodes.find((node) => node.id === "agent-1").position, { x: 60, y: 80 });
   assert.deepEqual(view.canvas.edges, [
-    { source: "START", target: "agent-1", id: "0:START->agent-1" },
-    { source: "agent-1", target: "end-2", id: "1:agent-1->end-2" },
+    { source: "START", target: "agent-1", id: "0:START->agent-1", label: "success" },
+    { source: "agent-1", target: "end-2", id: "1:agent-1->end-2", label: "success" },
   ]);
   assert.equal(view.nodeConfig.selectedNodeId, "agent-1");
+});
+
+test("T02 V2 workbench exposes handles and editable edge controls for condition branches", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({ workflowDefinition: conditionWorkbenchWorkflowDefinition() });
+
+  let view = workbench.view();
+  assert.deepEqual(view.canvas.nodes.find((node) => node.id === "route").handles.outputs.map((handle) => handle.id), ["technical", "default"]);
+  assert.deepEqual(view.canvas.edges.find((edge) => edge.source === "route" && edge.sourceHandle === "technical").label, "technical");
+  assert.equal(view.edgeConfig.sources.some((source) => source.id === "START"), true);
+  assert.equal(view.edgeConfig.targets.some((target) => target.id === "END"), true);
+
+  const added = workbench.connectCanvasEdge("route", "business-agent", { sourceHandle: "business" });
+  assert.equal(added.edge.label, "business");
+
+  const updated = workbench.updateCanvasEdge(added.edge.id, { sourceHandle: "fallback" });
+  view = workbench.view();
+  assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "business"), false);
+  assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "fallback" && edge.target === "business-agent"), true);
+
+  workbench.removeCanvasEdge(updated.edge.id);
+  view = workbench.view();
+  assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "fallback"), false);
 });
 
 test("T02 V2 workbench validates locally and with backend authority", async () => {

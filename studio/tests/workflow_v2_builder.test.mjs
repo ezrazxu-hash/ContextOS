@@ -43,6 +43,26 @@ test("T02 V2 builder blocks obvious invalid canvas connections", async () => {
   assert.throws(() => builder.connect("agent-1", "missing"), /existing workflow nodes/);
 });
 
+test("T02 V2 builder updates and deletes condition branch edges by id", async () => {
+  const { createWorkflowV2Builder } = await import(moduleUrl("src/features/workflow-v2/WorkflowV2Builder.js"));
+  const builder = createWorkflowV2Builder();
+  builder.addNode({ id: "route", type: "condition" });
+  builder.addNode({ id: "technical-agent", type: "agent" });
+  builder.addNode({ id: "fallback-agent", type: "agent" });
+  builder.addNode({ id: "end-1", type: "end" });
+
+  builder.connect("route", "technical-agent", { sourceHandle: "technical" });
+  builder.updateEdge("0:route->technical-agent", { target: "fallback-agent", sourceHandle: "default" });
+
+  assert.deepEqual(builder.view().edges, [
+    { source: "route", target: "fallback-agent", sourceHandle: "default" },
+  ]);
+
+  builder.removeEdge("0:route->fallback-agent");
+
+  assert.deepEqual(builder.view().edges, []);
+});
+
 test("T03 V2 builder edits agent execution policy and protects nested config state", async () => {
   const { createWorkflowV2Builder } = await import(moduleUrl("src/features/workflow-v2/WorkflowV2Builder.js"));
   const builder = createWorkflowV2Builder();

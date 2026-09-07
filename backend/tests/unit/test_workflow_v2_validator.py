@@ -257,6 +257,43 @@ class WorkflowV2DefinitionValidatorTests(unittest.TestCase):
         self.assertEqual(result["errors"][0]["code"], "condition_operator_type_mismatch")
         self.assertEqual(result["errors"][0]["field"], "nodes[1].config.branches[0].operator")
 
+    def test_rejects_condition_branch_without_matching_graph_edge_handle(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    agent_node(
+                        config={
+                            "instruction": "Classify the user request.",
+                            "visibility": "visible",
+                            "outputSchema": {"type": "object", "properties": {"category": {"type": "string"}}},
+                            "toolPolicy": {"mode": "disabled"},
+                        }
+                    ),
+                    {
+                        "id": "condition-1",
+                        "type": "condition",
+                        "config": {
+                            "branches": [
+                                {"handle": "technical", "source": {"nodeId": "agent-1", "path": ["category"]}, "operator": "equals", "value": "technical"},
+                            ],
+                        },
+                    },
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[
+                    {"source": "START", "target": "agent-1"},
+                    {"source": "agent-1", "target": "condition-1"},
+                    {"source": "condition-1", "target": "end-1", "sourceHandle": "default"},
+                ],
+            )
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["errors"][0]["code"], "condition_branch_edge_missing")
+        self.assertEqual(result["errors"][0]["field"], "nodes[1].config.branches[0].handle")
+
     def test_rejects_workflow_ref_missing_required_input_and_type_mismatch(self) -> None:
         from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
         from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator

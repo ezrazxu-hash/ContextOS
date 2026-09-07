@@ -491,10 +491,10 @@ def _run_condition_node(node: dict[str, Any], definition: dict[str, Any], node_o
             field = f"{source_node_id}.{'.'.join(path)}" if path else source_node_id
             return _condition_failure(node, steps, "CONDITION_FIELD_NOT_FOUND", f"Condition source field not found: {field}", field=field)
         if _condition_matches(resolved["value"], str(branch.get("operator", "equals")), branch.get("value")):
-            target = str(branch.get("target") or _edge_target(definition, str(node["id"]), handle))
+            target = str(_edge_target(definition, str(node["id"]), handle) or branch.get("target") or "")
             data = {"branch": handle, "target": target}
             return {"ok": True, "target": target, "nodeResult": {"nodeId": node["id"], "status": "succeeded", "data": data}, "steps": [*steps, {"type": "condition_result", "branch": handle, "target": target}]}
-    target = str(config.get("defaultTarget") or config.get("default_target") or _edge_target(definition, str(node["id"]), "default"))
+    target = str(_edge_target(definition, str(node["id"]), "default") or config.get("defaultTarget") or config.get("default_target") or "")
     data = {"branch": "default", "target": target}
     return {"ok": True, "target": target, "nodeResult": {"nodeId": node["id"], "status": "succeeded", "data": data}, "steps": [*steps, {"type": "condition_result", "branch": "default", "target": target}]}
 

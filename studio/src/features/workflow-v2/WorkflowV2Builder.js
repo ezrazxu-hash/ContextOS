@@ -86,6 +86,34 @@ export function createWorkflowV2Builder(initialDefinition = null) {
       });
       return this.view();
     },
+    updateEdge(edgeId, patch) {
+      const edgeIndex = state.edges.findIndex((edge, index) => edgeMatchesId(edge, index, edgeId));
+      if (edgeIndex < 0) {
+        throw new Error(`Unknown workflow edge: ${edgeId}`);
+      }
+      const current = state.edges[edgeIndex];
+      const next = {
+        ...current,
+        ...deepClone(patch ?? {}),
+      };
+      if (!next.sourceHandle) {
+        delete next.sourceHandle;
+      }
+      const issue = validateConnection(state, next.source, next.target);
+      if (issue) {
+        throw new Error(issue.message);
+      }
+      state.edges[edgeIndex] = next;
+      return this.view();
+    },
+    removeEdge(edgeId) {
+      const originalCount = state.edges.length;
+      state.edges = state.edges.filter((edge, index) => !edgeMatchesId(edge, index, edgeId));
+      if (state.edges.length === originalCount) {
+        throw new Error(`Unknown workflow edge: ${edgeId}`);
+      }
+      return this.view();
+    },
     removeNode(nodeId) {
       state.nodes = state.nodes.filter((node) => node.id !== nodeId);
       state.edges = state.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
@@ -151,6 +179,10 @@ function cloneNode(node) {
 
 function cloneEdge(edge) {
   return { ...edge };
+}
+
+function edgeMatchesId(edge, index, edgeId) {
+  return `${index}:${edge.source}->${edge.target}` === edgeId;
 }
 
 function normalizeAgentConfig(config) {

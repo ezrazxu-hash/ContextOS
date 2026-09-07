@@ -94,6 +94,7 @@ class WorkflowV2DefinitionValidator:
         for source, outgoing in outgoing_by_source.items():
             if len(outgoing) > 1:
                 errors.append(_issue("multiple_success_edges", "edges", f"Node {source} has multiple success edges", node_id=source))
+        errors.extend(_validate_condition_branch_edges(nodes, condition_handles))
 
         return {"valid": len(errors) == 0, "errors": errors, "warnings": []}
 
@@ -193,6 +194,26 @@ def _validate_condition_node(
             continue
         if not _condition_operator_matches_schema(branch.get("operator"), source_schema):
             errors.append(_issue("condition_operator_type_mismatch", f"nodes[{index}].config.branches[{branch_index}].operator", f"Condition operator is not compatible with source field type: {branch.get('operator')}", node_id=str(node.get("id") or "")))
+    return errors
+
+
+def _validate_condition_branch_edges(nodes: list[Any], condition_handles: dict[str, set[str]]) -> list[dict[str, object]]:
+    errors: list[dict[str, object]] = []
+    for node_index, node in enumerate(nodes):
+        if not isinstance(node, dict) or node.get("type") != "condition":
+            continue
+        node_id = str(node.get("id") or "")
+        config = node.get("config", {})
+        branches = config.get("branches", []) if isinstance(config, dict) else []
+        if not isinstance(branches, list):
+            continue
+        edge_handles = condition_handles.get(node_id, set())
+        for branch_index, branch in enumerate(branches):
+            if not isinstance(branch, dict):
+                continue
+            handle = str(branch.get("handle", branch.get("id", "")))
+            if handle and handle not in edge_handles:
+                errors.append(_issue("condition_branch_edge_missing", f"nodes[{node_index}].config.branches[{branch_index}].handle", f"Condition branch has no matching graph edge: {handle}", node_id=node_id))
     return errors
 
 

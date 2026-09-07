@@ -2476,6 +2476,8 @@ Legacy routes
   - 新增并发布可运行 V2 示例 `agent-workflow-v2-draft`：覆盖 Agent、Condition、End、Tool Policy、分支连线、发布和运行；前端默认 starter 与后端 seed 保持一致。
   - 前端删除 Legacy Workflow editor/builder/manifest/node registry/canvas adapter 及对应 Legacy 单测；主 Workflow route、动作处理和页面默认值均收敛到 Agent Workflow V2。
   - 运行时清理边界：保留 `backend/src/contextos/runtime/agent/legacy_runtime.py` 作为仍被 Chat/Agent/Template 相关测试覆盖的共享业务 runtime，不作为 Workflow V1 页面或 Workflow V1 HTTP 运行入口暴露。
+  - 2026-09-07 V2 可配置/可连线补强：前端 V2 画布显示 Graph Edge layer、节点输出 handle 和 Edge 编辑面板，支持新增、修改和删除普通 edge / Condition branch edge；Agent Inspector 补齐 Name、Description、Instruction、Output Schema Builder、Workflow Tools 和 Tool Policy 入口。
+  - 2026-09-07 Condition 控制流收敛：后端 Runtime 优先按 Graph Edge `sourceHandle` 决定 Condition 下一节点，仅保留旧 `branch.target/defaultTarget` 作为兼容 fallback；Validator 新增 `condition_branch_edge_missing`，拒绝有 branch 配置但缺少 matching graph edge 的定义。
   - T20 初始阻塞记录（历史）：当时未删除 Legacy 代码；仅更新本实施记录。原因：清理前置条件尚未全部满足，按 T20 Prompt 必须停止，不得强删。
   - 为支持 T20 的全量后端验证，最小修正既有安全 invariant 命名问题：`backend/src/contextos/api/routes/templates.py` 内部 handler 从 `delete_template*` 重命名为 `remove_template*`，`backend/src/contextos/api/server.py` 与 `backend/tests/unit/test_template_service_api.py` 同步更新；HTTP DELETE 路由与业务行为不变。
   - 新增 `legacy_cleanup_readiness_report_from_runtime_store()`，可从目标环境 `JsonRuntimeStore` / `runtime-state.json` 的 `templates` 与 `workflow_v2_definitions` 集合生成 T20 清理前置条件报告；外部调用者退役和备份验证默认仍为 `false`，必须由目标环境确认后显式传入。
@@ -2488,6 +2490,9 @@ Legacy routes
   - 2026-09-06 T20 最终后端：`python -m unittest discover backend/tests`，496 tests OK；`python -m compileall -q backend/src/contextos/workflow_v2 backend/src/contextos/api` 通过。
   - 2026-09-06 T20 契约清理：`node --test tests/open_source_spike.test.mjs`，6 tests pass；Runtime API contract 不再声明 `POST /api/templates/{id}/run`，改为 `POST /api/workflows/{id}/run`。
   - 2026-09-06 T20 浏览器 smoke：`npm run dev:mock` 后打开 `http://localhost:5173/workflow`，默认标题为 `Agent Workflow V2`，节点为 `analyze-request` / `route-category` / `technical-answer` / `business-answer` / `general-answer` / `generate-final` / `end-1`；Validate/Publish/Run 均成功，Run panel 显示 `Status: succeeded` 与输出 `{"message":"OK"}`，console/page error 为空。
+  - 2026-09-07 V2 连线/配置目标测试：`node --test tests/workflow_v2_builder.test.mjs tests/workflow_v2_workbench.test.mjs tests/main_entry_workflow_contract.test.mjs`，36 tests pass；`python -m unittest backend.tests.unit.test_workflow_v2_validator backend.tests.unit.test_workflow_v2_condition_runtime`，16 tests OK。
+  - 2026-09-07 全量验证：`node --test tests/*.test.mjs`，250 tests pass；`python -m unittest discover backend/tests`，498 tests OK；`npm run lint` 通过；`npm run build` 通过；`python -m compileall -q backend/src/contextos/workflow_v2 backend/src/contextos/api` 通过。
+  - 2026-09-07 浏览器 smoke：复用 `http://localhost:5173/workflow`，确认 edge layer、edge panel、节点 handle、Agent Name/Description/Instruction、Output Schema、Tool Policy 均可见；新增 edge 后 9 -> 10，删除后 10 -> 9，console/page error 为空。
   - 2026-09-06 RED：`node --test tests/workflow_v2_entry.test.mjs tests/main_entry_workflow_contract.test.mjs` 初始失败于缺少 `createStarterWorkflowV2Definition`、主入口未使用 starter、未暴露 V2 Agent instruction 控件。
   - 2026-09-06 GREEN：`node --test tests/workflow_v2_entry.test.mjs tests/main_entry_workflow_contract.test.mjs`，16 tests pass。
   - 2026-09-06 V2 workbench revision rebase：`node --test tests/workflow_v2_workbench.test.mjs`，26 tests pass；组合回归 `node --test tests/main_entry_workflow_contract.test.mjs tests/workflow_v2_workbench.test.mjs`，37 tests pass。
