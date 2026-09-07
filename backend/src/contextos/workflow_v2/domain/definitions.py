@@ -22,10 +22,27 @@ def create_workflow_v2_definition(payload: dict[str, object]) -> dict[str, objec
         "description": str(payload.get("description") or ""),
         "schemaVersion": 2,
         "nodes": deepcopy(payload.get("nodes")) if isinstance(payload.get("nodes"), list) else [],
-        "edges": deepcopy(payload.get("edges")) if isinstance(payload.get("edges"), list) else [],
+        "edges": _deduplicate_edges(payload.get("edges")) if isinstance(payload.get("edges"), list) else [],
     })
     definition.setdefault("inputSchema", None)
     definition.setdefault("outputSchema", None)
     definition.setdefault("tools", [])
     definition.setdefault("runtimeLimits", {})
     return definition
+
+
+def _deduplicate_edges(edges: list[object]) -> list[object]:
+    seen: set[tuple[str, str]] = set()
+    deduplicated: list[object] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            deduplicated.append(deepcopy(edge))
+            continue
+        source = str(edge.get("source", edge.get("from", "")))
+        target = str(edge.get("target", edge.get("to", "")))
+        key = (source, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(deepcopy(edge))
+    return deduplicated

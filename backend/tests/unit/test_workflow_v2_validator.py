@@ -67,6 +67,31 @@ class WorkflowV2DefinitionValidatorTests(unittest.TestCase):
         self.assertIn("multiple_success_edges", [error["code"] for error in result["errors"]])
         self.assertIn("duplicate_condition_branch", [error["code"] for error in result["errors"]])
 
+    def test_rejects_duplicate_same_direction_edges(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    {"id": "agent-a", "type": "agent"},
+                    {"id": "agent-b", "type": "agent"},
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[
+                    {"source": "START", "target": "agent-a"},
+                    {"source": "agent-a", "target": "agent-b"},
+                    {"source": "agent-a", "target": "agent-b", "sourceHandle": "retry"},
+                    {"source": "agent-b", "target": "agent-a"},
+                    {"source": "agent-b", "target": "end-1"},
+                ],
+            )
+        )
+
+        self.assertFalse(result["valid"])
+        duplicate_errors = [error for error in result["errors"] if error["code"] == "duplicate_edge"]
+        self.assertEqual(len(duplicate_errors), 1)
+        self.assertEqual(duplicate_errors[0]["field"], "edges[2]")
+
     def test_rejects_invalid_agent_node_execution_policy_fields(self) -> None:
         from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
 

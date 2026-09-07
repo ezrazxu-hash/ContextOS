@@ -63,6 +63,45 @@ test("T02 V2 builder updates and deletes condition branch edges by id", async ()
   assert.deepEqual(builder.view().edges, []);
 });
 
+test("Workflow V2 builder blocks duplicate same-direction edges without blocking reverse direction", async () => {
+  const { createWorkflowV2Builder } = await import(moduleUrl("src/features/workflow-v2/WorkflowV2Builder.js"));
+  const builder = createWorkflowV2Builder();
+  builder.addNode({ id: "agent-a", type: "agent" });
+  builder.addNode({ id: "agent-b", type: "agent" });
+
+  builder.connect("agent-a", "agent-b");
+
+  assert.throws(() => builder.connect("agent-a", "agent-b"), /Duplicate workflow edge/);
+  assert.equal(builder.view().edges.length, 1);
+
+  builder.connect("agent-b", "agent-a");
+
+  assert.deepEqual(builder.view().edges, [
+    { source: "agent-a", target: "agent-b" },
+    { source: "agent-b", target: "agent-a" },
+  ]);
+});
+
+test("Workflow V2 builder deduplicates historical same-direction edges on load", async () => {
+  const { createWorkflowV2Builder } = await import(moduleUrl("src/features/workflow-v2/WorkflowV2Builder.js"));
+  const builder = createWorkflowV2Builder({
+    nodes: [
+      { id: "agent-a", type: "agent" },
+      { id: "agent-b", type: "agent" },
+    ],
+    edges: [
+      { source: "agent-a", target: "agent-b" },
+      { source: "agent-a", target: "agent-b", sourceHandle: "retry" },
+      { source: "agent-b", target: "agent-a" },
+    ],
+  });
+
+  assert.deepEqual(builder.view().edges, [
+    { source: "agent-a", target: "agent-b" },
+    { source: "agent-b", target: "agent-a" },
+  ]);
+});
+
 test("T03 V2 builder edits agent execution policy and protects nested config state", async () => {
   const { createWorkflowV2Builder } = await import(moduleUrl("src/features/workflow-v2/WorkflowV2Builder.js"));
   const builder = createWorkflowV2Builder();

@@ -25,7 +25,7 @@ test("T02 V2 workbench exposes editable canvas state and basic inspector selecti
   assert.equal(view.kind, "agent-workflow-v2-workbench");
   assert.deepEqual(view.nodeLibrary.items.map((node) => node.type), ["agent", "condition", "workflow", "end"]);
   assert.deepEqual(view.canvas.nodes.find((node) => node.id === "agent-1").position, { x: 60, y: 80 });
-  assert.deepEqual(view.canvas.edges, [
+  assert.deepEqual(view.canvas.edges.map(({ source, target, id, label }) => ({ source, target, id, label })), [
     { source: "START", target: "agent-1", id: "0:START->agent-1", label: "success" },
     { source: "agent-1", target: "end-2", id: "1:agent-1->end-2", label: "success" },
   ]);
@@ -42,17 +42,46 @@ test("T02 V2 workbench exposes handles and editable edge controls for condition 
   assert.equal(view.edgeConfig.sources.some((source) => source.id === "START"), true);
   assert.equal(view.edgeConfig.targets.some((target) => target.id === "END"), true);
 
-  const added = workbench.connectCanvasEdge("route", "business-agent", { sourceHandle: "business" });
+  const added = workbench.connectCanvasEdge("route", "end-1", { sourceHandle: "business" });
   assert.equal(added.edge.label, "business");
 
   const updated = workbench.updateCanvasEdge(added.edge.id, { sourceHandle: "fallback" });
   view = workbench.view();
   assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "business"), false);
-  assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "fallback" && edge.target === "business-agent"), true);
+  assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "fallback" && edge.target === "end-1"), true);
 
   workbench.removeCanvasEdge(updated.edge.id);
   view = workbench.view();
   assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "fallback"), false);
+});
+
+test("Workflow V2 workbench routes edges around nodes that sit between source and target", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "route-around-node",
+      name: "Route Around Node",
+      schemaVersion: 2,
+      revision: 1,
+      nodes: [
+        { id: "agent-a", type: "agent", position: { x: 20, y: 80 } },
+        { id: "agent-c", type: "agent", position: { x: 210, y: 80 } },
+        { id: "agent-b", type: "agent", position: { x: 400, y: 80 } },
+      ],
+      edges: [{ source: "agent-a", target: "agent-b" }],
+    },
+  });
+
+  const routed = workbench.view().canvas.edges[0];
+
+  assert.match(routed.path, /V/);
+  assert.deepEqual(routed.blockedByNodeIds, ["agent-c"]);
+
+  workbench.moveCanvasNode("agent-c", { x: 210, y: 230 });
+
+  const clear = workbench.view().canvas.edges[0];
+  assert.notEqual(clear.path, routed.path);
+  assert.deepEqual(clear.blockedByNodeIds, []);
 });
 
 test("T02 V2 workbench validates locally and with backend authority", async () => {

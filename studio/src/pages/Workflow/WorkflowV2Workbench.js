@@ -103,7 +103,7 @@ export function createWorkflowV2Workbench(options = {}) {
     connectCanvasEdge(source, target, options = {}) {
       const view = builder.connect(source, target, options);
       syncDefinition(state, builder);
-      return { accepted: true, edge: canvasEdge(view.edges[view.edges.length - 1], view.edges.length - 1) };
+      return { accepted: true, edge: canvasEdge(view.edges[view.edges.length - 1], view.edges.length - 1, view.nodes) };
     },
     updateCanvasEdge(edgeId, patch) {
       const view = builder.updateEdge(edgeId, patch);
@@ -111,7 +111,7 @@ export function createWorkflowV2Workbench(options = {}) {
       refreshReferenceIssues(state);
       const edgeIndex = edgeIndexFromId(edgeId);
       const edge = edgeIndex >= 0 ? view.edges[edgeIndex] ?? null : null;
-      return { edge: edge ? canvasEdge(edge, edgeIndex) : null };
+      return { edge: edge ? canvasEdge(edge, edgeIndex, view.nodes) : null };
     },
     removeCanvasEdge(edgeId) {
       const view = builder.removeEdge(edgeId);
@@ -276,7 +276,7 @@ export function createWorkflowV2Workbench(options = {}) {
             handles: nodeHandles(node, workflowView.edges),
             runStatus: nodeRunStatusById.get(node.id) ?? "pending",
           })),
-          edges: workflowView.edges.map(canvasEdge),
+          edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, workflowView.nodes)),
         },
         edgeConfig: edgeConfigView(workflowView),
         nodeConfig: {
@@ -582,8 +582,16 @@ function workflowToolIds(definition) {
   return definition.tools.map((tool) => (typeof tool === "string" ? tool : tool.id)).filter(Boolean);
 }
 
-function canvasEdge(edge, index) {
-  return { ...edge, id: `${index}:${edge.source}->${edge.target}`, label: edge.sourceHandle || "success" };
+function canvasEdge(edge, index, nodes = []) {
+  const route = routeCanvasEdge(edge, nodes);
+  return {
+    ...edge,
+    id: `${index}:${edge.source}->${edge.target}`,
+    label: edge.sourceHandle || "success",
+    path: route.path,
+    labelPosition: route.labelPosition,
+    blockedByNodeIds: route.blockedByNodeIds,
+  };
 }
 
 function edgeIndexFromId(edgeId) {
@@ -604,8 +612,64 @@ function edgeConfigView(workflowView) {
       ...nodes.map((node) => ({ id: node.id, label: node.config?.name || node.id, type: node.type })),
       { id: "END", label: "END", type: "end" },
     ],
-    edges: workflowView.edges.map(canvasEdge),
+    edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, nodes)),
   };
+}
+
+const WORKFLOW_V2_NODE_WIDTH = 148;
+const WORKFLOW_V2_NODE_HEIGHT = 68;
+const WORKFLOW_V2_EDGE_PADDING = 28;
+
+function routeCanvasEdge(edge, nodes) {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const source = nodesById.get(edge.source);
+  const target = nodesById.get(edge.target);
+  const start = source
+    ? { x: Number(source.position?.x ?? 0) + WORKFLOW_V2_NODE_WIDTH, y: Number(source.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2 }
+    : { x: 20, y: Number(target?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 };
+  const end = target
+    ? { x: Number(target.position?.x ?? 0), y: Number(target.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2 }
+    : { x: Number(source?.position?.x ?? 20) + WORKFLOW_V2_NODE_WIDTH + 62, y: Number(source?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 };
+  const blockers = edgeBlockers(edge, nodes, start, end);
+
+  if (blockers.length === 0) {
+    return {
+      path: `M ${Math.round(start.x)} ${Math.round(start.y)} L ${Math.round(end.x)} ${Math.round(end.y)}`,
+      labelPosition: { x: Math.round((start.x + end.x) / 2), y: Math.round((start.y + end.y) / 2) - 6 },
+      blockedByNodeIds: [],
+    };
+  }
+
+  const minTop = Math.min(start.y, end.y, ...blockers.map((node) => Number(node.position?.y ?? 0)));
+  const below = Math.max(start.y, end.y, ...blockers.map((node) => Number(node.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT)) + WORKFLOW_V2_EDGE_PADDING;
+  const routeY = minTop - WORKFLOW_V2_EDGE_PADDING > 12 ? minTop - WORKFLOW_V2_EDGE_PADDING : below;
+  const direction = end.x >= start.x ? 1 : -1;
+  const turnA = start.x + direction * 32;
+  const turnB = end.x - direction * 32;
+  return {
+    path: `M ${Math.round(start.x)} ${Math.round(start.y)} H ${Math.round(turnA)} V ${Math.round(routeY)} H ${Math.round(turnB)} V ${Math.round(end.y)} H ${Math.round(end.x)}`,
+    labelPosition: { x: Math.round((turnA + turnB) / 2), y: Math.round(routeY) - 6 },
+    blockedByNodeIds: blockers.map((node) => node.id),
+  };
+}
+
+function edgeBlockers(edge, nodes, start, end) {
+  const left = Math.min(start.x, end.x);
+  const right = Math.max(start.x, end.x);
+  return nodes.filter((node) => {
+    if (node.id === edge.source || node.id === edge.target) {
+      return false;
+    }
+    const nodeLeft = Number(node.position?.x ?? 0);
+    const nodeRight = nodeLeft + WORKFLOW_V2_NODE_WIDTH;
+    const nodeTop = Number(node.position?.y ?? 0);
+    const nodeBottom = nodeTop + WORKFLOW_V2_NODE_HEIGHT;
+    if (nodeRight <= left || nodeLeft >= right) {
+      return false;
+    }
+    const crossesVerticalRange = start.y >= nodeTop && start.y <= nodeBottom || end.y >= nodeTop && end.y <= nodeBottom;
+    return crossesVerticalRange;
+  });
 }
 
 function nodeHandles(node, edges = []) {

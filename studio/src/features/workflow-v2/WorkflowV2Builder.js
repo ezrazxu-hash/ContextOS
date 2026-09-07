@@ -3,7 +3,7 @@ const V2_NODE_TYPES = ["agent", "condition", "workflow", "end"];
 export function createWorkflowV2Builder(initialDefinition = null) {
   const state = {
     nodes: Array.isArray(initialDefinition?.nodes) ? initialDefinition.nodes.map(cloneNode) : [],
-    edges: Array.isArray(initialDefinition?.edges) ? initialDefinition.edges.map(cloneEdge) : [],
+    edges: Array.isArray(initialDefinition?.edges) ? deduplicateEdges(initialDefinition.edges).map(cloneEdge) : [],
   };
 
   return {
@@ -75,7 +75,7 @@ export function createWorkflowV2Builder(initialDefinition = null) {
       return this.view();
     },
     connect(source, target, options = {}) {
-      const issue = validateConnection(state, source, target);
+      const issue = validateConnection(state, source, target) ?? validateDuplicateEdge(state, source, target);
       if (issue) {
         throw new Error(issue.message);
       }
@@ -99,7 +99,7 @@ export function createWorkflowV2Builder(initialDefinition = null) {
       if (!next.sourceHandle) {
         delete next.sourceHandle;
       }
-      const issue = validateConnection(state, next.source, next.target);
+      const issue = validateConnection(state, next.source, next.target) ?? validateDuplicateEdge(state, next.source, next.target, edgeIndex);
       if (issue) {
         throw new Error(issue.message);
       }
@@ -124,11 +124,17 @@ export function createWorkflowV2Builder(initialDefinition = null) {
     },
     validate() {
       const errors = [];
+      const seenEdges = new Set();
       state.edges.forEach((edge, index) => {
         const issue = validateConnection(state, edge.source, edge.target);
         if (issue) {
           errors.push({ ...issue, field: `edges[${index}]` });
         }
+        const key = edgeKey(edge.source, edge.target);
+        if (seenEdges.has(key)) {
+          errors.push({ code: "duplicate_edge", field: `edges[${index}]`, message: `Duplicate workflow edge: ${edge.source} -> ${edge.target}` });
+        }
+        seenEdges.add(key);
       });
       if (!state.nodes.some((node) => node.type === "end")) {
         errors.push({ code: "missing_end_node", field: "nodes", message: "At least one End node is required" });
@@ -166,6 +172,32 @@ function validateConnection(state, source, target) {
     return { code: "unknown_node", message: "Edge endpoints must reference existing workflow nodes" };
   }
   return null;
+}
+
+function validateDuplicateEdge(state, source, target, ignoredIndex = -1) {
+  const duplicate = state.edges.some((edge, index) => index !== ignoredIndex && edgeKey(edge.source, edge.target) === edgeKey(source, target));
+  return duplicate ? { code: "duplicate_edge", message: `Duplicate workflow edge: ${source} -> ${target}` } : null;
+}
+
+function deduplicateEdges(edges) {
+  const seen = new Set();
+  const result = [];
+  edges.forEach((edge) => {
+    if (!edge || typeof edge !== "object") {
+      return;
+    }
+    const key = edgeKey(edge.source ?? edge.from, edge.target ?? edge.to);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    result.push(edge);
+  });
+  return result;
+}
+
+function edgeKey(source, target) {
+  return `${String(source)}->${String(target)}`;
 }
 
 function cloneNode(node) {

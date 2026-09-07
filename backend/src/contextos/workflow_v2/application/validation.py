@@ -59,6 +59,7 @@ class WorkflowV2DefinitionValidator:
 
         outgoing_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
         condition_handles: dict[str, set[str]] = defaultdict(set)
+        edge_pairs: set[tuple[str, str]] = set()
         valid_node_ids = set(node_by_id) | BOUNDARY_NODES
         for index, edge in enumerate(edges):
             if not isinstance(edge, dict):
@@ -75,6 +76,10 @@ class WorkflowV2DefinitionValidator:
                 errors.append(_issue("self_connection", field, "Workflow node cannot connect to itself"))
             if target == "START":
                 errors.append(_issue("start_has_incoming_edge", f"{field}.target", "START cannot have incoming edges"))
+            pair = (source, target)
+            if pair in edge_pairs:
+                errors.append(_issue("duplicate_edge", field, f"Duplicate workflow edge: {source} -> {target}"))
+            edge_pairs.add(pair)
 
             source_node = node_by_id.get(source)
             if source == "END" or source_node and source_node.get("type") == "end":

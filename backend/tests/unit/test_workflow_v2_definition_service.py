@@ -54,6 +54,30 @@ class WorkflowV2DefinitionServiceTests(unittest.TestCase):
             self.assertEqual(reloaded.get("support-flow")["revision"], 2)
             self.assertEqual(reloaded.get("support-flow")["edges"], [{"source": "START", "target": "END"}])
 
+    def test_definition_service_deduplicates_historical_same_direction_edges(self) -> None:
+        from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+
+        service = WorkflowV2DefinitionService()
+        created = service.create(
+            {
+                "id": "support-flow",
+                "name": "Support Flow",
+                "nodes": [{"id": "agent-a", "type": "agent"}, {"id": "agent-b", "type": "agent"}],
+                "edges": [
+                    {"source": "agent-a", "target": "agent-b"},
+                    {"source": "agent-a", "target": "agent-b", "sourceHandle": "retry"},
+                    {"source": "agent-b", "target": "agent-a"},
+                ],
+            }
+        )
+
+        service.save_draft("support-flow", {**created, "edges": created["edges"] + [{"source": "agent-a", "target": "agent-b"}]}, expected_revision=1)
+
+        self.assertEqual(
+            service.get("support-flow")["edges"],
+            [{"source": "agent-a", "target": "agent-b"}, {"source": "agent-b", "target": "agent-a"}],
+        )
+
     def test_publish_creates_immutable_versions_and_draft_can_keep_changing(self) -> None:
         from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
         from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
