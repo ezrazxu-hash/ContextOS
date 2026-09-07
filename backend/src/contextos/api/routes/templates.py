@@ -1,7 +1,6 @@
 from typing import Callable
 
 from contextos.api.errors import ApiError
-from contextos.runtime.graph.runtime_context import RuntimeContext
 from contextos.template.extension.registry import ExtensionRegistry
 from contextos.template.service import TemplateNodeNotFound, TemplateNotFound, TemplateService
 from contextos.template.validator.validator import ManifestValidationError
@@ -106,31 +105,6 @@ def post_template_compile(
         return {"status": 200, "body": {"compiled": True}}
     except ManifestValidationError as exc:
         return {"status": 400, "body": _validation_error(exc)}
-
-
-def post_template_run(
-    template_id: str,
-    payload: dict[str, object],
-    template_service: TemplateService,
-    *,
-    extension_registry: ExtensionRegistry,
-    tool_registry: ToolRegistry,
-    provider_call: Callable[[], object] | None = None,
-) -> dict[str, object]:
-    del provider_call
-    runtime_context = RuntimeContext(
-        session_id=str(payload["session_id"]),
-        timeline_id=str(payload["timeline_id"]),
-        trace_id=str(payload["trace_id"]),
-    )
-    graph_state = template_service.run(
-        template_id,
-        graph_state=dict(payload.get("graph_state", {})),
-        runtime_context=runtime_context,
-        extension_registry=extension_registry,
-        tool_registry=tool_registry,
-    )
-    return {"status": 200, "body": {"graph_state": graph_state}}
 
 
 def _validation_error(error: ManifestValidationError | None) -> dict[str, object]:

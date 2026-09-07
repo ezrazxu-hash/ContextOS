@@ -121,28 +121,6 @@ class TemplateServiceApiTests(unittest.TestCase):
         self.assertEqual(response["status"], 400)
         self.assertEqual(response["body"]["error"]["field_path"], "graph.nodes[0].type")
 
-    def test_run_uses_compiler_graph_and_does_not_call_provider(self) -> None:
-        from contextos.api.routes.templates import post_template, post_template_run
-        from contextos.template.service import TemplateService
-
-        service = TemplateService()
-        post_template(manifest_payload(), service)
-        extension_registry, tool_registry = registries()
-        provider_calls: list[str] = []
-
-        response = post_template_run(
-            "research-agent",
-            {"graph_state": {}, "session_id": "session-1", "timeline_id": "timeline-1", "trace_id": "trace-1"},
-            service,
-            extension_registry=extension_registry,
-            tool_registry=tool_registry,
-            provider_call=lambda: provider_calls.append("provider"),
-        )
-
-        self.assertEqual(response["status"], 200)
-        self.assertEqual(response["body"]["graph_state"]["answer"], "ok")
-        self.assertEqual(provider_calls, [])
-
     def test_agent_draft_save_load_and_overwrite_does_not_modify_active_manifest(self) -> None:
         from contextos.api.routes.agents import get_agent_draft, put_agent_draft
         from contextos.api.routes.templates import post_template

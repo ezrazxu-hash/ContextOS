@@ -27,7 +27,7 @@ export const runtimeApiContract = {
     "PUT /api/templates/{id}",
     "POST /api/templates/{id}/validate",
     "POST /api/templates/{id}/compile",
-    "POST /api/templates/{id}/run",
+    "POST /api/workflows/{id}/run",
     "GET /api/sessions/{id}/trace",
     "GET /api/checkpoints/{id}",
     "GET /api/checkpoints/{id}/state",

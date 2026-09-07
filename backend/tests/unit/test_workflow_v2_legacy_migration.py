@@ -61,7 +61,10 @@ class WorkflowV2LegacyMigrationTests(unittest.TestCase):
         self.assertEqual(report["legacyWorkflows"][0]["id"], "legacy-support")
         self.assertEqual(report["legacyWorkflows"][0]["nodeTypes"], ["prompt", "tool"])
         self.assertEqual(report["v2LegacyRuntimeDependencies"], [])
-        self.assertTrue(report["deprecatedPaths"])
+        deprecated_paths = {entry["path"] for entry in report["deprecatedPaths"]}
+        self.assertNotIn("studio/src/pages/Workflow/WorkflowWorkbench.js", deprecated_paths)
+        self.assertNotIn("backend/src/contextos/api/server.py", deprecated_paths)
+        self.assertIn("backend/src/contextos/runtime/agent/legacy_runtime.py", deprecated_paths)
 
     def test_current_workflow_v2_package_has_no_legacy_runtime_dependency(self):
         from contextos.workflow_v2.migration import legacy_cleanup_readiness_report

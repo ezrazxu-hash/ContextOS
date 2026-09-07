@@ -3,44 +3,37 @@ from __future__ import annotations
 from copy import deepcopy
 
 
-_V1_NODE_CATALOG: list[dict[str, object]] = [
+_V2_NODE_CATALOG: list[dict[str, object]] = [
     {
-        "type": "prompt",
-        "display_name": "PROMPT",
-        "ports": {"inputs": ["in"], "outputs": ["out"]},
-        "required_fields": ["config.template"],
-        "connectable": {"incoming": True, "outgoing": True},
-    },
-    {
-        "type": "llm",
-        "display_name": "LLM",
-        "ports": {"inputs": ["in"], "outputs": ["out"]},
-        "required_fields": ["config.model", "config.prompt"],
-        "connectable": {"incoming": True, "outgoing": True},
-    },
-    {
-        "type": "tool",
-        "display_name": "TOOL",
-        "ports": {"inputs": ["in"], "outputs": ["out"]},
-        "required_fields": ["config.tool_name"],
+        "type": "agent",
+        "display_name": "AGENT",
+        "ports": {"inputs": ["in"], "outputs": ["success"]},
+        "required_fields": ["config.instruction"],
         "connectable": {"incoming": True, "outgoing": True},
     },
     {
         "type": "condition",
         "display_name": "CONDITION",
-        "ports": {"inputs": ["in"], "outputs": ["true", "false"]},
-        "required_fields": ["config.source", "config.operator"],
+        "ports": {"inputs": ["in"], "outputs": ["branch", "default"]},
+        "required_fields": ["config.branches"],
         "connectable": {"incoming": True, "outgoing": True},
     },
     {
-        "type": "output",
-        "display_name": "OUTPUT",
-        "ports": {"inputs": ["in"], "outputs": ["out"]},
-        "required_fields": ["config.source"],
+        "type": "workflow",
+        "display_name": "WORKFLOW",
+        "ports": {"inputs": ["in"], "outputs": ["success"]},
+        "required_fields": ["config.workflowId", "config.version"],
         "connectable": {"incoming": True, "outgoing": True},
+    },
+    {
+        "type": "end",
+        "display_name": "END",
+        "ports": {"inputs": ["in"], "outputs": []},
+        "required_fields": [],
+        "connectable": {"incoming": True, "outgoing": False},
     },
 ]
 
 
 def list_node_catalog() -> list[dict[str, object]]:
-    return deepcopy(_V1_NODE_CATALOG)
+    return deepcopy(_V2_NODE_CATALOG)

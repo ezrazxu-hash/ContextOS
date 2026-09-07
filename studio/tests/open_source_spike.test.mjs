@@ -54,7 +54,8 @@ test("UI00-T00 disabling third-party spikes does not change Runtime API contract
     "replay",
   ]);
   assert.ok(runtimeApiContract.endpoints.includes("GET /api/sessions/{id}/context"));
-  assert.ok(runtimeApiContract.endpoints.includes("POST /api/templates/{id}/run"));
+  assert.ok(runtimeApiContract.endpoints.includes("POST /api/workflows/{id}/run"));
+  assert.equal(runtimeApiContract.endpoints.includes("POST /api/templates/{id}/run"), false);
 
   for (const candidate of thirdPartyCandidates) {
     assert.equal(candidate.runtimeFactOwner, false, `${candidate.packageName} must not own Runtime facts`);

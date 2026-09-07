@@ -19,7 +19,7 @@ from contextos.api.routes.messages import patch_message, soft_delete_message
 from contextos.api.routes.runtime_snapshot import get_runtime_snapshot
 from contextos.api.routes.chat import iter_chat_event_frames
 from contextos.api.routes.sessions import get_session, get_session_messages, list_sessions, patch_session, patch_session_agent, post_session, post_session_message, remove_session
-from contextos.api.routes.templates import get_template, list_templates, patch_template, post_template, post_template_compile, post_template_run, post_template_validate, put_template, remove_template, remove_template_node
+from contextos.api.routes.templates import get_template, list_templates, patch_template, post_template, post_template_compile, post_template_validate, put_template, remove_template, remove_template_node
 from contextos.api.routes.tools import list_tools
 from contextos.api.routes.timelines import activate_timeline, list_session_timelines, patch_timeline, remove_timeline
 from contextos.api.routes.workflow import get_node_catalog
@@ -757,18 +757,6 @@ def _handler_factory(services: RuntimeServices) -> type[BaseHTTPRequestHandler]:
                 self._send_route_response(
                     post_template_compile(
                         segments[2],
-                        services.template_service,
-                        extension_registry=services.extension_registry,
-                        tool_registry=services.tool_registry,
-                    )
-                )
-                return
-
-            if len(segments) == 4 and segments[:2] == ["api", "templates"] and segments[3] == "run":
-                self._send_route_response(
-                    post_template_run(
-                        segments[2],
-                        payload,
                         services.template_service,
                         extension_registry=services.extension_registry,
                         tool_registry=services.tool_registry,

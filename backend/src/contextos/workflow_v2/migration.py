@@ -12,22 +12,10 @@ from contextos.runtime.persistence.json_store import JsonRuntimeStore
 
 DEPRECATED_LEGACY_PATHS = [
     {
-        "id": "legacy-workflow-editor",
-        "path": "studio/src/pages/Workflow/WorkflowWorkbench.js",
-        "status": "deprecated",
-        "cleanup": "Remove after no user-visible page depends on the V1 editor.",
-    },
-    {
         "id": "legacy-chat-runtime",
         "path": "backend/src/contextos/runtime/agent/legacy_runtime.py",
         "status": "deprecated",
         "cleanup": "Remove after V1 workflow data and external V1 callers are retired.",
-    },
-    {
-        "id": "legacy-workflow-api",
-        "path": "backend/src/contextos/api/server.py",
-        "status": "deprecated",
-        "cleanup": "Remove legacy workflow endpoints only after rollback window closes.",
     },
 ]
 

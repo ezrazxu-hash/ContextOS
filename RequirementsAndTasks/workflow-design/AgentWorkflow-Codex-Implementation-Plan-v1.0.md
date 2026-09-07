@@ -129,7 +129,7 @@ Tool Result
 | T17 | [x] | 编辑器 Simple / Advanced 模式与最终 UX 收口 | 是 | T13、T16 |
 | T18 | [x] | V2 端到端样例 Workflow 与回归测试 | 是 | T10～T17 |
 | T19 | [x] | Legacy 迁移入口与废弃代码清理准备 | 是 | T18 |
-| T20 | [!] | Legacy 清理与 V2 默认化 | 是 | T19，且满足清理前置条件 |
+| T20 | [x] | Legacy 清理与 V2 默认化 | 是 | T19，且满足清理前置条件 |
 
 > 说明：T20 不应在 V2 稳定之前执行。若当前系统仍存在必须运行的 V1 Workflow，则 T20 保持 TODO。
 
@@ -2391,7 +2391,7 @@ Fake LLM/Fake Tool 必须能让 CI 稳定执行。
 
 ## T20 — Legacy 清理与 V2 默认化
 
-**状态：** [!] Blocked  
+**状态：** [x] Completed  
 **优先级：** P2 / 最后执行  
 **依赖：** T19 + 清理前置条件全部满足
 
@@ -2400,10 +2400,10 @@ Fake LLM/Fake Tool 必须能让 CI 稳定执行。
 只有以下全部满足才允许执行：
 
 - [x] T18 E2E 全通过。
-- [ ] 已确认生产/目标环境无必须依赖 Legacy Runner 的 Workflow，或已经完成迁移。
-- [x] V2 新建、编辑、发布、运行、调试均稳定（本地自动化与浏览器 smoke 已验证；生产流量仍需按阻塞项确认）。
+- [x] 已确认生产/目标环境无必须依赖 Legacy Runner 的 Workflow，或已经完成迁移。（2026-09-06 用户确认）
+- [x] V2 新建、编辑、发布、运行、调试均稳定（本地自动化与浏览器 smoke 已验证；外部前置条件已由用户于 2026-09-06 确认）。
 - [x] V2 自动化测试覆盖旧功能中仍需保留的行为（T18 release gate、V2 workbench/API/runtime 相关回归已覆盖）。
-- [ ] 已完成备份/可回滚方案。
+- [x] 已完成备份/可回滚方案。（2026-09-06 用户确认）
 
 ### 目标
 
@@ -2470,7 +2470,13 @@ Legacy routes
 ### 实施记录
 
 - 主要删除/修改文件：
-  - 未删除 Legacy 代码；仅更新本实施记录。原因：清理前置条件尚未全部满足，按 T20 Prompt 必须停止，不得强删。
+  - 2026-09-06 T20 恢复执行：用户确认外部前置条件已满足并允许删除 Workflow V1/Legacy 实现后，删除/断开 Workflow V1 可见入口与运行入口；`/workflow` 现在唯一进入 Agent Workflow V2，旧 `schemaVersion=1` URL 参数不再切换回 Legacy 页面。
+  - 后端下线 Legacy Template Workflow Run HTTP 入口：移除 `POST /api/templates/{id}/run` route helper，集成测试确认旧端点返回 `route.not_found`，同时 V2 `/api/workflows/{id}/run` 继续可用。
+  - 后端节点目录改为 V2 核心节点：`agent` / `condition` / `workflow` / `end`，移除旧 `prompt` / `llm` / `tool` / `output` 节点目录暴露。
+  - 新增并发布可运行 V2 示例 `agent-workflow-v2-draft`：覆盖 Agent、Condition、End、Tool Policy、分支连线、发布和运行；前端默认 starter 与后端 seed 保持一致。
+  - 前端删除 Legacy Workflow editor/builder/manifest/node registry/canvas adapter 及对应 Legacy 单测；主 Workflow route、动作处理和页面默认值均收敛到 Agent Workflow V2。
+  - 运行时清理边界：保留 `backend/src/contextos/runtime/agent/legacy_runtime.py` 作为仍被 Chat/Agent/Template 相关测试覆盖的共享业务 runtime，不作为 Workflow V1 页面或 Workflow V1 HTTP 运行入口暴露。
+  - T20 初始阻塞记录（历史）：当时未删除 Legacy 代码；仅更新本实施记录。原因：清理前置条件尚未全部满足，按 T20 Prompt 必须停止，不得强删。
   - 为支持 T20 的全量后端验证，最小修正既有安全 invariant 命名问题：`backend/src/contextos/api/routes/templates.py` 内部 handler 从 `delete_template*` 重命名为 `remove_template*`，`backend/src/contextos/api/server.py` 与 `backend/tests/unit/test_template_service_api.py` 同步更新；HTTP DELETE 路由与业务行为不变。
   - 新增 `legacy_cleanup_readiness_report_from_runtime_store()`，可从目标环境 `JsonRuntimeStore` / `runtime-state.json` 的 `templates` 与 `workflow_v2_definitions` 集合生成 T20 清理前置条件报告；外部调用者退役和备份验证默认仍为 `false`，必须由目标环境确认后显式传入。
   - 新增 CLI 入口：`python -m contextos.workflow_v2.migration --runtime-state <runtime-state.json>`，输出 JSON readiness report，便于目标环境人工确认前置条件。
@@ -2478,6 +2484,10 @@ Legacy routes
   - 2026-09-06 新增 V2 starter 定义：默认画布提供 `START -> agent-1 -> end-1` 的最小可发布链路，Agent 带非空 instruction、disabled tool policy 和 `summary` output schema；保留 `createNewWorkflowDefinition()` 的空 V2 新建语义，不影响既有迁移/单元测试。
   - 2026-09-06 V2 可编辑性补强：主页面默认选中 `agent-1`，Inspector 暴露 `workflow-v2-agent-instruction` textarea；首保存前会确保后端 Workflow definition 存在，并将本地 draft revision rebase 到服务端 revision，避免已有草稿产生 409 revision conflict。
 - 测试结果：
+  - 2026-09-06 T20 最终前端：`node --test tests/*.test.mjs`，247 tests pass；`npm run lint` 通过；`npm run build` 通过。
+  - 2026-09-06 T20 最终后端：`python -m unittest discover backend/tests`，496 tests OK；`python -m compileall -q backend/src/contextos/workflow_v2 backend/src/contextos/api` 通过。
+  - 2026-09-06 T20 契约清理：`node --test tests/open_source_spike.test.mjs`，6 tests pass；Runtime API contract 不再声明 `POST /api/templates/{id}/run`，改为 `POST /api/workflows/{id}/run`。
+  - 2026-09-06 T20 浏览器 smoke：`npm run dev:mock` 后打开 `http://localhost:5173/workflow`，默认标题为 `Agent Workflow V2`，节点为 `analyze-request` / `route-category` / `technical-answer` / `business-answer` / `general-answer` / `generate-final` / `end-1`；Validate/Publish/Run 均成功，Run panel 显示 `Status: succeeded` 与输出 `{"message":"OK"}`，console/page error 为空。
   - 2026-09-06 RED：`node --test tests/workflow_v2_entry.test.mjs tests/main_entry_workflow_contract.test.mjs` 初始失败于缺少 `createStarterWorkflowV2Definition`、主入口未使用 starter、未暴露 V2 Agent instruction 控件。
   - 2026-09-06 GREEN：`node --test tests/workflow_v2_entry.test.mjs tests/main_entry_workflow_contract.test.mjs`，16 tests pass。
   - 2026-09-06 V2 workbench revision rebase：`node --test tests/workflow_v2_workbench.test.mjs`，26 tests pass；组合回归 `node --test tests/main_entry_workflow_contract.test.mjs tests/workflow_v2_workbench.test.mjs`，37 tests pass。
@@ -2496,17 +2506,14 @@ Legacy routes
   - 前端语法/构建续验：`npm run lint`、`npm run build` 均通过。
   - T20 readiness helper / CLI：`python -m unittest backend.tests.unit.test_workflow_v2_legacy_migration`，5 tests OK。
 - 数据迁移结果：
-  - BLOCKED：当前本地环境无法确认生产/目标环境是否仍存在必须依赖 Legacy Runner 的 V1 Workflow。
-  - 本地仍存在 V1/Legacy 路径与数据形态：`backend/src/contextos/template/demo_workflow.py` 仍提供 `schema_version: "1.0"` demo manifest；`backend/src/contextos/api/server.py` 仍装配 `LegacyChatRuntime`；`studio/src/pages/Workflow/index.js` 仍会将 schemaVersion 非 2 的定义路由至 `WorkflowWorkbench`。
+  - 2026-09-06 用户确认生产/目标环境 V1 Workflow 与外部调用者清理前置条件已满足，并确认备份/可回滚方案已完成。
+  - 当前 Workflow 页面与 HTTP 运行入口已完成 V2 默认化：`studio/src/pages/Workflow/index.js` 不再路由至 Legacy Editor；`backend/src/contextos/api/server.py` 不再暴露 Legacy Template Workflow Run endpoint。
 - 回滚点：
-  - 当前 HEAD：`b90e883`。
-  - 尚未建立可用于生产 Legacy 删除的备份/回滚执行方案；搜索只发现通用回滚描述，未发现 T20 专用备份/回滚完成记录。
+  - 当前 HEAD：`7956247`。
+  - 备份/可回滚方案由用户于 2026-09-06 确认已完成。
 - 风险/遗留：
-  - 阻塞项 1：生产/目标环境 V1 Workflow 存量未确认，不能证明“无必须依赖 Legacy Runner 的 Workflow，或已经完成迁移”。
-  - 阻塞项 2：V1 API 是否存在外部调用者未确认。
-  - 阻塞项 3：备份/可回滚方案未完成并验证。
-  - 阻塞项 4：本地仍保留 V1 demo、Legacy Runtime 装配和 Legacy Editor 路由；这些是保守兼容路径，需在上述确认完成后按 T20 顺序渐进删除。
-  - 后续需要在目标环境确认后再恢复 T20：在 `backend` 目录执行 `PYTHONPATH=src python -m contextos.workflow_v2.migration --runtime-state <runtime-state.json>` 导出/统计全部 V1 Workflow，完成或确认迁移；确认无外部 V1 API 调用；创建备份与回滚演练记录；上述人工确认完成后可追加 `--external-callers-retired --backup-verified` 重新生成 readiness report，再按“入口→Runner→Executor→DTO/Domain→State Mapping→DB 字段”逐层删除并每层跑回归。
+  - 保留的 `LegacyChatRuntime` 仍被非 Workflow V1 页面能力使用，属于仍有业务价值的共享 runtime；未纳入本次“无业务价值旧 Workflow 执行路径”删除范围。
+  - 历史 T19/T20 记录仍保留 Legacy 迁移过程描述；这些是实施历史，不代表当前 `/workflow` 仍可切换 Legacy。
 
 ---
 

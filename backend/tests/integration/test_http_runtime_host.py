@@ -138,6 +138,20 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(validation["valid"], True)
         self.assertGreaterEqual(len(versions["versions"]), 1)
 
+    def test_host_no_longer_exposes_legacy_template_workflow_run_endpoint(self) -> None:
+        from contextos.api.server import create_http_runtime_host
+
+        host = create_http_runtime_host(host="127.0.0.1", port=0)
+        host.start()
+        try:
+            legacy_error = post_json_error(f"{host.url}/api/templates/research-agent/run", {"input": "hello"})
+            v2_definition = get_json(f"{host.url}/api/workflows/agent-workflow-v2-draft")
+        finally:
+            host.stop()
+
+        self.assertEqual(legacy_error["body"]["error"]["code"], "route.not_found")
+        self.assertEqual(v2_definition["schemaVersion"], 2)
+
     def test_host_round_trips_workflow_v2_draft_with_revision_conflict(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
@@ -996,7 +1010,7 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(response["status"], 404)
         self.assertEqual(response["body"]["error"]["code"], "session.not_found")
 
-    def test_host_persists_lists_and_runs_workflow_templates(self) -> None:
+    def test_host_persists_and_lists_templates_without_legacy_workflow_run(self) -> None:
         from contextos.api.server import create_http_runtime_host
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1013,7 +1027,7 @@ class HttpRuntimeHostTests(unittest.TestCase):
                 created = post_json(f"{host.url}/api/templates", payload)
                 listed = get_json(f"{host.url}/api/templates")
                 loaded = get_json(f"{host.url}/api/templates/workflow-http")
-                run = post_json(
+                legacy_run = post_json_error(
                     f"{host.url}/api/templates/workflow-http/run",
                     {"graph_state": {}, "session_id": "session-1", "timeline_id": "timeline-1", "trace_id": "trace-1"},
                 )
@@ -1030,8 +1044,7 @@ class HttpRuntimeHostTests(unittest.TestCase):
         self.assertEqual(created["id"], "workflow-http")
         self.assertIn("workflow-http", [item["id"] for item in listed["templates"]])
         self.assertEqual(loaded["manifest"]["graph"]["nodes"][0]["position"], {"x": 240, "y": 180})
-        self.assertEqual(run["graph_state"]["answer"], "hello workflow")
-        self.assertEqual(run["graph_state"]["visited_nodes"], ["writer"])
+        self.assertEqual(legacy_run["body"]["error"]["code"], "route.not_found")
         self.assertIn("workflow-http", [item["id"] for item in reloaded_list["templates"]])
 
     def test_host_serves_workflow_node_catalog(self) -> None:
@@ -1046,9 +1059,9 @@ class HttpRuntimeHostTests(unittest.TestCase):
 
         self.assertEqual(
             [node["type"] for node in catalog["nodes"]],
-            ["prompt", "llm", "tool", "condition", "output"],
+            ["agent", "condition", "workflow", "end"],
         )
-        self.assertFalse({"START", "END", "agent", "router", "subgraph", "memory", "custom"} & {node["type"] for node in catalog["nodes"]})
+        self.assertFalse({"prompt", "llm", "tool", "output", "router", "subgraph", "memory", "custom"} & {node["type"] for node in catalog["nodes"]})
 
     def test_host_saves_and_loads_agent_draft_without_modifying_template_manifest(self) -> None:
         from contextos.api.server import create_http_runtime_host
