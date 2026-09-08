@@ -587,9 +587,12 @@ function canvasEdge(edge, index, nodes = []) {
   return {
     ...edge,
     id: `${index}:${edge.source}->${edge.target}`,
-    label: edge.sourceHandle || "success",
+    label: workflowEdgeLabel(edge, nodes),
     path: route.path,
     labelPosition: route.labelPosition,
+    sourcePoint: route.sourcePoint,
+    endPoint: route.endPoint,
+    markerEnd: "url(#workflow-v2-arrowhead)",
     blockedByNodeIds: route.blockedByNodeIds,
   };
 }
@@ -624,11 +627,20 @@ function routeCanvasEdge(edge, nodes) {
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const source = nodesById.get(edge.source);
   const target = nodesById.get(edge.target);
+  const sourceCenterX = Number(source?.position?.x ?? 0) + WORKFLOW_V2_NODE_WIDTH / 2;
+  const targetCenterX = Number(target?.position?.x ?? sourceCenterX + 220) + WORKFLOW_V2_NODE_WIDTH / 2;
+  const leftToRight = sourceCenterX <= targetCenterX;
   const start = source
-    ? { x: Number(source.position?.x ?? 0) + WORKFLOW_V2_NODE_WIDTH, y: Number(source.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2 }
+    ? {
+        x: Number(source.position?.x ?? 0) + (leftToRight ? WORKFLOW_V2_NODE_WIDTH + 8 : -8),
+        y: Number(source.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2,
+      }
     : { x: 20, y: Number(target?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 };
   const end = target
-    ? { x: Number(target.position?.x ?? 0), y: Number(target.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2 }
+    ? {
+        x: Number(target.position?.x ?? 0) + (leftToRight ? -8 : WORKFLOW_V2_NODE_WIDTH + 8),
+        y: Number(target.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2,
+      }
     : { x: Number(source?.position?.x ?? 20) + WORKFLOW_V2_NODE_WIDTH + 62, y: Number(source?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 };
   const blockers = edgeBlockers(edge, nodes, start, end);
 
@@ -636,6 +648,8 @@ function routeCanvasEdge(edge, nodes) {
     return {
       path: `M ${Math.round(start.x)} ${Math.round(start.y)} L ${Math.round(end.x)} ${Math.round(end.y)}`,
       labelPosition: { x: Math.round((start.x + end.x) / 2), y: Math.round((start.y + end.y) / 2) - 6 },
+      sourcePoint: { x: Math.round(start.x), y: Math.round(start.y) },
+      endPoint: { x: Math.round(end.x), y: Math.round(end.y) },
       blockedByNodeIds: [],
     };
   }
@@ -649,8 +663,61 @@ function routeCanvasEdge(edge, nodes) {
   return {
     path: `M ${Math.round(start.x)} ${Math.round(start.y)} H ${Math.round(turnA)} V ${Math.round(routeY)} H ${Math.round(turnB)} V ${Math.round(end.y)} H ${Math.round(end.x)}`,
     labelPosition: { x: Math.round((turnA + turnB) / 2), y: Math.round(routeY) - 6 },
+    sourcePoint: { x: Math.round(start.x), y: Math.round(start.y) },
+    endPoint: { x: Math.round(end.x), y: Math.round(end.y) },
     blockedByNodeIds: blockers.map((node) => node.id),
   };
+}
+
+function workflowEdgeLabel(edge, nodes) {
+  const handle = String(edge.sourceHandle ?? "");
+  const sourceNode = nodes.find((node) => node.id === edge.source);
+  if (sourceNode?.type !== "condition") {
+    return handle || "success";
+  }
+  if (handle === "default") {
+    return "default";
+  }
+  const branch = Array.isArray(sourceNode.config?.branches)
+    ? sourceNode.config.branches.find((item) => String(item?.handle ?? item?.id ?? "") === handle)
+    : null;
+  if (!branch) {
+    return handle ? `branch: ${handle}` : "branch";
+  }
+  const path = Array.isArray(branch.source?.path) && branch.source.path.length > 0
+    ? branch.source.path.map(String).join(".")
+    : "value";
+  return `${path} ${operatorLabel(branch.operator)} ${formatBranchValue(branch.value)}`;
+}
+
+function operatorLabel(operator) {
+  return {
+    equals: "==",
+    notEquals: "!=",
+    greaterThan: ">",
+    greaterThanOrEqual: ">=",
+    lessThan: "<",
+    lessThanOrEqual: "<=",
+    contains: "contains",
+    startsWith: "starts with",
+    endsWith: "ends with",
+    exists: "exists",
+    notExists: "not exists",
+    in: "in",
+    notIn: "not in",
+    isEmpty: "is empty",
+    isNotEmpty: "is not empty",
+  }[operator] ?? String(operator ?? "==");
+}
+
+function formatBranchValue(value) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
 }
 
 function edgeBlockers(edge, nodes, start, end) {

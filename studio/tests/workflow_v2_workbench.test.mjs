@@ -38,12 +38,12 @@ test("T02 V2 workbench exposes handles and editable edge controls for condition 
 
   let view = workbench.view();
   assert.deepEqual(view.canvas.nodes.find((node) => node.id === "route").handles.outputs.map((handle) => handle.id), ["technical", "default"]);
-  assert.deepEqual(view.canvas.edges.find((edge) => edge.source === "route" && edge.sourceHandle === "technical").label, "technical");
+  assert.deepEqual(view.canvas.edges.find((edge) => edge.source === "route" && edge.sourceHandle === "technical").label, "branch: technical");
   assert.equal(view.edgeConfig.sources.some((source) => source.id === "START"), true);
   assert.equal(view.edgeConfig.targets.some((target) => target.id === "END"), true);
 
   const added = workbench.connectCanvasEdge("route", "end-1", { sourceHandle: "business" });
-  assert.equal(added.edge.label, "business");
+  assert.equal(added.edge.label, "branch: business");
 
   const updated = workbench.updateCanvasEdge(added.edge.id, { sourceHandle: "fallback" });
   view = workbench.view();
@@ -53,6 +53,21 @@ test("T02 V2 workbench exposes handles and editable edge controls for condition 
   workbench.removeCanvasEdge(updated.edge.id);
   view = workbench.view();
   assert.equal(view.canvas.edges.some((edge) => edge.source === "route" && edge.sourceHandle === "fallback"), false);
+});
+
+test("Workflow V2 workbench presents condition branch handles as clear branch conditions", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const { createStarterWorkflowV2Definition } = await import(moduleUrl("src/pages/Workflow/index.js"));
+  const workbench = createWorkflowV2Workbench({ workflowDefinition: createStarterWorkflowV2Definition() });
+  const view = workbench.view();
+
+  const technical = view.canvas.edges.find((edge) => edge.source === "route-category" && edge.sourceHandle === "technical");
+  const business = view.canvas.edges.find((edge) => edge.source === "route-category" && edge.sourceHandle === "business");
+  const success = view.canvas.edges.find((edge) => edge.source === "analyze-request" && edge.target === "route-category");
+
+  assert.equal(technical.label, "category == technical");
+  assert.equal(business.label, "category == business");
+  assert.equal(success.label, "success");
 });
 
 test("Workflow V2 workbench routes edges around nodes that sit between source and target", async () => {
@@ -82,6 +97,29 @@ test("Workflow V2 workbench routes edges around nodes that sit between source an
   const clear = workbench.view().canvas.edges[0];
   assert.notEqual(clear.path, routed.path);
   assert.deepEqual(clear.blockedByNodeIds, []);
+});
+
+test("Workflow V2 workbench exposes directed arrow marker and keeps target endpoint outside the node", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "arrow-flow",
+      name: "Arrow Flow",
+      schemaVersion: 2,
+      revision: 1,
+      nodes: [
+        { id: "agent-a", type: "agent", position: { x: 20, y: 80 } },
+        { id: "agent-b", type: "agent", position: { x: 300, y: 80 } },
+      ],
+      edges: [{ source: "agent-a", target: "agent-b" }],
+    },
+  });
+
+  const edge = workbench.view().canvas.edges[0];
+
+  assert.equal(edge.markerEnd, "url(#workflow-v2-arrowhead)");
+  assert.ok(edge.endPoint.x < 300);
+  assert.ok(edge.sourcePoint.x > 20 + 148);
 });
 
 test("T02 V2 workbench validates locally and with backend authority", async () => {

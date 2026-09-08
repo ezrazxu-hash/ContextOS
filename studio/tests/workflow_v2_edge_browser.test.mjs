@@ -52,6 +52,46 @@ test("Workflow V2 deleting edges updates in place without resetting scroll or re
   }
 });
 
+test("Workflow V2 success handle click does not create edges and manual connect renders arrows", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.waitForSelector("[data-testid='workflow-v2-edge-panel']");
+    const initialEdges = await edgeRowCount(page);
+
+    await page.locator("[data-action='add-workflow-v2-node'][data-node-type='agent']").click();
+    await page.locator("[data-source-id='agent-1'][data-source-handle='']").click();
+
+    assert.equal(await edgeRowCount(page), initialEdges);
+    assert.equal(await page.locator("[data-testid='workflow-v2-edge-source']").inputValue(), "agent-1");
+
+    await page.locator("[data-testid='workflow-v2-edge-target']").selectOption("end-1");
+    await page.locator("[data-action='connect-workflow-v2-edge']").click();
+
+    assert.equal(await edgeRowCount(page), initialEdges + 1);
+    assert.ok(await page.locator("[data-testid='workflow-v2-edge-layer'] marker#workflow-v2-arrowhead").count() > 0);
+    assert.ok(await page.locator("[data-testid='workflow-v2-edge-layer'] path[marker-end='url(#workflow-v2-arrowhead)']").count() > 0);
+
+    await page.locator("[data-testid='workflow-v2-edge-target']").selectOption("end-1");
+    await page.locator("[data-action='connect-workflow-v2-edge']").click();
+
+    assert.equal(await edgeRowCount(page), initialEdges + 1);
+
+    await page.locator("[data-testid='workflow-v2-save']").click();
+    await page.reload();
+    await page.waitForSelector("[data-testid='workflow-v2-edge-panel']");
+
+    assert.ok(await page.locator("[data-testid='workflow-v2-edge-layer'] marker#workflow-v2-arrowhead").count() > 0);
+    assert.ok(await page.locator("[data-testid='workflow-v2-edge-layer'] path[marker-end='url(#workflow-v2-arrowhead)']").count() > 0);
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
 async function workbenchState(page) {
   return page.evaluate(() => {
     const surface = document.querySelector("[data-testid='workflow-v2-workbench']");
@@ -63,6 +103,10 @@ async function workbenchState(page) {
       canvasProbe: canvas.dataset.probeCanvas,
     };
   });
+}
+
+async function edgeRowCount(page) {
+  return page.locator(".workflow-v2-edge-row").count();
 }
 
 async function startStudio() {

@@ -523,12 +523,21 @@ function renderWorkflowV2Edges(view) {
     const labelY = edge.labelPosition?.y ?? Math.round((start.y + end.y) / 2) - 6;
     return `
       <g data-edge-id="${escapeAttr(edge.id)}">
-        <path d="${escapeAttr(edge.path ?? fallbackPath)}"></path>
+        <path d="${escapeAttr(edge.path ?? fallbackPath)}" marker-end="${escapeAttr(edge.markerEnd ?? "url(#workflow-v2-arrowhead)")}" class="workflow-v2-edge-path"></path>
         <text x="${labelX}" y="${labelY}">${escapeHtml(edge.label ?? "")}</text>
       </g>
     `;
   }).join("");
-  return `<svg class="workflow-v2-edge-layer" data-testid="workflow-v2-edge-layer" aria-hidden="true">${lines}</svg>`;
+  return `
+    <svg class="workflow-v2-edge-layer" data-testid="workflow-v2-edge-layer" aria-hidden="true">
+      <defs>
+        <marker id="workflow-v2-arrowhead" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto" markerUnits="strokeWidth">
+          <path d="M 0 0 L 8 4 L 0 8 z" class="workflow-v2-arrowhead-shape"></path>
+        </marker>
+      </defs>
+      ${lines}
+    </svg>
+  `;
 }
 
 function renderWorkflowV2Handles(node) {
@@ -1936,13 +1945,7 @@ async function handleAction(event) {
       render();
     }
   } else if (action === "connect-workflow-v2-edge-from-handle") {
-    try {
-      connectWorkflowV2Edge(target.dataset.sourceId, target.dataset.sourceHandle ?? "");
-      render();
-    } catch (error) {
-      state.toast = { tone: "error", text: error.message };
-      render();
-    }
+    stageWorkflowV2EdgeFromHandle(target.dataset.sourceId, target.dataset.sourceHandle ?? "");
   } else if (action === "delete-workflow-v2-edge") {
     event.stopPropagation();
     workflowV2Workbench().removeCanvasEdge(target.dataset.edgeId);
@@ -1970,6 +1973,17 @@ function connectWorkflowV2Edge(source, sourceHandle = "", target = "") {
   const view = workflowV2Workbench().view();
   const resolvedTarget = target || view.edgeConfig.targets.find((item) => item.id !== source)?.id || "END";
   workflowV2Workbench().connectCanvasEdge(source, resolvedTarget, sourceHandle ? { sourceHandle } : {});
+}
+
+function stageWorkflowV2EdgeFromHandle(source, sourceHandle = "") {
+  const sourceInput = document.querySelector("[data-testid='workflow-v2-edge-source']");
+  const handleInput = document.querySelector("[data-testid='workflow-v2-edge-handle']");
+  if (sourceInput && source) {
+    sourceInput.value = source;
+  }
+  if (handleInput) {
+    handleInput.value = sourceHandle;
+  }
 }
 
 function addWorkflowV2OutputFieldFromForm() {
@@ -3706,7 +3720,8 @@ function styleTag() {
     .workflow-v2-canvas .graph-canvas-content { min-height: 560px; position: relative; }
     .workflow-v2-empty { margin: 18px; color: var(--muted); }
     .workflow-v2-edge-layer { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 560px; overflow: visible; pointer-events: none; z-index: 1; }
-    .workflow-v2-edge-layer path { fill: none; stroke: #64748b; stroke-width: 2; }
+    .workflow-v2-edge-path { fill: none; stroke: #64748b; stroke-width: 2; }
+    .workflow-v2-arrowhead-shape { fill: #64748b; stroke: none; }
     .workflow-v2-edge-layer text { fill: #334155; font-size: 11px; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; }
     .workflow-v2-node-wrap { position: absolute; z-index: 2; display: grid; grid-template-columns: minmax(132px, max-content) auto; align-items: center; gap: 8px; }
     .workflow-v2-node { position: relative; min-width: 132px; }
