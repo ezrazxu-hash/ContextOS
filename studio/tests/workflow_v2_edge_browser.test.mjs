@@ -105,7 +105,7 @@ test("Workflow V2 node inspectors are type-specific and agent fields are editabl
     assert.equal(await page.locator("[data-action='add-workflow-v2-node'][data-node-type='tool']").count(), 0);
     assert.equal(await page.locator("[data-action='add-workflow-v2-node'][data-node-type='output']").count(), 0);
 
-    await page.locator("[data-node-id='analyze-request']").click();
+    await page.locator("button.workflow-v2-node[data-node-id='analyze-request']").click();
     await page.waitForSelector("[data-testid='workflow-v2-agent-goal']");
     assert.ok(await page.locator("[data-testid='workflow-v2-output-schema-builder']").isVisible());
     assert.ok(await page.locator("[data-testid='workflow-v2-tool-policy']").isVisible());
@@ -191,6 +191,30 @@ test("Workflow V2 condition output handles stay aligned to the right of the node
     });
 
     assert.deepEqual(geometry.handles.map((handle) => Math.round(handle.left >= geometry.node.right)), [1, 1, 1]);
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
+test("Workflow V2 run shows the selected node execution trace and real payload sections", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.locator("[data-testid='workflow-v2-publish']").click();
+    await page.locator("[data-testid='workflow-v2-run-input']").fill("trace request");
+    await page.locator("[data-testid='workflow-v2-run']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-execution-trace']");
+
+    assert.ok(await page.locator("[data-testid='workflow-v2-execution-row']").count() > 0);
+    await page.locator("button.workflow-v2-node[data-node-id='analyze-request']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-node-execution-analyze-request']");
+    assert.equal(await page.locator("[data-testid='workflow-v2-node-input']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-node-output']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-node-status-analyze-request']").textContent(), "Success");
   } finally {
     await browser.close();
     await studio.close();

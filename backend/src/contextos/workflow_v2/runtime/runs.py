@@ -280,7 +280,7 @@ def _execute_single_agent_run(
         if node.get("type") == "condition":
             result = _run_condition_node(node, definition, node_outputs)
             node_results.append(result["nodeResult"])
-            execution_details["nodes"].append({"nodeId": node_id, "steps": result["steps"]})
+            execution_details["nodes"].append({"nodeId": node_id, "input": result.get("input"), "steps": result["steps"]})
             if not result["ok"]:
                 _emit_event(events, run_id, node_id, "NodeFailed", {"status": "failed", "error": deepcopy(result["error"])})
                 return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, **result["error"])
@@ -303,7 +303,7 @@ def _execute_single_agent_run(
                 cancellation_token,
             )
             node_results.append(result["nodeResult"])
-            execution_details["nodes"].append({"nodeId": node_id, "steps": result["steps"]})
+            execution_details["nodes"].append({"nodeId": node_id, "input": result.get("input"), "steps": result["steps"]})
             _append_child_events(events, run_id, result.get("events", []))
             if not result["ok"]:
                 _emit_event(events, run_id, node_id, "NodeFailed", {"status": "failed", "error": deepcopy(result["error"])})
@@ -353,9 +353,10 @@ def _run_agent_node(
     cancellation_token: WorkflowV2CancellationToken | None,
 ) -> dict[str, Any]:
     tool_policy = agent_node.get("config", {}).get("toolPolicy", {"mode": "disabled"})
-    execution_details["nodes"].append({"nodeId": agent_node["id"], "steps": []})
     try:
         output_schema = agent_node.get("config", {}).get("outputSchema") or {"type": "object", "properties": {}}
+        node_input = {"messages": _provider_messages(agent_node, output_schema, message_history, tool_registry, definition)}
+        execution_details["nodes"].append({"nodeId": agent_node["id"], "input": deepcopy(node_input), "steps": []})
         called_tools: set[str] = set()
         node_artifacts: list[dict[str, Any]] = []
         raw_output = ""
@@ -405,7 +406,7 @@ def _run_agent_node(
                 if agent_artifacts:
                     assistant_message["artifacts"] = deepcopy(agent_artifacts)
                 message_history.append(assistant_message)
-                node_result = {"nodeId": agent_node["id"], "status": "succeeded", "data": parsed_data, "artifacts": deepcopy(node_artifacts)}
+                node_result = {"nodeId": agent_node["id"], "status": "succeeded", "input": deepcopy(node_input), "data": parsed_data, "artifacts": deepcopy(node_artifacts)}
                 _steps(execution_details).append({"type": "node_result", "status": "succeeded", "data": deepcopy(parsed_data), "artifacts": deepcopy(node_artifacts)})
                 return {"ok": True, "nodeResult": node_result, "output": parsed_data}
             message_history.append({"role": "assistant", "content": str(parsed.get("message", "")) if isinstance(parsed, dict) else "", "toolCalls": deepcopy(tool_calls)})
@@ -413,7 +414,7 @@ def _run_agent_node(
                 if tool_call_count >= max_tool_calls:
                     return _agent_failure(agent_node, "WORKFLOW_LIMIT_EXCEEDED", "Runtime limit exceeded: maxToolCallsPerNode", limit="maxToolCallsPerNode")
                 tool_error = _validate_tool_call(tool_call, tool_policy, tool_registry)
-                _steps(execution_details).append({"type": "tool_call", "toolCallId": tool_call["id"], "name": tool_call["name"]})
+                _steps(execution_details).append({"type": "tool_call", "toolCallId": tool_call["id"], "name": tool_call["name"], "arguments": deepcopy(tool_call["arguments"])})
                 _emit_event(events, run_id, str(agent_node["id"]), "ToolCallStarted", {"toolCallId": tool_call["id"], "name": tool_call["name"]})
                 if tool_error is not None:
                     _emit_event(events, run_id, str(agent_node["id"]), "ToolCallCompleted", {"toolCallId": tool_call["id"], "name": tool_call["name"], "status": "failed", "error": deepcopy(tool_error)})
@@ -476,6 +477,7 @@ def _run_condition_node(node: dict[str, Any], definition: dict[str, Any], node_o
     if not isinstance(branches, list):
         branches = []
     steps: list[dict[str, Any]] = []
+    evaluations: list[dict[str, Any]] = []
     for branch in branches:
         if not isinstance(branch, dict):
             continue
@@ -486,17 +488,29 @@ def _run_condition_node(node: dict[str, Any], definition: dict[str, Any], node_o
         path = [str(item) for item in source.get("path", [])] if isinstance(source.get("path", []), list) else []
         resolved = _resolve_node_output_value(node_outputs, source_node_id, path)
         handle = str(branch.get("handle", branch.get("id", "")))
-        steps.append({"type": "condition_evaluation", "branch": handle, "source": {"nodeId": source_node_id, "path": path}, "operator": branch.get("operator"), "value": branch.get("value")})
+        evaluation = {
+            "branch": handle,
+            "source": {"nodeId": source_node_id, "path": path},
+            "operator": branch.get("operator"),
+            "expectedValue": deepcopy(branch.get("value")),
+            "actualValue": deepcopy(resolved["value"]) if resolved["found"] else None,
+            "matched": False,
+        }
+        evaluations.append(evaluation)
+        steps.append({"type": "condition_evaluation", "branch": handle, "source": {"nodeId": source_node_id, "path": path}, "operator": branch.get("operator"), "value": branch.get("value"), "actualValue": evaluation["actualValue"]})
         if not resolved["found"]:
             field = f"{source_node_id}.{'.'.join(path)}" if path else source_node_id
-            return _condition_failure(node, steps, "CONDITION_FIELD_NOT_FOUND", f"Condition source field not found: {field}", field=field)
+            return _condition_failure(node, steps, "CONDITION_FIELD_NOT_FOUND", f"Condition source field not found: {field}", field=field, input_payload={"evaluations": evaluations})
         if _condition_matches(resolved["value"], str(branch.get("operator", "equals")), branch.get("value")):
+            evaluation["matched"] = True
             target = str(_edge_target(definition, str(node["id"]), handle) or branch.get("target") or "")
             data = {"branch": handle, "target": target}
-            return {"ok": True, "target": target, "nodeResult": {"nodeId": node["id"], "status": "succeeded", "data": data}, "steps": [*steps, {"type": "condition_result", "branch": handle, "target": target}]}
+            input_payload = {"evaluations": evaluations}
+            return {"ok": True, "target": target, "input": input_payload, "nodeResult": {"nodeId": node["id"], "status": "succeeded", "input": deepcopy(input_payload), "data": data}, "steps": [*steps, {"type": "condition_result", "branch": handle, "target": target}]}
     target = str(_edge_target(definition, str(node["id"]), "default") or config.get("defaultTarget") or config.get("default_target") or "")
     data = {"branch": "default", "target": target}
-    return {"ok": True, "target": target, "nodeResult": {"nodeId": node["id"], "status": "succeeded", "data": data}, "steps": [*steps, {"type": "condition_result", "branch": "default", "target": target}]}
+    input_payload = {"evaluations": evaluations}
+    return {"ok": True, "target": target, "input": input_payload, "nodeResult": {"nodeId": node["id"], "status": "succeeded", "input": deepcopy(input_payload), "data": data}, "steps": [*steps, {"type": "condition_result", "branch": "default", "target": target}]}
 
 
 def _run_workflow_ref_node(
@@ -576,6 +590,7 @@ def _run_workflow_ref_node(
     node_result = {
         "nodeId": node["id"],
         "status": "succeeded",
+        "input": deepcopy(input_payload),
         "data": data,
         "artifacts": deepcopy(child_run.get("finalResult", {}).get("artifacts", [])),
         "metadata": {
@@ -633,7 +648,7 @@ def _workflow_ref_failure(node: dict[str, Any], steps: list[dict[str, Any]], cod
         error["field"] = field
     if limit is not None:
         error["limit"] = limit
-    return {"ok": False, "nodeResult": {"nodeId": node["id"], "status": "failed", "data": None, "artifacts": [], "metadata": {}}, "error": error, "steps": [*steps, {"type": "workflow_ref_result", "status": "failed", "error": error}]}
+    return {"ok": False, "nodeResult": {"nodeId": node["id"], "status": "failed", "data": None, "error": error, "artifacts": [], "metadata": {}}, "error": error, "steps": [*steps, {"type": "workflow_ref_result", "status": "failed", "error": error}]}
 
 
 def _append_child_events(events: list[dict[str, Any]], run_id: str, child_events: Any) -> None:
@@ -748,11 +763,11 @@ def _final_result_data(binding: Any, node_outputs: dict[str, Any]) -> Any:
     return deepcopy(resolved["value"]) if resolved["found"] else None
 
 
-def _condition_failure(node: dict[str, Any], steps: list[dict[str, Any]], code: str, message: str, *, field: str | None = None) -> dict[str, Any]:
+def _condition_failure(node: dict[str, Any], steps: list[dict[str, Any]], code: str, message: str, *, field: str | None = None, input_payload: dict[str, Any] | None = None) -> dict[str, Any]:
     error: dict[str, Any] = {"code": code, "message": message}
     if field is not None:
         error["field"] = field
-    return {"ok": False, "nodeResult": {"nodeId": node["id"], "status": "failed", "data": None}, "error": error, "steps": [*steps, {"type": "condition_result", "status": "failed", "error": error}]}
+    return {"ok": False, "input": deepcopy(input_payload), "nodeResult": {"nodeId": node["id"], "status": "failed", "input": deepcopy(input_payload), "data": None, "error": error}, "error": error, "steps": [*steps, {"type": "condition_result", "status": "failed", "error": error}]}
 
 
 def _resolve_node_output_value(node_outputs: dict[str, Any], node_id: str, path: list[str]) -> dict[str, Any]:
@@ -837,7 +852,7 @@ def _agent_failure(agent_node: dict[str, Any], code: str, message: str, *, field
         error["field"] = field
     if limit is not None:
         error["limit"] = limit
-    return {"ok": False, "nodeResult": {"nodeId": agent_node["id"], "status": "failed", "data": None}, "error": error}
+    return {"ok": False, "nodeResult": {"nodeId": agent_node["id"], "status": "failed", "data": None, "error": error}, "error": error}
 
 
 def _agent_message_visible(agent_node: dict[str, Any]) -> bool:
@@ -925,7 +940,7 @@ def _append_failed_tool_result(
         error["field"] = field
     tool_message = {"role": "tool", "toolCallId": tool_call["id"], "name": tool_call["name"], "status": "failed", "error": error}
     message_history.append(tool_message)
-    _steps(execution_details).append({"type": "tool_result", "toolCallId": tool_call["id"], "name": tool_call["name"], "status": "failed", "error": error})
+    _steps(execution_details).append({"type": "tool_result", "toolCallId": tool_call["id"], "name": tool_call["name"], "arguments": deepcopy(tool_call["arguments"]), "status": "failed", "error": error})
 
 
 def _allowed_tool_names(tool_policy: Any) -> set[str]:

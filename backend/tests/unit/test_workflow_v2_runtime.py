@@ -24,6 +24,9 @@ class WorkflowV2RuntimeTests(unittest.TestCase):
         self.assertEqual(run["output"], {"summary": "Need API work"})
         self.assertEqual(run["nodeResults"][0]["nodeId"], "agent-1")
         self.assertEqual(run["nodeResults"][0]["data"], {"summary": "Need API work"})
+        execution_node = run["executionDetails"]["nodes"][0]
+        self.assertEqual(execution_node["input"]["messages"][-1], {"role": "user", "content": "Please classify this request"})
+        self.assertEqual(execution_node["steps"][-1]["data"], {"summary": "Need API work"})
         self.assertIn("First instruction", llm.calls[0][0]["content"])
         self.assertNotIn("Second instruction", str(llm.calls[0]))
 
@@ -97,6 +100,8 @@ class WorkflowV2RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(run["messages"][1]["toolCalls"][0]["id"], "call-1")
         self.assertEqual(run["messages"][2]["toolCallId"], "call-1")
+        tool_call_step = next(step for step in run["executionDetails"]["nodes"][0]["steps"] if step["type"] == "tool_call")
+        self.assertEqual(tool_call_step["arguments"], {"query": "mars"})
         self.assertEqual(
             [step["type"] for step in run["executionDetails"]["nodes"][0]["steps"]],
             ["llm_call", "tool_call", "tool_result", "llm_call", "schema_validation", "node_result"],

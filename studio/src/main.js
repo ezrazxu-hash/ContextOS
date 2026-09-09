@@ -486,8 +486,8 @@ function renderWorkflowV2CanvasBody(view) {
         ${renderWorkflowV2Edges(view)}
         ${view.canvas.nodes.length === 0 ? "<p class=\"workflow-v2-empty\">Drop or add an Agent node to start.</p>" : view.canvas.nodes.map((node) => `
           <div class="workflow-v2-node-wrap" style="left:${node.position.x}px;top:${node.position.y}px">
-            <button type="button" data-action="select-workflow-v2-node" data-node-id="${escapeAttr(node.id)}" class="graph-node workflow-v2-node ${view.nodeConfig.selectedNodeId === node.id ? "selected" : ""}" title="${escapeAttr(node.id)}">
-              ${escapeHtml(node.type)}<small>${escapeHtml(node.id)}</small>
+            <button type="button" data-action="select-workflow-v2-node" data-node-id="${escapeAttr(node.id)}" data-run-status="${escapeAttr(node.runStatus)}" class="graph-node workflow-v2-node run-status-${escapeAttr(node.runStatus)} ${view.nodeConfig.selectedNodeId === node.id ? "selected" : ""}" title="${escapeAttr(node.id)}">
+              ${escapeHtml(node.type)}<small>${escapeHtml(node.id)}</small><span data-testid="workflow-v2-node-status-${escapeAttr(node.id)}" class="workflow-v2-node-status">${escapeHtml(workflowRunStatusLabel(node.runStatus))}</span>
             </button>
             ${renderWorkflowV2Handles(node)}
           </div>
@@ -507,8 +507,82 @@ function renderWorkflowV2RunPanel(view) {
       ${run ? `<p>Status: ${escapeHtml(run.status)}</p>` : ""}
       ${run?.output ? `<pre>${escapeHtml(JSON.stringify(run.output, null, 2))}</pre>` : ""}
       ${run?.error ? `<p class="message-error">${escapeHtml(run.error.message ?? run.error)}</p>` : ""}
+      ${run?.nodeExecutionDetails?.length ? renderWorkflowV2ExecutionTrace(run) : ""}
     </div>
   `;
+}
+
+function renderWorkflowV2ExecutionTrace(run) {
+  const details = run.nodeExecutionDetails ?? [];
+  const selected = run.selectedNodeExecution;
+  return `
+    <section class="workflow-v2-execution-trace" data-testid="workflow-v2-execution-trace">
+      <h3>Execution Trace</h3>
+      <ol class="workflow-v2-execution-list">
+        ${details.map((node) => `
+          <li>
+            <button type="button" data-testid="workflow-v2-execution-row" data-action="select-workflow-v2-run-node" data-node-id="${escapeAttr(node.nodeId)}" class="workflow-v2-execution-row ${selected?.nodeId === node.nodeId ? "selected" : ""}">
+              <span>#${node.order} ${escapeHtml(node.nodeId)}</span>
+              <strong class="run-status-${escapeAttr(node.status)}">${escapeHtml(workflowRunStatusLabel(node.status))}</strong>
+              ${node.durationMs === null ? "" : `<small>${escapeHtml(`${node.durationMs} ms`)}</small>`}
+            </button>
+          </li>
+        `).join("")}
+      </ol>
+      ${selected ? renderWorkflowV2NodeExecution(selected) : "<p class=\"muted\">Select a Node to inspect its execution.</p>"}
+    </section>
+  `;
+}
+
+function renderWorkflowV2NodeExecution(node) {
+  const conditionResult = node.output && typeof node.output === "object" && !Array.isArray(node.output) && node.output.branch && node.output.target
+    ? `<p data-testid="workflow-v2-selected-edge"><strong>Selected Edge</strong> ${escapeHtml(`${node.output.branch} -> ${node.output.target}`)}</p>`
+    : "";
+  return `
+    <article class="workflow-v2-node-execution" data-testid="workflow-v2-node-execution-${escapeAttr(node.nodeId)}">
+      <header><strong>Node: ${escapeHtml(node.nodeId)}</strong><span class="run-status-${escapeAttr(node.status)}">${escapeHtml(workflowRunStatusLabel(node.status))}</span></header>
+      ${node.durationMs === null ? "" : `<p>Duration: ${escapeHtml(`${node.durationMs} ms`)}</p>`}
+      ${renderWorkflowV2RunPayload("Input", node.input, "workflow-v2-node-input")}
+      ${renderWorkflowV2RunPayload("Output", node.output, "workflow-v2-node-output")}
+      ${conditionResult}
+      ${renderWorkflowV2ToolSteps(node.steps)}
+      ${node.error ? `<section class="workflow-v2-run-error" data-testid="workflow-v2-node-error"><h4>Error</h4><pre>${escapeHtml(JSON.stringify(node.error, null, 2))}</pre></section>` : ""}
+    </article>
+  `;
+}
+
+function renderWorkflowV2RunPayload(title, value, testId) {
+  if (value === null || value === undefined) {
+    return `<section class="workflow-v2-run-payload" data-testid="${testId}"><h4>${title}</h4><p class="muted">Not available</p></section>`;
+  }
+  const complex = typeof value === "object";
+  const content = complex ? JSON.stringify(value, null, 2) : String(value);
+  if (!complex && content.length <= 240) {
+    return `<section class="workflow-v2-run-payload" data-testid="${testId}"><h4>${title}</h4><code>${escapeHtml(content)}</code></section>`;
+  }
+  return `<section class="workflow-v2-run-payload" data-testid="${testId}"><details><summary>${title}</summary><pre>${escapeHtml(content)}</pre></details></section>`;
+}
+
+function renderWorkflowV2ToolSteps(steps) {
+  const toolSteps = (steps ?? []).filter((step) => step.type === "tool_call" || step.type === "tool_result");
+  if (toolSteps.length === 0) return "";
+  return `
+    <section class="workflow-v2-run-tools" data-testid="workflow-v2-node-tools">
+      <h4>Tool</h4>
+      ${toolSteps.map((step) => `<details><summary>${escapeHtml(step.type === "tool_call" ? `Call ${step.name ?? "tool"}` : `Result ${step.name ?? "tool"}`)}</summary><pre>${escapeHtml(JSON.stringify(step.type === "tool_call" ? { arguments: step.arguments ?? {} } : { result: step.data ?? null, error: step.error ?? null }, null, 2))}</pre></details>`).join("")}
+    </section>
+  `;
+}
+
+function workflowRunStatusLabel(status) {
+  return {
+    pending: "Pending",
+    running: "Running",
+    succeeded: "Success",
+    success: "Success",
+    failed: "Failed",
+    skipped: "Skipped",
+  }[status] ?? String(status ?? "Pending");
 }
 
 function renderWorkflowV2Edges(view) {
@@ -2011,6 +2085,9 @@ async function handleAction(event) {
   } else if (action === "select-workflow-v2-node") {
     workflowV2Workbench().selectNode(target.dataset.nodeId);
     render();
+  } else if (action === "select-workflow-v2-run-node") {
+    workflowV2Workbench().selectNode(target.dataset.nodeId);
+    render();
   } else if (action === "save-workflow-v2-draft") {
     await saveWorkflowV2Draft();
   } else if (action === "validate-workflow-v2") {
@@ -3320,6 +3397,7 @@ function mockClient() {
       return { versions: state.workflowV2Versions.map(clone) };
     },
     async startWorkflowRun(workflowId, payload = {}) {
+      const nodes = workflowV2Workbench().view().canvas.nodes;
       return {
         id: `workflow_run_${Date.now()}`,
         status: "succeeded",
@@ -3327,9 +3405,9 @@ function mockClient() {
         workflowVersion: payload.version,
         output: { message: payload.input?.message ? `Echo: ${payload.input.message}` : "OK" },
         finalResult: { data: { message: payload.input?.message ? `Echo: ${payload.input.message}` : "OK" }, artifacts: [] },
-        nodeResults: workflowV2Workbench().view().canvas.nodes.map((node) => ({ nodeId: node.id, status: "succeeded", data: null })),
+        nodeResults: nodes.map((node) => ({ nodeId: node.id, status: "succeeded", input: { message: payload.input?.message ?? "" }, data: { nodeId: node.id } })),
         messages: [],
-        executionDetails: { nodes: [] },
+        executionDetails: { nodes: nodes.filter((node) => node.type !== "end").map((node) => ({ nodeId: node.id, input: { message: payload.input?.message ?? "" }, steps: [{ type: "node_result", status: "succeeded", data: { nodeId: node.id } }] })) },
         events: [],
       };
     },
@@ -3808,6 +3886,10 @@ function styleTag() {
     .workflow-v2-node-wrap { position: absolute; z-index: 2; display: grid; grid-template-columns: minmax(132px, max-content) auto; align-items: center; gap: 8px; }
     .workflow-v2-node { position: relative; min-width: 132px; }
     .workflow-v2-node.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+    .workflow-v2-node-status { display: block; color: var(--muted); font-size: 10px; font-weight: 700; }
+    .workflow-v2-node.run-status-running { border-color: var(--warning); }
+    .workflow-v2-node.run-status-succeeded { border-color: var(--success); }
+    .workflow-v2-node.run-status-failed { border-color: var(--error); }
     .workflow-v2-handle-list { display: grid; gap: 8px; align-items: center; }
     .workflow-v2-handle { min-width: 44px; min-height: 32px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff; color: var(--accent); font-size: 11px; cursor: pointer; }
     .workflow-v2-edge-panel { border-top: 1px solid var(--line); padding: 10px; background: #ffffff; display: grid; gap: 8px; }
@@ -3816,6 +3898,19 @@ function styleTag() {
     .workflow-v2-edge-panel select, .workflow-v2-edge-panel input, .workflow-v2-inline-form input, .workflow-v2-inline-form select { width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
     .workflow-v2-inspector-block { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
     .workflow-v2-inspector-block h3 { margin: 0; font-size: 13px; }
+    .workflow-v2-execution-trace { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+    .workflow-v2-execution-trace h3 { margin: 0; }
+    .workflow-v2-execution-list { display: grid; gap: 6px; margin: 0; padding-left: 22px; }
+    .workflow-v2-execution-row { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; text-align: left; padding: 7px 9px; }
+    .workflow-v2-execution-row.selected { border-color: var(--accent); background: var(--accent-soft); }
+    .workflow-v2-execution-row small { color: var(--muted); }
+    .workflow-v2-node-execution { display: grid; gap: 7px; border-top: 1px solid var(--line); padding-top: 9px; }
+    .workflow-v2-node-execution header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .workflow-v2-run-payload, .workflow-v2-run-tools, .workflow-v2-run-error { display: grid; gap: 5px; }
+    .workflow-v2-run-payload h4, .workflow-v2-run-tools h4, .workflow-v2-run-error h4 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; }
+    .workflow-v2-run-payload pre, .workflow-v2-run-tools pre, .workflow-v2-run-error pre { max-height: 180px; overflow: auto; }
+    .workflow-v2-run-payload details, .workflow-v2-run-tools details { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: #fff; }
+    .workflow-v2-run-payload code { overflow-wrap: anywhere; }
     .workflow-v2-schema-fields, .workflow-v2-tool-list { display: grid; gap: 6px; }
     .workflow-v2-check { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
     .workflow-zoom-indicator { position: sticky; left: 10px; bottom: 10px; z-index: 4; display: inline-flex; margin: 0 0 10px 10px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: rgba(248,250,252,.92); color: var(--muted); font-size: 11px; font-weight: 700; pointer-events: none; }

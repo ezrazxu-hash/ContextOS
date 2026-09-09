@@ -503,6 +503,7 @@ test("T07 V2 workbench starts run for explicit version and displays succeeded re
     error: null,
     messages: [],
     executionDetails: { nodes: [] },
+    nodeExecutionDetails: [{ nodeId: "agent-1", order: 1, status: "succeeded", input: null, output: { summary: "Need API work" }, error: null, durationMs: null, artifacts: [], steps: [] }],
   });
   assert.equal(workbench.view().canvas.nodes.find((node) => node.id === "agent-1").runStatus, "succeeded");
   assert.deepEqual(workbench.view().toolbar.actions, ["validate", "publish", "run"]);
@@ -536,6 +537,7 @@ test("T07 V2 workbench displays failed run error", async () => {
     error: { code: "workflow.output_schema_invalid", message: "Output schema invalid" },
     messages: [],
     executionDetails: { nodes: [] },
+    nodeExecutionDetails: [{ nodeId: "agent-1", order: 1, status: "failed", input: null, output: null, error: null, durationMs: null, artifacts: [], steps: [] }],
   });
   assert.equal(workbench.view().canvas.nodes.find((node) => node.id === "agent-1").runStatus, "failed");
 });
@@ -655,6 +657,46 @@ test("Workflow V2 adds a condition branch and its graph edge atomically", async 
   assert.deepEqual(result.edge, { source: "route", target: "end-1", sourceHandle: "other" });
   assert.equal(workbench.view().canvas.edges.some((edge) => edge.source === "route" && edge.target === "end-1" && edge.sourceHandle === "other"), true);
   assert.equal(workbench.view().nodeConfig.conditionInspector.branches.some((branch) => branch.handle === "other"), true);
+});
+
+test("Workflow V2 run exposes isolated node input output status and duration for the selected node", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async startWorkflowRun() {
+        return {
+          id: "workflow_run_trace_1",
+          status: "succeeded",
+          workflowVersion: 1,
+          output: { summary: "Done" },
+          nodeResults: [{ nodeId: "agent-1", status: "succeeded", data: { summary: "Done" } }],
+          executionDetails: {
+            nodes: [{
+              nodeId: "agent-1",
+              input: { messages: [{ role: "user", content: "Trace this request" }] },
+              steps: [{ type: "node_result", status: "succeeded", data: { summary: "Done" } }],
+            }],
+          },
+          events: [
+            { eventType: "NodeStarted", nodeId: "agent-1", sequence: 1, timestamp: "2026-09-09T00:00:00.000Z", payload: { status: "running" } },
+            { eventType: "NodeCompleted", nodeId: "agent-1", sequence: 2, timestamp: "2026-09-09T00:00:00.125Z", payload: { status: "succeeded", data: { summary: "Done" } } },
+          ],
+        };
+      },
+    },
+    workflowDefinition: validWorkbenchWorkflowDefinition(),
+  });
+
+  workbench.selectNode("agent-1");
+  await workbench.startRun({ version: 1, input: { message: "Trace this request" } });
+
+  const panel = workbench.view().runPanel;
+  assert.equal(panel.nodeExecutionDetails.length, 1);
+  assert.equal(panel.nodeExecutionDetails[0].status, "succeeded");
+  assert.deepEqual(panel.nodeExecutionDetails[0].input, { messages: [{ role: "user", content: "Trace this request" }] });
+  assert.deepEqual(panel.nodeExecutionDetails[0].output, { summary: "Done" });
+  assert.equal(panel.nodeExecutionDetails[0].durationMs, 125);
+  assert.deepEqual(panel.selectedNodeExecution, panel.nodeExecutionDetails[0]);
 });
 
 test("Workflow V2 does not leave a condition branch behind when its edge is rejected", async () => {

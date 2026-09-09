@@ -334,7 +334,7 @@ export function createWorkflowV2Workbench(options = {}) {
           actions: ["validate", "publish", "run"],
           versions: state.versions.map(cloneDefinition),
         },
-        runPanel: state.lastRun ? runPanel(state.lastRun) : null,
+        runPanel: state.lastRun ? runPanel(state.lastRun, state.selectedNodeId, workflowView.nodes) : null,
         draft: {
           revision: state.definition.revision,
         },
@@ -374,7 +374,8 @@ function nodeRunStatuses(run) {
   return new Map();
 }
 
-function runPanel(run) {
+function runPanel(run, selectedNodeId = null, workflowNodes = []) {
+  const details = nodeExecutionDetails(run, workflowNodes);
   const panel = {
     status: run.status,
     runId: run.runId,
@@ -408,9 +409,11 @@ function runPanel(run) {
   if (run.historyDetail) {
     panel.historyDetail = historyDetailView(run);
   }
-  const details = nodeExecutionDetails(run);
-  if (details.some((node) => node.artifacts.length > 0)) {
+  if (details.length > 0) {
     panel.nodeExecutionDetails = details;
+  }
+  if (selectedNodeId) {
+    panel.selectedNodeExecution = details.find((node) => node.nodeId === selectedNodeId) ?? null;
   }
   return panel;
 }
@@ -1237,17 +1240,48 @@ function operatorOption(value) {
   return { value, label: value };
 }
 
-function nodeExecutionDetails(run) {
+function nodeExecutionDetails(run, workflowNodes = []) {
   const resultByNodeId = new Map(run.nodeResults.map((result) => [result.nodeId, result]));
-  return (run.executionDetails.nodes ?? []).map((node) => {
-    const result = resultByNodeId.get(node.nodeId) ?? {};
+  const executionByNodeId = new Map((run.executionDetails.nodes ?? []).map((node) => [node.nodeId, node]));
+  const nodeIds = [];
+  for (const node of run.executionDetails.nodes ?? []) {
+    if (node?.nodeId && !nodeIds.includes(node.nodeId)) nodeIds.push(node.nodeId);
+  }
+  for (const result of run.nodeResults ?? []) {
+    if (result?.nodeId && !nodeIds.includes(result.nodeId)) nodeIds.push(result.nodeId);
+  }
+  if (run.status === "running") {
+    for (const node of workflowNodes) {
+      if (node?.id && node.type !== "end" && !nodeIds.includes(node.id)) nodeIds.push(node.id);
+    }
+  }
+  return nodeIds.map((nodeId, index) => {
+    const node = executionByNodeId.get(nodeId) ?? {};
+    const result = resultByNodeId.get(nodeId) ?? {};
+    const events = run.timeline.filter((event) => event.nodeId === nodeId);
+    const started = events.find((event) => event.eventType === "NodeStarted");
+    const finished = [...events].reverse().find((event) => ["NodeCompleted", "NodeFailed"].includes(event.eventType));
+    const durationMs = node.durationMs ?? durationBetween(started?.timestamp, finished?.timestamp);
+    const output = Object.prototype.hasOwnProperty.call(result, "data") ? result.data : node.output ?? null;
+    const error = result.error ?? node.error ?? (finished?.eventType === "NodeFailed" ? finished.payload?.error ?? null : null);
     return {
-      nodeId: node.nodeId,
-      status: result.status ?? null,
+      nodeId,
+      order: index + 1,
+      status: result.status ?? run.nodeStatuses.get(nodeId) ?? (run.status === "running" && started ? "running" : "pending"),
+      input: result.input ?? node.input ?? null,
+      output,
+      error: error ? cloneDefinition(error) : null,
+      durationMs: durationMs === null || durationMs === undefined ? null : (Number.isFinite(Number(durationMs)) ? Number(durationMs) : null),
       artifacts: artifactsView(result.artifacts),
       steps: Array.isArray(node.steps) ? node.steps.map(cloneDefinition) : [],
     };
   });
+}
+
+function durationBetween(startedAt, finishedAt) {
+  if (!startedAt || !finishedAt) return null;
+  const duration = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
+  return Number.isFinite(duration) && duration >= 0 ? duration : null;
 }
 
 function messageView(message) {

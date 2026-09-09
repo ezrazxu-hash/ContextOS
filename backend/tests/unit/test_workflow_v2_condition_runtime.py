@@ -25,6 +25,9 @@ class WorkflowV2ConditionRuntimeTests(unittest.TestCase):
         self.assertEqual(len(llm.calls), 2)
         self.assertEqual([result["nodeId"] for result in run["nodeResults"]], ["classify", "route", "technical-agent"])
         self.assertEqual(run["nodeResults"][1]["data"], {"branch": "technical", "target": "technical-agent"})
+        route_execution = next(node for node in run["executionDetails"]["nodes"] if node["nodeId"] == "route")
+        self.assertEqual(route_execution["input"]["evaluations"][0]["actualValue"], "technical")
+        self.assertEqual(route_execution["steps"][-1], {"type": "condition_result", "branch": "technical", "target": "technical-agent"})
         self.assertEqual(run["output"], {"summary": "Route technical"})
 
     def test_condition_supports_number_greater_than_or_equal_and_first_matching_branch(self) -> None:
