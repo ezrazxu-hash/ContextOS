@@ -470,7 +470,7 @@ function renderWorkflowV2() {
           </section>
           <section class="node-config-section agent-test-section">
             <h2>Run</h2>
-            <label>Input<textarea data-testid="workflow-v2-run-input" rows="3">${escapeHtml(state.workflowTestInput)}</textarea></label>
+            <label data-testid="workflow-v2-workflow-run-input-label">Workflow Input<textarea data-testid="workflow-v2-run-input" rows="3">${escapeHtml(state.workflowTestInput)}</textarea></label>
             ${renderWorkflowV2RunPanel(view)}
           </section>
         </div>
@@ -542,11 +542,15 @@ function renderWorkflowV2Edges(view) {
 
 function renderWorkflowV2Handles(node) {
   const outputs = node.handles?.outputs ?? [];
-  return outputs.map((handle) => `
-    <button type="button" class="workflow-v2-handle" data-action="connect-workflow-v2-edge-from-handle" data-source-id="${escapeAttr(node.id)}" data-source-handle="${escapeAttr(handle.id)}" title="Connect ${escapeAttr(handle.label)} from ${escapeAttr(node.id)}" aria-label="Connect ${escapeAttr(handle.label)} from ${escapeAttr(node.id)}">
-      ${escapeHtml(handle.label || "out")}
-    </button>
-  `).join("");
+  return `
+    <div class="workflow-v2-handle-list">
+      ${outputs.map((handle) => `
+        <button type="button" class="workflow-v2-handle" data-action="connect-workflow-v2-edge-from-handle" data-source-id="${escapeAttr(node.id)}" data-source-handle="${escapeAttr(handle.id)}" title="Connect ${escapeAttr(handle.label)} from ${escapeAttr(node.id)}" aria-label="Connect ${escapeAttr(handle.label)} from ${escapeAttr(node.id)}">
+          ${escapeHtml(handle.label || "out")}
+        </button>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderWorkflowV2EdgeControls(view) {
@@ -587,18 +591,36 @@ function renderWorkflowV2Inspector(view, selectedNode) {
     return `
       <label>Name<input data-testid="workflow-v2-agent-name" value="${escapeAttr(config.name ?? "")}"></label>
       <label>Description<textarea data-testid="workflow-v2-agent-description" rows="3">${escapeHtml(config.description ?? "")}</textarea></label>
-      <label>Instruction<textarea data-testid="workflow-v2-agent-instruction" rows="6">${escapeHtml(config.instruction ?? "")}</textarea></label>
+      <label data-testid="workflow-v2-agent-goal">Goal<textarea data-testid="workflow-v2-agent-instruction" rows="6">${escapeHtml(config.instruction ?? "")}</textarea></label>
       ${renderWorkflowV2OutputSchemaBuilder(view)}
       ${renderWorkflowV2ToolPolicy(view)}
-      ${view.nodeConfig.visibleGroups.map((group) => `<p>${escapeHtml(group.label ?? group.id)}</p>`).join("")}
+      ${renderWorkflowV2BranchSummary(view)}
     `;
   }
   if (selectedNode.type === "condition") {
     return renderWorkflowV2ConditionInspector(view);
   }
+  if (selectedNode.type === "end") {
+    return renderWorkflowV2EndInspector(view);
+  }
+  if (selectedNode.type === "workflow") {
+    return renderWorkflowV2WorkflowInspector(view);
+  }
   return view.nodeConfig.visibleGroups.length === 0
     ? "<p class=\"muted\">No editable fields.</p>"
     : view.nodeConfig.visibleGroups.map((group) => `<p>${escapeHtml(group.label ?? group.id)}</p>`).join("");
+}
+
+function renderWorkflowV2BranchSummary(view) {
+  const edges = view.nodeConfig.branchNext ?? [];
+  return `
+    <section class="workflow-v2-inspector-block" data-testid="workflow-v2-agent-branch-summary">
+      <h3>Branch / Next</h3>
+      ${edges.length
+        ? edges.map((edge) => `<p><span>${escapeHtml(edge.label)}</span> -> <strong>${escapeHtml(edge.target)}</strong></p>`).join("")
+        : "<p class=\"muted\">No outgoing edge.</p>"}
+    </section>
+  `;
 }
 
 function renderWorkflowV2OutputSchemaBuilder(view) {
@@ -658,17 +680,78 @@ function renderWorkflowV2ConditionInspector(view) {
   const inspector = view.nodeConfig.conditionInspector ?? { branches: [], fields: [], targetNodes: [], operatorOptions: [] };
   const fieldOptions = inspector.fields ?? [];
   const targetOptions = inspector.targetNodes ?? [];
+  const defaultTarget = edgeTargetForHandle(view, "default");
   return `
     <section class="workflow-v2-inspector-block" data-testid="workflow-v2-condition-inspector">
       <h3>Branches</h3>
-      ${(inspector.branches ?? []).map((branch) => `<p>${escapeHtml(branch.handle ?? "")} -> ${escapeHtml(branch.target ?? edgeTargetForHandle(view, branch.handle) ?? "")}</p>`).join("") || "<p class=\"muted\">No branches.</p>"}
+      ${(inspector.branches ?? []).map((branch) => `<p>${escapeHtml(branch.handle ?? "")} -> ${escapeHtml(edgeTargetForHandle(view, branch.handle) ?? branch.target ?? "Not connected")}</p>`).join("") || "<p class=\"muted\">No branches.</p>"}
+      <p data-testid="workflow-v2-condition-default-branch">default -> ${escapeHtml(defaultTarget ?? "Not connected")}</p>
       <div class="workflow-v2-inline-form">
-        <input data-testid="workflow-v2-condition-branch-handle" placeholder="branch handle">
+        <label>Branch Handle<input aria-label="Branch handle" data-testid="workflow-v2-condition-branch-handle" placeholder="technical / business"></label>
         <select data-testid="workflow-v2-condition-source-field">${fieldOptions.map((field) => `<option value="${escapeAttr(`${field.nodeId}:${field.path.join(".")}`)}">${escapeHtml(`${field.nodeId}.${field.path.join(".")} (${field.type})`)}</option>`).join("")}</select>
         <select data-testid="workflow-v2-condition-operator">${(inspector.operatorOptions ?? []).map((operator) => `<option value="${escapeAttr(operator.value)}">${escapeHtml(operator.label)}</option>`).join("")}</select>
         <input data-testid="workflow-v2-condition-value" placeholder="value">
         <select data-testid="workflow-v2-condition-target">${targetOptions.map((node) => `<option value="${escapeAttr(node.id)}">${escapeHtml(node.label)}</option>`).join("")}</select>
         <button class="secondary" data-action="add-workflow-v2-condition-branch">Add Branch</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderWorkflowV2EndInspector(view) {
+  const inspector = view.nodeConfig.endInspector ?? { binding: {}, dataSources: [] };
+  const data = inspector.binding?.data;
+  const dataLabel = data?.kind === "nodeOutput"
+    ? `${data.nodeId}.${Array.isArray(data.path) ? data.path.join(".") : ""}`
+    : "none";
+  return `
+    <section class="workflow-v2-inspector-block" data-testid="workflow-v2-end-inspector">
+      <h3>Final Result</h3>
+      <label>Message
+        <select data-testid="workflow-v2-end-message-mode" disabled>
+          <option value="${escapeAttr(inspector.binding?.message?.mode ?? "lastVisibleAssistant")}">${escapeHtml(inspector.binding?.message?.mode ?? "lastVisibleAssistant")}</option>
+        </select>
+      </label>
+      <label>Artifacts
+        <select data-testid="workflow-v2-end-artifacts-mode" disabled>
+          <option value="${escapeAttr(inspector.binding?.artifacts?.mode ?? "allVisible")}">${escapeHtml(inspector.binding?.artifacts?.mode ?? "allVisible")}</option>
+        </select>
+      </label>
+      <label>Structured Data
+        <select data-testid="workflow-v2-end-data-source" disabled>
+          <option value="${escapeAttr(dataLabel)}">${escapeHtml(dataLabel)}</option>
+        </select>
+      </label>
+    </section>
+  `;
+}
+
+function renderWorkflowV2WorkflowInspector(view) {
+  const inspector = view.nodeConfig.workflowInspector ?? { workflowOptions: [], versionOptions: [], messageContextOptions: [], inputMappings: [] };
+  return `
+    <section class="workflow-v2-inspector-block" data-testid="workflow-v2-workflow-inspector">
+      <h3>Workflow Ref</h3>
+      <label>Workflow
+        <select data-testid="workflow-v2-workflow-ref-id" disabled>
+          ${(inspector.workflowOptions ?? []).length
+            ? inspector.workflowOptions.map((workflow) => `<option value="${escapeAttr(workflow.id)}" ${workflow.id === inspector.workflowId ? "selected" : ""}>${escapeHtml(workflow.name ?? workflow.id)}</option>`).join("")
+            : `<option value="">None</option>`}
+        </select>
+      </label>
+      <label>Version
+        <select data-testid="workflow-v2-workflow-ref-version" disabled>
+          ${(inspector.versionOptions ?? []).length
+            ? inspector.versionOptions.map((version) => `<option value="${escapeAttr(version.version ?? "")}" ${version.version === inspector.version ? "selected" : ""}>${escapeHtml(version.label ?? `v${version.version}`)}</option>`).join("")
+            : `<option value="">Unpublished</option>`}
+        </select>
+      </label>
+      <label>Message Context
+        <select data-testid="workflow-v2-workflow-context-mode" disabled>
+          ${(inspector.messageContextOptions ?? []).map((option) => `<option value="${escapeAttr(option.value)}" ${option.value === inspector.messageContextMode ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="workflow-v2-schema-fields">
+        ${(inspector.inputMappings ?? []).map((mapping) => `<span>${escapeHtml(mapping.name)}: ${escapeHtml(mapping.type)}</span>`).join("") || "<span>No input mapping fields</span>"}
       </div>
     </section>
   `;
@@ -2017,16 +2100,15 @@ function addWorkflowV2ConditionBranchFromForm() {
   const operator = document.querySelector("[data-testid='workflow-v2-condition-operator']")?.value ?? "equals";
   const rawValue = document.querySelector("[data-testid='workflow-v2-condition-value']")?.value ?? "";
   const target = document.querySelector("[data-testid='workflow-v2-condition-target']")?.value ?? "";
-  const branches = [...(view.nodeConfig.conditionInspector?.branches ?? []), {
-    handle,
-    source: { nodeId, path: pathText.split(".").filter(Boolean) },
-    operator,
-    value: coerceWorkflowV2ConditionValue(rawValue),
-  }];
-  workflowV2Workbench().updateSelectedConditionConfig({ branches });
-  if (target) {
-    workflowV2Workbench().connectCanvasEdge(selectedNode.id, target, { sourceHandle: handle });
-  }
+  workflowV2Workbench().addSelectedConditionBranch({
+    branch: {
+      handle,
+      source: { nodeId, path: pathText.split(".").filter(Boolean) },
+      operator,
+      value: coerceWorkflowV2ConditionValue(rawValue),
+    },
+    target,
+  });
 }
 
 function updateWorkflowV2ToolPolicy(patch) {
@@ -3726,6 +3808,7 @@ function styleTag() {
     .workflow-v2-node-wrap { position: absolute; z-index: 2; display: grid; grid-template-columns: minmax(132px, max-content) auto; align-items: center; gap: 8px; }
     .workflow-v2-node { position: relative; min-width: 132px; }
     .workflow-v2-node.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+    .workflow-v2-handle-list { display: grid; gap: 8px; align-items: center; }
     .workflow-v2-handle { min-width: 44px; min-height: 32px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff; color: var(--accent); font-size: 11px; cursor: pointer; }
     .workflow-v2-edge-panel { border-top: 1px solid var(--line); padding: 10px; background: #ffffff; display: grid; gap: 8px; }
     .workflow-v2-edge-form, .workflow-v2-edge-row, .workflow-v2-inline-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 8px; align-items: end; }

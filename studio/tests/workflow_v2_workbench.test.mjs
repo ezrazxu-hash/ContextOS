@@ -204,6 +204,35 @@ test("T03 V2 workbench edits agent inspector fields and keeps node card high-lev
   assert.equal(JSON.stringify(view.nodeConfig).includes("LLM"), false);
 });
 
+test("Workflow V2 agent inspector classifies editable fields by real data source", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "support-flow",
+      name: "Support Flow",
+      schemaVersion: 2,
+      revision: 1,
+      tools: ["search.web"],
+      nodes: [
+        { id: "agent-1", type: "agent", config: { instruction: "Analyze", toolPolicy: { mode: "auto", allowedTools: ["search.web"] } } },
+        { id: "end-1", type: "end" },
+      ],
+      edges: [{ source: "agent-1", target: "end-1" }],
+    },
+  });
+
+  workbench.selectNode("agent-1");
+  const fields = workbench.view().nodeConfig.fields;
+
+  assert.deepEqual(fields, [
+    { id: "goal", label: "Goal", visible: true, editable: true, ui: "textarea", source: "config.instruction" },
+    { id: "output", label: "Output", visible: true, editable: true, ui: "schemaBuilder", source: "config.outputSchema" },
+    { id: "tools", label: "Tools", visible: true, editable: true, ui: "multiSelect", source: "config.toolPolicy" },
+    { id: "branchNext", label: "Branch / Next", visible: true, editable: false, ui: "edgeSummary", source: "edges[source=agent-1]" },
+  ]);
+  assert.deepEqual(workbench.view().nodeConfig.branchNext, [{ label: "success", target: "end-1" }]);
+});
+
 test("T03 V2 workbench saves refreshed agent configuration through draft API", async () => {
   const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
   const saves = [];
@@ -606,6 +635,75 @@ test("T09 V2 workbench exposes schema-driven condition inspector and saves branc
     value: "technical",
   });
   assert.equal(workbench.view().nodeConfig.conditionInspector.defaultTarget, "business-agent");
+});
+
+test("Workflow V2 adds a condition branch and its graph edge atomically", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({ workflowDefinition: conditionWorkbenchWorkflowDefinition() });
+
+  workbench.selectNode("route");
+  const result = workbench.addSelectedConditionBranch({
+    branch: {
+      handle: "other",
+      source: { nodeId: "classify", path: ["category"] },
+      operator: "equals",
+      value: "other",
+    },
+    target: "end-1",
+  });
+
+  assert.deepEqual(result.edge, { source: "route", target: "end-1", sourceHandle: "other" });
+  assert.equal(workbench.view().canvas.edges.some((edge) => edge.source === "route" && edge.target === "end-1" && edge.sourceHandle === "other"), true);
+  assert.equal(workbench.view().nodeConfig.conditionInspector.branches.some((branch) => branch.handle === "other"), true);
+});
+
+test("Workflow V2 does not leave a condition branch behind when its edge is rejected", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({ workflowDefinition: conditionWorkbenchWorkflowDefinition() });
+
+  workbench.selectNode("route");
+  assert.throws(() => workbench.addSelectedConditionBranch({
+    branch: {
+      handle: "duplicate-target",
+      source: { nodeId: "classify", path: ["category"] },
+      operator: "equals",
+      value: "technical",
+    },
+    target: "technical-agent",
+  }), /Duplicate workflow edge/);
+
+  assert.equal(workbench.view().nodeConfig.conditionInspector.branches.some((branch) => branch.handle === "duplicate-target"), false);
+  assert.equal(workbench.view().canvas.edges.filter((edge) => edge.source === "route" && edge.target === "technical-agent").length, 1);
+});
+
+test("Workflow V2 saves a newly added condition branch and edge in one draft payload", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  let savedDefinition = null;
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async saveWorkflowDraft(workflowId, definition) {
+        savedDefinition = { workflowId, definition };
+        return { ...definition, revision: 2 };
+      },
+    },
+    workflowDefinition: conditionWorkbenchWorkflowDefinition(),
+  });
+
+  workbench.selectNode("route");
+  workbench.addSelectedConditionBranch({
+    branch: {
+      handle: "other",
+      source: { nodeId: "classify", path: ["category"] },
+      operator: "equals",
+      value: "other",
+    },
+    target: "end-1",
+  });
+  await workbench.saveDraft();
+
+  assert.equal(savedDefinition.workflowId, "condition-flow");
+  assert.equal(savedDefinition.definition.edges.some((edge) => edge.source === "route" && edge.target === "end-1" && edge.sourceHandle === "other"), true);
+  assert.equal(savedDefinition.definition.nodes.find((node) => node.id === "route").config.branches.some((branch) => branch.handle === "other"), true);
 });
 
 test("T10 V2 workbench exposes end final result inspector and saves data binding", async () => {

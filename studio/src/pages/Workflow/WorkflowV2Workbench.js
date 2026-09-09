@@ -75,6 +75,20 @@ export function createWorkflowV2Workbench(options = {}) {
       refreshReferenceIssues(state);
       return { node: view.nodes.find((node) => node.id === selectedNode.id) ?? null, conditionInspector: conditionInspectorView(state, view.nodes, selectedNode.id) };
     },
+    addSelectedConditionBranch({ branch, target } = {}) {
+      const selectedNode = selectedConditionNode(state, builder);
+      const nextBranch = cloneDefinition(branch ?? {});
+      const currentBranches = Array.isArray(selectedNode.config?.branches) ? selectedNode.config.branches : [];
+      const edgeView = builder.connect(selectedNode.id, target, nextBranch.handle ? { sourceHandle: nextBranch.handle } : {});
+      const view = builder.updateConditionNodeConfig(selectedNode.id, { branches: [...currentBranches, nextBranch] });
+      syncDefinition(state, builder);
+      refreshReferenceIssues(state);
+      return {
+        node: view.nodes.find((node) => node.id === selectedNode.id) ?? null,
+        edge: edgeView.edges[edgeView.edges.length - 1] ?? null,
+        conditionInspector: conditionInspectorView(state, view.nodes, selectedNode.id),
+      };
+    },
     updateSelectedEndConfig(patch) {
       const selectedNode = selectedEndNode(state, builder);
       const view = builder.updateEndNodeConfig(selectedNode.id, patch);
@@ -283,6 +297,8 @@ export function createWorkflowV2Workbench(options = {}) {
           selectedNodeId: state.selectedNodeId,
           groups: selectedNode?.type === "agent" ? agentInspectorGroups() : selectedNode?.type === "condition" ? conditionInspectorGroups() : selectedNode?.type === "end" ? endInspectorGroups() : selectedNode?.type === "workflow" ? workflowInspectorGroups() : [],
           visibleGroups: selectedNode ? visibleInspectorGroups(selectedNode, state.editorMode) : [],
+          fields: selectedNode ? inspectorFieldsForNode(selectedNode, workflowView.edges) : [],
+          branchNext: selectedNode ? branchNextView(selectedNode, workflowView.edges) : [],
           value: selectedNode?.type === "agent" || selectedNode?.type === "workflow" ? cloneDefinition(selectedNode.config ?? {}) : null,
           schemaBuilder: selectedNode?.type === "agent"
             ? createWorkflowV2SchemaBuilder(selectedNode.config?.outputSchema ?? null).view()
@@ -914,6 +930,33 @@ function workflowInspectorGroups() {
     { id: "input", label: "Input Mapping" },
     { id: "context", label: "Message Context" },
   ];
+}
+
+function inspectorFieldsForNode(node, edges = []) {
+  if (node.type === "agent") {
+    return [
+      { id: "goal", label: "Goal", visible: true, editable: true, ui: "textarea", source: "config.instruction" },
+      { id: "output", label: "Output", visible: true, editable: true, ui: "schemaBuilder", source: "config.outputSchema" },
+      { id: "tools", label: "Tools", visible: true, editable: true, ui: "multiSelect", source: "config.toolPolicy" },
+      { id: "branchNext", label: "Branch / Next", visible: true, editable: false, ui: "edgeSummary", source: `edges[source=${node.id}]` },
+    ];
+  }
+  if (node.type === "condition") {
+    return conditionInspectorGroups().map((group) => ({ ...group, visible: true, editable: true, ui: group.id === "branches" ? "branchBuilder" : "select", source: `config.${group.id}` }));
+  }
+  if (node.type === "workflow") {
+    return workflowInspectorGroups().map((group) => ({ ...group, visible: true, editable: true, ui: group.id === "input" ? "bindingList" : "select", source: `config.${group.id}` }));
+  }
+  if (node.type === "end") {
+    return endInspectorGroups().map((group) => ({ ...group, visible: true, editable: true, ui: group.id === "data" ? "bindingSelect" : "select", source: `config.finalResult.${group.id}` }));
+  }
+  return [];
+}
+
+function branchNextView(node, edges = []) {
+  return edges
+    .filter((edge) => edge.source === node.id)
+    .map((edge) => ({ label: edge.sourceHandle || "success", target: edge.target }));
 }
 
 function conditionInspectorView(state, nodes, conditionNodeId) {

@@ -92,6 +92,111 @@ test("Workflow V2 success handle click does not create edges and manual connect 
   }
 });
 
+test("Workflow V2 node inspectors are type-specific and agent fields are editable controls", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.waitForSelector("[data-testid='workflow-v2-node-config']");
+
+    assert.equal(await page.locator("[data-action='add-workflow-v2-node'][data-node-type='llm']").count(), 0);
+    assert.equal(await page.locator("[data-action='add-workflow-v2-node'][data-node-type='tool']").count(), 0);
+    assert.equal(await page.locator("[data-action='add-workflow-v2-node'][data-node-type='output']").count(), 0);
+
+    await page.locator("[data-node-id='analyze-request']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-agent-goal']");
+    assert.ok(await page.locator("[data-testid='workflow-v2-output-schema-builder']").isVisible());
+    assert.ok(await page.locator("[data-testid='workflow-v2-tool-policy']").isVisible());
+    assert.ok(await page.locator("[data-testid='workflow-v2-agent-branch-summary']").isVisible());
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-branch-next-node-id']").count(), 0);
+    assert.equal(await page.locator("[data-testid='workflow-v2-workflow-run-input-label']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-run-input']").count(), 0);
+    await page.locator("[data-testid='workflow-v2-agent-instruction']").fill("Analyze A");
+    await page.locator("[data-testid='workflow-v2-run-input']").fill("workflow-level input");
+    await page.locator("[data-node-id='technical-answer']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-run-input']").inputValue(), "workflow-level input");
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-run-input']").count(), 0);
+    await page.locator("[data-testid='workflow-v2-agent-instruction']").fill("Technical B");
+
+    await page.locator("[data-node-id='route-category']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-condition-inspector']");
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-goal']").count(), 0);
+    const initialConditionEdges = await edgeRowCount(page);
+    await page.locator("[data-testid='workflow-v2-condition-branch-handle']").fill("other");
+    await page.locator("[data-testid='workflow-v2-condition-source-field']").selectOption("analyze-request:category");
+    await page.locator("[data-testid='workflow-v2-condition-value']").fill("other");
+    await page.locator("[data-testid='workflow-v2-condition-target']").selectOption("end-1");
+    await page.locator("[data-action='add-workflow-v2-condition-branch']").click();
+    assert.equal(await edgeRowCount(page), initialConditionEdges + 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-edge-layer'] path[marker-end]").count(), initialConditionEdges + 1);
+    assert.equal(await page.locator(".workflow-v2-edge-row input[aria-label='Edge handle'][value='other']").count(), 1);
+
+    await page.locator("[data-node-id='end-1']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-end-inspector']");
+    assert.equal(await page.locator("[data-testid='workflow-v2-condition-inspector']").count(), 0);
+
+    await page.locator("[data-action='add-workflow-v2-node'][data-node-type='workflow']").click();
+    await page.locator("[data-node-id='workflow-1']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-workflow-inspector']");
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-goal']").count(), 0);
+
+    await page.locator("[data-node-id='analyze-request']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-agent-goal']");
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-instruction']").inputValue(), "Analyze A");
+    await page.locator("[data-node-id='technical-answer']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-instruction']").inputValue(), "Technical B");
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
+test("Workflow V2 condition inspector displays the configured default branch", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.locator("[data-node-id='route-category']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-condition-inspector']");
+
+    const defaultBranch = page.locator("[data-testid='workflow-v2-condition-default-branch']");
+    assert.equal(await defaultBranch.count(), 1);
+    assert.match(await defaultBranch.textContent(), /default\s*->\s*general-answer/);
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
+test("Workflow V2 condition output handles stay aligned to the right of the node", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.waitForSelector("[data-node-id='route-category']");
+
+    const geometry = await page.evaluate(() => {
+      const node = document.querySelector("button[data-node-id='route-category']").getBoundingClientRect();
+      const handles = [...document.querySelectorAll("button[data-source-id='route-category']")].map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right };
+      });
+      return { node: { right: node.right, top: node.top, bottom: node.bottom }, handles };
+    });
+
+    assert.deepEqual(geometry.handles.map((handle) => Math.round(handle.left >= geometry.node.right)), [1, 1, 1]);
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
 async function workbenchState(page) {
   return page.evaluate(() => {
     const surface = document.querySelector("[data-testid='workflow-v2-workbench']");
