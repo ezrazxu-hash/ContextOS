@@ -153,6 +153,30 @@ test("Workflow V2 node inspectors are type-specific and agent fields are editabl
   }
 });
 
+test("Workflow V2 Agent input schema and binding controls use structured sources", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.locator("[data-action='add-workflow-v2-node'][data-node-type='agent']").click();
+    await page.locator("[data-node-id='agent-1']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-agent-input-bindings']");
+    await page.locator("[data-testid='workflow-v2-input-field-name']").fill("query");
+    await page.locator("[data-action='add-workflow-v2-input-field']").click();
+
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-input-query']").count(), 1);
+    await page.locator("[data-testid='workflow-v2-agent-input-query-source']").selectOption("workflow_input");
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-input-query-workflow']").count(), 1);
+    await page.locator("[data-testid='workflow-v2-agent-input-query-workflow']").selectOption("message");
+    assert.equal(await page.locator("[data-testid='workflow-v2-agent-input-query-source']").inputValue(), "workflow_input");
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
 test("Workflow V2 condition inspector displays the configured default branch", async () => {
   const studio = await startStudio();
   const browser = await chromium.launch();

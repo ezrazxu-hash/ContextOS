@@ -32,6 +32,144 @@ test("T02 V2 workbench exposes editable canvas state and basic inspector selecti
   assert.equal(view.nodeConfig.selectedNodeId, "agent-1");
 });
 
+test("Agent input mappings follow its schema and bind only compatible upstream outputs", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "agent-input-binding",
+      name: "Agent Input Binding",
+      schemaVersion: 2,
+      revision: 1,
+      inputSchema: { type: "object", properties: { message: { type: "string" } } },
+      nodes: [
+        {
+          id: "agent-a",
+          type: "agent",
+          config: {
+            instruction: "produce values",
+            outputSchema: { type: "object", properties: { response: { type: "string" }, score: { type: "number" } } },
+          },
+        },
+        {
+          id: "agent-b",
+          type: "agent",
+          config: {
+            instruction: "consume values",
+            inputSchema: {
+              type: "object",
+              required: ["content", "threshold"],
+              properties: { content: { type: "string" }, threshold: { type: "number" } },
+            },
+            outputSchema: { type: "object", properties: { answer: { type: "string" } } },
+          },
+        },
+        { id: "end-1", type: "end" },
+      ],
+      edges: [{ source: "START", target: "agent-a" }, { source: "agent-b", target: "end-1" }],
+    },
+  });
+
+  workbench.connectCanvasEdge("agent-a", "agent-b");
+  workbench.selectNode("agent-b");
+  let view = workbench.view();
+  const mappings = view.nodeConfig.agentInputInspector.inputMappings;
+
+  assert.deepEqual(mappings.map((mapping) => [mapping.name, mapping.type, mapping.required]), [
+    ["content", "string", true],
+    ["threshold", "number", true],
+  ]);
+  assert.deepEqual(mappings.map((mapping) => mapping.binding), [
+    { kind: "nodeOutput", nodeId: "agent-a", path: ["response"] },
+    { kind: "nodeOutput", nodeId: "agent-a", path: ["score"] },
+  ]);
+  assert.equal(mappings[0].sourceOptions.some((option) => option.path?.join(".") === "score"), false);
+  assert.equal(mappings[0].sourceOptions.some((option) => option.kind === "workflowInput"), true);
+  assert.equal(mappings[0].sourceOptions.some((option) => option.kind === "constant"), true);
+
+  workbench.updateSelectedAgentInputBinding("content", { kind: "workflowInput", path: ["message"] });
+  view = workbench.view();
+  assert.deepEqual(view.nodeConfig.value.inputBindings.content, { kind: "workflowInput", path: ["message"] });
+  assert.equal(JSON.stringify(view.nodeConfig).includes("$state"), false);
+});
+
+test("Agent input schema can be created with the existing schema builder", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "agent-input-schema",
+      schemaVersion: 2,
+      nodes: [{ id: "agent-1", type: "agent", config: { instruction: "use input" } }, { id: "end-1", type: "end" }],
+      edges: [{ source: "START", target: "agent-1" }, { source: "agent-1", target: "end-1" }],
+    },
+  });
+
+  workbench.selectNode("agent-1");
+  workbench.addInputSchemaField({ name: "query", type: "string", required: true });
+
+  const mapping = workbench.view().nodeConfig.agentInputInspector.inputMappings[0];
+  assert.deepEqual([mapping.name, mapping.type, mapping.required], ["query", "string", true]);
+});
+
+test("Agent input bindings become validation issues when their upstream edge is removed", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "invalid-agent-binding",
+      schemaVersion: 2,
+      inputSchema: { type: "object", properties: { message: { type: "string" } } },
+      nodes: [
+        { id: "agent-a", type: "agent", config: { instruction: "produce", outputSchema: { type: "object", properties: { response: { type: "string" } } } } },
+        {
+          id: "agent-b",
+          type: "agent",
+          config: {
+            instruction: "consume",
+            inputSchema: { type: "object", properties: { content: { type: "string" } } },
+            inputBindings: { content: { kind: "nodeOutput", nodeId: "agent-a", path: ["response"] } },
+          },
+        },
+        { id: "end-1", type: "end" },
+      ],
+      edges: [{ source: "agent-a", target: "agent-b" }, { source: "agent-b", target: "end-1" }],
+    },
+  });
+
+  workbench.removeCanvasEdge("0:agent-a->agent-b");
+
+  assert.deepEqual(workbench.view().validationPanel.issues.map((issue) => issue.code), ["agent_input_source_not_upstream"]);
+});
+
+test("Agent input schema and bindings survive draft save and reload", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  let savedDefinition;
+  const workbench = createWorkflowV2Workbench({
+    apiClient: {
+      async saveWorkflowDraft(workflowId, definition) {
+        savedDefinition = { ...definition, id: workflowId, revision: 2 };
+        return savedDefinition;
+      },
+    },
+    workflowDefinition: {
+      id: "reloadable-agent-input",
+      schemaVersion: 2,
+      revision: 1,
+      inputSchema: { type: "object", properties: { message: { type: "string" } } },
+      nodes: [
+        { id: "agent-a", type: "agent", config: { instruction: "produce", outputSchema: { type: "object", properties: { response: { type: "string" } } } } },
+        { id: "agent-b", type: "agent", config: { instruction: "consume", inputSchema: { type: "object", properties: { content: { type: "string" } } }, inputBindings: { content: { kind: "nodeOutput", nodeId: "agent-a", path: ["response"] } } } },
+        { id: "end-1", type: "end" },
+      ],
+      edges: [{ source: "agent-a", target: "agent-b" }, { source: "agent-b", target: "end-1" }],
+    },
+  });
+
+  await workbench.saveDraft();
+  const reloaded = createWorkflowV2Workbench({ workflowDefinition: savedDefinition });
+  reloaded.selectNode("agent-b");
+
+  assert.deepEqual(reloaded.view().nodeConfig.agentInputInspector.inputMappings[0].binding, { kind: "nodeOutput", nodeId: "agent-a", path: ["response"] });
+});
+
 test("T02 V2 workbench exposes handles and editable edge controls for condition branches", async () => {
   const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
   const workbench = createWorkflowV2Workbench({ workflowDefinition: conditionWorkbenchWorkflowDefinition() });

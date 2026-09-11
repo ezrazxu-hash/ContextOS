@@ -50,6 +50,74 @@ class WorkflowV2RuntimeTests(unittest.TestCase):
         self.assertEqual(run["error"]["code"], "workflow.output_schema_invalid")
         self.assertEqual(run["error"]["field"], "$.summary")
 
+    def test_agent_input_binding_resolves_upstream_output_and_constant(self) -> None:
+        from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+        from contextos.workflow_v2.runtime.runs import InMemoryWorkflowV2RunStore, WorkflowV2RunService
+
+        definitions = WorkflowV2DefinitionService()
+        definition = valid_workflow("produce a response")
+        definition["inputSchema"] = {"type": "object", "required": ["message"], "properties": {"message": {"type": "string"}}}
+        definition["nodes"][0]["config"]["outputSchema"] = {"type": "object", "required": ["response"], "properties": {"response": {"type": "string"}}}
+        definition["nodes"].insert(1, {
+            "id": "agent-2",
+            "type": "agent",
+            "config": {
+                "instruction": "use the resolved inputs",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["content", "threshold"],
+                    "properties": {"content": {"type": "string"}, "threshold": {"type": "number"}},
+                },
+                "inputBindings": {
+                    "content": {"kind": "nodeOutput", "nodeId": "agent-1", "path": ["response"]},
+                    "threshold": {"kind": "constant", "value": 0.8},
+                },
+                "outputSchema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+            },
+        })
+        definition["edges"] = [
+            {"source": "START", "target": "agent-1"},
+            {"source": "agent-1", "target": "agent-2"},
+            {"source": "agent-2", "target": "end-1"},
+        ]
+        definitions.create(definition)
+        definitions.publish("support-flow", validator=WorkflowV2DefinitionValidator())
+        llm = SequentialJsonLlmClient(['{"response":"A"}', '{"summary":"used A"}'])
+
+        run = WorkflowV2RunService(definitions, InMemoryWorkflowV2RunStore(), llm_client=llm).start(
+            workflow_id="support-flow",
+            version=1,
+            input_payload={"message": "hello"},
+        )
+
+        self.assertEqual(run["status"], "succeeded")
+        second_input = run["nodeResults"][1]["input"]["inputs"]
+        self.assertEqual(second_input, {"content": "A", "threshold": 0.8})
+        self.assertIn('"content": "A"', llm.calls[1][3]["content"])
+
+    def test_agent_input_binding_resolves_workflow_input(self) -> None:
+        from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+        from contextos.workflow_v2.runtime.runs import InMemoryWorkflowV2RunStore, WorkflowV2RunService
+
+        definitions = WorkflowV2DefinitionService()
+        definition = valid_workflow("use the workflow input binding")
+        definition["inputSchema"] = {"type": "object", "required": ["message"], "properties": {"message": {"type": "string"}}}
+        definition["nodes"][0]["config"]["inputSchema"] = {"type": "object", "required": ["content"], "properties": {"content": {"type": "string"}}}
+        definition["nodes"][0]["config"]["inputBindings"] = {"content": {"kind": "workflowInput", "path": ["message"]}}
+        definitions.create(definition)
+        definitions.publish("support-flow", validator=WorkflowV2DefinitionValidator())
+
+        run = WorkflowV2RunService(
+            definitions,
+            InMemoryWorkflowV2RunStore(),
+            llm_client=RecordingJsonLlmClient('{"summary":"bound"}'),
+        ).start(workflow_id="support-flow", version=1, input_payload={"message": "from workflow"})
+
+        self.assertEqual(run["status"], "succeeded")
+        self.assertEqual(run["nodeResults"][0]["input"]["inputs"], {"content": "from workflow"})
+
     def test_agent_tool_loop_executes_one_tool_call_and_pairs_messages(self) -> None:
         from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
         from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator

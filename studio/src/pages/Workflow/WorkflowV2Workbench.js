@@ -46,6 +46,22 @@ export function createWorkflowV2Workbench(options = {}) {
       refreshReferenceIssues(state);
       return { node: view.nodes.find((node) => node.id === state.selectedNodeId) ?? null };
     },
+    updateSelectedAgentInputBinding(inputName, binding) {
+      const selectedNode = selectedAgentNode(state, builder);
+      const inputBindings = { ...(selectedNode.config?.inputBindings ?? {}) };
+      if (binding && typeof binding === "object") {
+        inputBindings[inputName] = cloneDefinition(binding);
+      } else {
+        delete inputBindings[inputName];
+      }
+      const view = builder.updateAgentNodeConfig(selectedNode.id, { inputBindings });
+      syncDefinition(state, builder);
+      refreshReferenceIssues(state);
+      return {
+        node: view.nodes.find((node) => node.id === selectedNode.id) ?? null,
+        agentInputInspector: agentInputInspectorView(state, view.nodes, view.edges, selectedNode.id),
+      };
+    },
     async loadWorkflowTools() {
       const response = apiClient.listWorkflowTools
         ? await apiClient.listWorkflowTools()
@@ -114,8 +130,21 @@ export function createWorkflowV2Workbench(options = {}) {
         schemaBuilder: schemaBuilder.view(),
       };
     },
+    addInputSchemaField(field) {
+      const selectedNode = selectedAgentNode(state, builder);
+      const schemaBuilder = createWorkflowV2SchemaBuilder(selectedNode.config?.inputSchema ?? null);
+      schemaBuilder.addField(field);
+      const view = builder.updateAgentNodeConfig(selectedNode.id, { inputSchema: schemaBuilder.toJsonSchema() });
+      syncDefinition(state, builder);
+      refreshReferenceIssues(state);
+      return {
+        node: view.nodes.find((node) => node.id === selectedNode.id) ?? null,
+        agentInputInspector: agentInputInspectorView(state, view.nodes, view.edges, selectedNode.id),
+      };
+    },
     connectCanvasEdge(source, target, options = {}) {
-      const view = builder.connect(source, target, options);
+      const connected = builder.connect(source, target, options);
+      const view = autoBindAgentInputs(builder, target, connected.nodes, connected.edges, state.definition);
       syncDefinition(state, builder);
       return { accepted: true, edge: canvasEdge(view.edges[view.edges.length - 1], view.edges.length - 1, view.nodes) };
     },
@@ -302,6 +331,9 @@ export function createWorkflowV2Workbench(options = {}) {
           value: selectedNode?.type === "agent" || selectedNode?.type === "workflow" ? cloneDefinition(selectedNode.config ?? {}) : null,
           schemaBuilder: selectedNode?.type === "agent"
             ? createWorkflowV2SchemaBuilder(selectedNode.config?.outputSchema ?? null).view()
+            : null,
+          agentInputInspector: selectedNode?.type === "agent"
+            ? agentInputInspectorView(state, workflowView.nodes, workflowView.edges, selectedNode.id)
             : null,
           toolSelector: selectedNode?.type === "agent"
             ? createWorkflowV2ToolPolicyEditor({
@@ -962,6 +994,91 @@ function branchNextView(node, edges = []) {
     .map((edge) => ({ label: edge.sourceHandle || "success", target: edge.target }));
 }
 
+function agentInputInspectorView(state, nodes, edges, agentNodeId) {
+  const agentNode = nodes.find((node) => node.id === agentNodeId);
+  const inputSchema = agentNode?.config?.inputSchema ?? agentNode?.config?.input_schema;
+  if (!inputSchema || inputSchema.type !== "object") {
+    return { schemaBuilder: createWorkflowV2SchemaBuilder(inputSchema ?? null).view(), inputMappings: [], sourceOptions: [] };
+  }
+  const required = Array.isArray(inputSchema.required) ? inputSchema.required : [];
+  const inputBindings = agentNode.config?.inputBindings ?? agentNode.config?.input_bindings ?? {};
+  return {
+    schemaBuilder: createWorkflowV2SchemaBuilder(inputSchema).view(),
+    inputMappings: Object.entries(inputSchema.properties ?? {}).map(([name, schema]) => ({
+      name,
+      path: [name],
+      type: schemaType(schema),
+      required: required.includes(name),
+      binding: cloneDefinition(inputBindings[name] ?? null),
+      sourceOptions: agentInputSourceOptions(state.definition, nodes, edges, agentNodeId, schema),
+    })),
+  };
+}
+
+function agentInputSourceOptions(definition, nodes, edges, agentNodeId, targetSchema) {
+  const workflowInputSchema = definition.inputSchema ?? definition.input_schema ?? { type: "object", properties: { message: { type: "string" } } };
+  const workflowInputOptions = outputSchemaFields(workflowInputSchema)
+    .filter((field) => schemaTypesCompatible(field, targetSchema))
+    .map((field) => ({
+      kind: "workflowInput",
+      path: field.path,
+      type: field.type,
+      label: `Workflow Input.${field.path.join(".")}`,
+    }));
+  const ancestorIds = workflowAncestorIds(edges, agentNodeId);
+  const nodeOutputOptions = nodes
+    .filter((node) => ancestorIds.has(node.id) && node.type === "agent")
+    .flatMap((node) => outputSchemaFields(node.config?.outputSchema ?? null)
+      .filter((field) => schemaTypesCompatible(field, targetSchema))
+      .map((field) => ({
+        kind: "nodeOutput",
+        nodeId: node.id,
+        path: field.path,
+        type: field.type,
+        label: `${node.config?.name || node.id}.${field.path.join(".")}`,
+      })));
+  return [...workflowInputOptions, ...nodeOutputOptions, { kind: "constant", type: schemaType(targetSchema), label: "Constant" }];
+}
+
+function autoBindAgentInputs(builder, targetNodeId, nodes, edges, definition) {
+  const targetNode = nodes.find((node) => node.id === targetNodeId);
+  const inputSchema = targetNode?.config?.inputSchema ?? targetNode?.config?.input_schema;
+  if (!targetNode || targetNode.type !== "agent" || !inputSchema || inputSchema.type !== "object") {
+    return builder.view();
+  }
+  const inputBindings = { ...(targetNode.config?.inputBindings ?? targetNode.config?.input_bindings ?? {}) };
+  let changed = false;
+  Object.entries(inputSchema.properties ?? {}).forEach(([name, targetSchema]) => {
+    if (inputBindings[name]) return;
+    const options = agentInputSourceOptions(definition, nodes, edges, targetNodeId, targetSchema)
+      .filter((option) => option.kind === "nodeOutput");
+    const exact = options.filter((option) => option.path.at(-1) === name);
+    const candidates = exact.length ? exact : options;
+    if (candidates.length !== 1) return;
+    const option = candidates[0];
+    inputBindings[name] = { kind: "nodeOutput", nodeId: option.nodeId, path: [...option.path] };
+    changed = true;
+  });
+  return changed ? builder.updateAgentNodeConfig(targetNodeId, { inputBindings }) : builder.view();
+}
+
+function workflowAncestorIds(edges, targetNodeId) {
+  const incoming = new Map();
+  edges.forEach((edge) => {
+    if (!incoming.has(edge.target)) incoming.set(edge.target, []);
+    incoming.get(edge.target).push(edge.source);
+  });
+  const result = new Set();
+  const pending = [...(incoming.get(targetNodeId) ?? [])];
+  while (pending.length) {
+    const nodeId = pending.shift();
+    if (!nodeId || nodeId === "START" || result.has(nodeId)) continue;
+    result.add(nodeId);
+    pending.push(...(incoming.get(nodeId) ?? []));
+  }
+  return result;
+}
+
 function conditionInspectorView(state, nodes, conditionNodeId) {
   const conditionNode = nodes.find((node) => node.id === conditionNodeId);
   const sourceNodes = nodes
@@ -1059,11 +1176,53 @@ function schemaReferenceIssues(definition, workflowCatalog) {
   const nodes = Array.isArray(definition.nodes) ? definition.nodes : [];
   const issues = [];
   nodes.forEach((node, index) => {
+    if (node.type === "agent") {
+      issues.push(...agentInputReferenceIssues(node, index, nodes, definition.edges ?? [], definition));
+    }
     if (node.type === "condition") {
       issues.push(...conditionReferenceIssues(node, index, nodes));
     }
     if (node.type === "workflow") {
       issues.push(...workflowRefReferenceIssues(node, index, nodes, workflowCatalog, definition));
+    }
+  });
+  return issues;
+}
+
+function agentInputReferenceIssues(node, nodeIndex, nodes, edges, definition) {
+  const inputSchema = node.config?.inputSchema ?? node.config?.input_schema;
+  if (!inputSchema || inputSchema.type !== "object") return [];
+  const bindings = node.config?.inputBindings ?? node.config?.input_bindings ?? {};
+  if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) {
+    return [referenceIssue("invalid_agent_input_bindings", `nodes[${nodeIndex}].config.inputBindings`, node.id, "Agent inputBindings must be an object")];
+  }
+  const issues = [];
+  const properties = inputSchema.properties ?? {};
+  const required = Array.isArray(inputSchema.required) ? inputSchema.required : [];
+  required.forEach((name) => {
+    if (!Object.prototype.hasOwnProperty.call(bindings, name)) {
+      issues.push(referenceIssue("agent_input_required_binding_missing", `nodes[${nodeIndex}].config.inputBindings.${name}`, node.id, "Agent input binding is required"));
+    }
+  });
+  Object.entries(bindings).forEach(([name, binding]) => {
+    const targetSchema = properties[name];
+    if (!targetSchema) {
+      issues.push(referenceIssue("agent_input_field_not_defined", `nodes[${nodeIndex}].config.inputBindings.${name}`, node.id, "Agent input field is not defined by inputSchema"));
+      return;
+    }
+    const kind = binding?.kind ?? binding?.type;
+    if (kind === "nodeOutput" || kind === "node_output") {
+      const sourceNodeId = binding.nodeId ?? binding.node_id;
+      if (!workflowAncestorIds(edges, node.id).has(sourceNodeId)) {
+        issues.push(referenceIssue("agent_input_source_not_upstream", `nodes[${nodeIndex}].config.inputBindings.${name}`, node.id, "Agent input source is not an upstream node"));
+        return;
+      }
+    }
+    const sourceSchema = valueRefSchema(binding, definition.inputSchema ?? definitionInputSchemaFallback(), nodes);
+    if (!sourceSchema && (kind === "nodeOutput" || kind === "node_output" || kind === "workflowInput" || kind === "workflow_input")) {
+      issues.push(referenceIssue("agent_input_source_field_not_found", `nodes[${nodeIndex}].config.inputBindings.${name}`, node.id, "Agent input binding source field is not defined"));
+    } else if (sourceSchema && !schemaTypesCompatible(sourceSchema, targetSchema)) {
+      issues.push(referenceIssue("agent_input_type_mismatch", `nodes[${nodeIndex}].config.inputBindings.${name}`, node.id, "Agent input binding type is incompatible"));
     }
   });
   return issues;
@@ -1171,7 +1330,7 @@ function schemaTypesCompatible(sourceSchema, targetSchema) {
 }
 
 function schemaType(schema) {
-  if (Array.isArray(schema?.enum)) {
+  if (Array.isArray(schema?.enum) && schema.enum.length > 0) {
     return "string";
   }
   return schema?.type ?? "";

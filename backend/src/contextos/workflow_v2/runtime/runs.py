@@ -267,7 +267,7 @@ def _execute_single_agent_run(
             return _failed_run(run_id, workflow_id, workflow_version, input_payload, node_results, message_history, execution_details, events, "WORKFLOW_LIMIT_EXCEEDED", "Runtime limit exceeded: maxNodeExecutions", limit="maxNodeExecutions")
         _emit_event(events, run_id, node_id, "NodeStarted", {"status": "running", "nodeType": node.get("type")})
         if node.get("type") == "agent":
-            result = _run_agent_node(node, definition, message_history, execution_details, llm_client, tool_registry, tool_executor_registry, run_id, artifact_store, events, limits, started_at, cancellation_token)
+            result = _run_agent_node(node, definition, input_payload, node_outputs, message_history, execution_details, llm_client, tool_registry, tool_executor_registry, run_id, artifact_store, events, limits, started_at, cancellation_token)
             node_results.append(result["nodeResult"])
             if not result["ok"]:
                 _emit_event(events, run_id, node_id, "NodeFailed", {"status": "failed", "error": deepcopy(result["error"])})
@@ -340,6 +340,8 @@ def _execute_single_agent_run(
 def _run_agent_node(
     agent_node: dict[str, Any],
     definition: dict[str, Any],
+    workflow_input: dict[str, Any],
+    node_outputs: dict[str, Any],
     message_history: list[dict[str, Any]],
     execution_details: dict[str, Any],
     llm_client,
@@ -354,8 +356,13 @@ def _run_agent_node(
 ) -> dict[str, Any]:
     tool_policy = agent_node.get("config", {}).get("toolPolicy", {"mode": "disabled"})
     try:
-        output_schema = agent_node.get("config", {}).get("outputSchema") or {"type": "object", "properties": {}}
-        node_input = {"messages": _provider_messages(agent_node, output_schema, message_history, tool_registry, definition)}
+        config = agent_node.get("config", {}) if isinstance(agent_node.get("config", {}), dict) else {}
+        output_schema = config.get("outputSchema") or {"type": "object", "properties": {}}
+        resolved_inputs = _resolve_agent_inputs(config, workflow_input, node_outputs)
+        if not resolved_inputs["ok"]:
+            return _agent_failure(agent_node, **resolved_inputs["error"])
+        inputs = resolved_inputs["value"]
+        node_input = {"messages": _provider_messages(agent_node, output_schema, message_history, tool_registry, definition, inputs), "inputs": deepcopy(inputs)}
         execution_details["nodes"].append({"nodeId": agent_node["id"], "input": deepcopy(node_input), "steps": []})
         called_tools: set[str] = set()
         node_artifacts: list[dict[str, Any]] = []
@@ -374,7 +381,7 @@ def _run_agent_node(
                 return _agent_failure(agent_node, "WORKFLOW_LIMIT_EXCEEDED", "Runtime limit exceeded: maxLlmTurnsPerNode", limit="maxLlmTurnsPerNode")
             llm_index = _next_llm_index(execution_details)
             _emit_event(events, run_id, str(agent_node["id"]), "LlmCallStarted", {"index": llm_index})
-            raw_output = _complete_llm(llm_client, _provider_messages(agent_node, output_schema, message_history, tool_registry, definition), cancellation_token)
+            raw_output = _complete_llm(llm_client, _provider_messages(agent_node, output_schema, message_history, tool_registry, definition, inputs), cancellation_token)
             llm_turns += 1
             _steps(execution_details).append({"type": "llm_call", "index": llm_index})
             _emit_event(events, run_id, str(agent_node["id"]), "LlmCallCompleted", {"index": llm_index})
@@ -612,6 +619,26 @@ def _resolve_workflow_ref_input(bindings: Any, workflow_input: dict[str, Any], n
         if not resolved["found"]:
             return {"ok": False, "error": {"code": "workflow_ref.value_ref_not_found", "message": f"Workflow Ref input binding not found: {name}", "field": str(name)}}
         result[str(name)] = deepcopy(resolved["value"])
+    return {"ok": True, "value": result}
+
+
+def _resolve_agent_inputs(config: dict[str, Any], workflow_input: dict[str, Any], node_outputs: dict[str, Any]) -> dict[str, Any]:
+    input_schema = config.get("inputSchema", config.get("input_schema"))
+    if input_schema is None:
+        return {"ok": True, "value": {}}
+    bindings = config.get("inputBindings", config.get("input_bindings", {}))
+    if not isinstance(bindings, dict):
+        return {"ok": False, "error": {"code": "workflow.agent_input_bindings_invalid", "message": "Agent inputBindings must be an object"}}
+    result: dict[str, Any] = {}
+    for name, value_ref in bindings.items():
+        resolved = _resolve_value_ref(value_ref, workflow_input, node_outputs)
+        if not resolved["found"]:
+            return {"ok": False, "error": {"code": "workflow.agent_input_value_not_found", "message": f"Agent input binding not found: {name}", "field": str(name)}}
+        result[str(name)] = deepcopy(resolved["value"])
+    validation = _validate_contract(input_schema, result)
+    if not validation["valid"]:
+        first_error = validation["errors"][0]
+        return {"ok": False, "error": {"code": "workflow.agent_input_schema_invalid", "message": str(first_error["message"]), "field": str(first_error["path"])}}
     return {"ok": True, "value": result}
 
 
@@ -866,14 +893,18 @@ def _provider_messages(
     message_history: list[dict[str, Any]],
     tool_registry: ToolRegistry | None,
     definition: dict[str, Any],
+    inputs: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     instruction = str(agent_node.get("config", {}).get("instruction", ""))
-    return [
+    messages = [
         {"role": "system", "content": f"Current Agent Node Instruction:\n{instruction}"},
         {"role": "system", "content": f"Return a JSON object matching this Output Schema:\n{json.dumps(output_schema, ensure_ascii=False, sort_keys=True)}"},
         {"role": "system", "content": f"Available Tools:\n{json.dumps(_available_tools(agent_node, tool_registry, definition), ensure_ascii=False, sort_keys=True)}"},
-        *deepcopy(message_history),
     ]
+    if inputs:
+        messages.append({"role": "system", "content": f"Resolved Agent Inputs:\n{json.dumps(inputs, ensure_ascii=False, sort_keys=True)}"})
+    messages.extend(deepcopy(message_history))
+    return messages
 
 
 def _user_message(input_payload: dict[str, Any]) -> dict[str, Any]:

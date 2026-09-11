@@ -666,6 +666,7 @@ function renderWorkflowV2Inspector(view, selectedNode) {
       <label>Name<input data-testid="workflow-v2-agent-name" value="${escapeAttr(config.name ?? "")}"></label>
       <label>Description<textarea data-testid="workflow-v2-agent-description" rows="3">${escapeHtml(config.description ?? "")}</textarea></label>
       <label data-testid="workflow-v2-agent-goal">Goal<textarea data-testid="workflow-v2-agent-instruction" rows="6">${escapeHtml(config.instruction ?? "")}</textarea></label>
+      ${renderWorkflowV2AgentInputBindings(view)}
       ${renderWorkflowV2OutputSchemaBuilder(view)}
       ${renderWorkflowV2ToolPolicy(view)}
       ${renderWorkflowV2BranchSummary(view)}
@@ -683,6 +684,80 @@ function renderWorkflowV2Inspector(view, selectedNode) {
   return view.nodeConfig.visibleGroups.length === 0
     ? "<p class=\"muted\">No editable fields.</p>"
     : view.nodeConfig.visibleGroups.map((group) => `<p>${escapeHtml(group.label ?? group.id)}</p>`).join("");
+}
+
+function renderWorkflowV2AgentInputBindings(view) {
+  const inspector = view.nodeConfig.agentInputInspector;
+  if (!inspector) return "";
+  const schemaView = inspector.schemaBuilder ?? { fields: [] };
+  return `
+    <section class="workflow-v2-inspector-block" data-testid="workflow-v2-agent-input-bindings">
+      <h3>Inputs</h3>
+      <div class="workflow-v2-schema-fields">
+        ${(schemaView.fields ?? []).map((field) => `<span>${escapeHtml(field.name ?? "")}: ${escapeHtml(field.type ?? "string")}${field.required ? " required" : ""}</span>`).join("") || "<span>No input fields</span>"}
+      </div>
+      <div class="workflow-v2-inline-form">
+        <input data-testid="workflow-v2-input-field-name" placeholder="field">
+        <select data-testid="workflow-v2-input-field-type">
+          <option value="string">string</option>
+          <option value="number">number</option>
+          <option value="integer">integer</option>
+          <option value="boolean">boolean</option>
+          <option value="array">array</option>
+          <option value="object">object</option>
+        </select>
+        <label class="workflow-v2-check"><input type="checkbox" data-testid="workflow-v2-input-field-required">Required</label>
+        <button type="button" class="secondary" data-action="add-workflow-v2-input-field">Add</button>
+      </div>
+      ${inspector.inputMappings.map((mapping) => renderWorkflowV2AgentInputMapping(mapping)).join("")}
+    </section>
+  `;
+}
+
+function renderWorkflowV2AgentInputMapping(mapping) {
+  const binding = mapping.binding ?? {};
+  const bindingKind = workflowV2BindingKind(binding);
+  const nodeOptions = (mapping.sourceOptions ?? []).filter((option) => option.kind === "nodeOutput");
+  const workflowOptions = (mapping.sourceOptions ?? []).filter((option) => option.kind === "workflowInput");
+  const selectedNodeOutput = bindingKind === "node_output" ? `${binding.nodeId}|${(binding.path ?? []).join(".")}` : "";
+  const selectedWorkflowInput = bindingKind === "workflow_input" ? (binding.path ?? []).join(".") : "";
+  return `
+    <div class="workflow-v2-agent-input-row" data-testid="workflow-v2-agent-input-${escapeAttr(mapping.name)}">
+      <div class="workflow-v2-agent-input-label"><strong>${escapeHtml(mapping.name)}</strong><small>${escapeHtml(mapping.type)}${mapping.required ? " required" : ""}</small></div>
+      <select data-workflow-v2-agent-input-source data-input-name="${escapeAttr(mapping.name)}" data-testid="workflow-v2-agent-input-${escapeAttr(mapping.name)}-source">
+        <option value="" ${bindingKind ? "" : "selected"}>Select source</option>
+        <option value="workflow_input" ${bindingKind === "workflow_input" ? "selected" : ""} ${workflowOptions.length ? "" : "disabled"}>Workflow Input</option>
+        <option value="node_output" ${bindingKind === "node_output" ? "selected" : ""} ${nodeOptions.length ? "" : "disabled"}>Upstream Node Output</option>
+        <option value="constant" ${bindingKind === "constant" ? "selected" : ""}>Constant</option>
+      </select>
+      ${bindingKind === "workflow_input" ? `<select data-workflow-v2-agent-input-workflow data-input-name="${escapeAttr(mapping.name)}" data-testid="workflow-v2-agent-input-${escapeAttr(mapping.name)}-workflow">${workflowOptions.map((option) => `<option value="${escapeAttr(option.path.join("."))}" ${option.path.join(".") === selectedWorkflowInput ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select>` : ""}
+      ${bindingKind === "node_output" ? `<select data-workflow-v2-agent-input-node data-input-name="${escapeAttr(mapping.name)}" data-testid="workflow-v2-agent-input-${escapeAttr(mapping.name)}-node">${nodeOptions.map((option) => { const value = `${option.nodeId}|${option.path.join(".")}`; return `<option value="${escapeAttr(value)}" ${value === selectedNodeOutput ? "selected" : ""}>${escapeHtml(option.label)}</option>`; }).join("")}</select>` : ""}
+      ${bindingKind === "constant" ? `<input data-workflow-v2-agent-input-constant data-input-name="${escapeAttr(mapping.name)}" data-value-type="${escapeAttr(mapping.type)}" data-testid="workflow-v2-agent-input-${escapeAttr(mapping.name)}-constant" value="${escapeAttr(workflowV2ConstantInputValue(binding.value))}" />` : ""}
+    </div>
+  `;
+}
+
+function workflowV2BindingKind(binding) {
+  const kind = binding?.kind ?? binding?.type ?? "";
+  if (kind === "workflowInput" || kind === "workflow_input") return "workflow_input";
+  if (kind === "nodeOutput" || kind === "node_output") return "node_output";
+  if (kind === "constant" || kind === "literal") return "constant";
+  return "";
+}
+
+function workflowV2ConstantInputValue(value) {
+  if (value === undefined || value === null) return "";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+function workflowV2ConstantValue(rawValue, type) {
+  if (type === "number") return rawValue === "" ? null : Number(rawValue);
+  if (type === "integer") return rawValue === "" ? null : Number.parseInt(rawValue, 10);
+  if (type === "boolean") return rawValue === "true";
+  if (type === "object" || type === "array") {
+    try { return JSON.parse(rawValue); } catch { return rawValue; }
+  }
+  return rawValue;
 }
 
 function renderWorkflowV2BranchSummary(view) {
@@ -1546,6 +1621,15 @@ function bindEvents() {
   workflowV2AgentDescription?.addEventListener("input", () => {
     workflowV2Workbench().updateSelectedAgentConfig({ description: workflowV2AgentDescription.value });
   });
+  document.querySelectorAll("[data-workflow-v2-agent-input-source]").forEach((element) => {
+    element.addEventListener("change", () => updateWorkflowV2AgentInputBinding(element, true));
+  });
+  document.querySelectorAll("[data-workflow-v2-agent-input-workflow], [data-workflow-v2-agent-input-node]").forEach((element) => {
+    element.addEventListener("change", () => updateWorkflowV2AgentInputBinding(element, true));
+  });
+  document.querySelectorAll("[data-workflow-v2-agent-input-constant]").forEach((element) => {
+    element.addEventListener("input", () => updateWorkflowV2AgentInputBinding(element, false));
+  });
   document.querySelector("[data-testid='workflow-v2-tool-mode']")?.addEventListener("change", (event) => {
     updateWorkflowV2ToolPolicy({ mode: event.currentTarget.value });
   });
@@ -2113,6 +2197,9 @@ async function handleAction(event) {
   } else if (action === "add-workflow-v2-output-field") {
     addWorkflowV2OutputFieldFromForm();
     render();
+  } else if (action === "add-workflow-v2-input-field") {
+    addWorkflowV2InputFieldFromForm();
+    render();
   } else if (action === "add-workflow-v2-condition-branch") {
     addWorkflowV2ConditionBranchFromForm();
     render();
@@ -2162,6 +2249,40 @@ function addWorkflowV2OutputFieldFromForm() {
     required,
     ...(enumValues.length > 0 ? { enumOptions: enumValues } : {}),
   });
+}
+
+function addWorkflowV2InputFieldFromForm() {
+  const name = document.querySelector("[data-testid='workflow-v2-input-field-name']")?.value?.trim() ?? "";
+  if (!name) {
+    state.toast = { tone: "error", text: "Input field name is required" };
+    return;
+  }
+  const type = document.querySelector("[data-testid='workflow-v2-input-field-type']")?.value ?? "string";
+  const required = Boolean(document.querySelector("[data-testid='workflow-v2-input-field-required']")?.checked);
+  workflowV2Workbench().addInputSchemaField({ name, type, required });
+}
+
+function updateWorkflowV2AgentInputBinding(element, renderAfterUpdate) {
+  const inputName = element.dataset.inputName;
+  if (!inputName) return;
+  const row = element.closest(".workflow-v2-agent-input-row");
+  const source = row?.querySelector("[data-workflow-v2-agent-input-source]")?.value ?? "";
+  const view = workflowV2Workbench().view();
+  const mapping = view.nodeConfig.agentInputInspector?.inputMappings?.find((item) => item.name === inputName);
+  let binding = null;
+  if (source === "workflow_input") {
+    const path = row.querySelector("[data-workflow-v2-agent-input-workflow]")?.value?.split(".").filter(Boolean)
+      ?? mapping?.sourceOptions?.find((option) => option.kind === "workflowInput")?.path;
+    if (path?.length) binding = { kind: "workflowInput", path };
+  } else if (source === "node_output") {
+    const [nodeId, ...pathParts] = (row.querySelector("[data-workflow-v2-agent-input-node]")?.value ?? "").split("|");
+    if (nodeId && pathParts.length) binding = { kind: "nodeOutput", nodeId, path: pathParts.join(".").split(".").filter(Boolean) };
+  } else if (source === "constant") {
+    const constant = row.querySelector("[data-workflow-v2-agent-input-constant]");
+    binding = { kind: "constant", value: workflowV2ConstantValue(constant?.value ?? "", constant?.dataset.valueType ?? mapping?.type) };
+  }
+  workflowV2Workbench().updateSelectedAgentInputBinding(inputName, binding);
+  if (renderAfterUpdate) render();
 }
 
 function addWorkflowV2ConditionBranchFromForm() {

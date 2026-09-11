@@ -389,6 +389,140 @@ class WorkflowV2DefinitionValidatorTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertEqual(result["errors"][0]["code"], "state_path_not_allowed")
 
+    def test_accepts_agent_input_binding_from_reachable_upstream_output(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    agent_node(config={
+                        "instruction": "produce response",
+                        "outputSchema": {"type": "object", "properties": {"response": {"type": "string"}}},
+                    }),
+                    {
+                        "id": "agent-2",
+                        "type": "agent",
+                        "config": {
+                            "instruction": "use the bound input",
+                            "inputSchema": {"type": "object", "required": ["content"], "properties": {"content": {"type": "string"}}},
+                            "inputBindings": {"content": {"kind": "nodeOutput", "nodeId": "agent-1", "path": ["response"]}},
+                            "outputSchema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+                        },
+                    },
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[
+                    {"source": "START", "target": "agent-1"},
+                    {"source": "agent-1", "target": "agent-2"},
+                    {"source": "agent-2", "target": "end-1"},
+                ],
+            )
+        )
+
+        self.assertTrue(result["valid"], result["errors"])
+
+    def test_accepts_agent_input_binding_from_default_workflow_message_input(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    agent_node(config={
+                        "instruction": "use the workflow message",
+                        "inputSchema": {"type": "object", "required": ["content"], "properties": {"content": {"type": "string"}}},
+                        "inputBindings": {"content": {"kind": "workflowInput", "path": ["message"]}},
+                    }),
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[{"source": "START", "target": "agent-1"}, {"source": "agent-1", "target": "end-1"}],
+            )
+        )
+
+        self.assertTrue(result["valid"], result["errors"])
+
+    def test_rejects_agent_input_binding_when_required_field_is_missing(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    agent_node(config={
+                        "instruction": "use input",
+                        "inputSchema": {"type": "object", "required": ["content"], "properties": {"content": {"type": "string"}}},
+                        "inputBindings": {},
+                    }),
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[{"source": "START", "target": "agent-1"}, {"source": "agent-1", "target": "end-1"}],
+            )
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertIn("agent_input_required_binding_missing", [error["code"] for error in result["errors"]])
+
+    def test_rejects_agent_input_binding_when_output_type_is_incompatible(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    agent_node(config={
+                        "instruction": "produce score",
+                        "outputSchema": {"type": "object", "properties": {"score": {"type": "number"}}},
+                    }),
+                    {
+                        "id": "agent-2",
+                        "type": "agent",
+                        "config": {
+                            "instruction": "use score as text",
+                            "inputSchema": {"type": "object", "properties": {"content": {"type": "string"}}},
+                            "inputBindings": {"content": {"kind": "nodeOutput", "nodeId": "agent-1", "path": ["score"]}},
+                        },
+                    },
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[
+                    {"source": "START", "target": "agent-1"},
+                    {"source": "agent-1", "target": "agent-2"},
+                    {"source": "agent-2", "target": "end-1"},
+                ],
+            )
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertIn("agent_input_type_mismatch", [error["code"] for error in result["errors"]])
+
+    def test_rejects_agent_input_binding_from_non_upstream_node(self) -> None:
+        from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator
+
+        result = WorkflowV2DefinitionValidator().validate(
+            definition(
+                nodes=[
+                    agent_node(config={"instruction": "first", "outputSchema": {"type": "object", "properties": {"response": {"type": "string"}}}}),
+                    {"id": "agent-2", "type": "agent", "config": {"instruction": "second", "outputSchema": {"type": "object", "properties": {"response": {"type": "string"}}}}},
+                    {
+                        "id": "agent-3",
+                        "type": "agent",
+                        "config": {
+                            "instruction": "third",
+                            "inputSchema": {"type": "object", "properties": {"content": {"type": "string"}}},
+                            "inputBindings": {"content": {"kind": "nodeOutput", "nodeId": "agent-2", "path": ["response"]}},
+                        },
+                    },
+                    {"id": "end-1", "type": "end"},
+                ],
+                edges=[
+                    {"source": "START", "target": "agent-1"},
+                    {"source": "agent-1", "target": "agent-3"},
+                    {"source": "agent-3", "target": "agent-2"},
+                    {"source": "agent-2", "target": "end-1"},
+                ],
+            )
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertIn("agent_input_source_not_upstream", [error["code"] for error in result["errors"]])
+
 
 def definition(nodes, edges):
     return {"schemaVersion": 2, "id": "support-flow", "nodes": nodes, "edges": edges}

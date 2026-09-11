@@ -99,6 +99,7 @@ class WorkflowV2DefinitionValidator:
         for source, outgoing in outgoing_by_source.items():
             if len(outgoing) > 1:
                 errors.append(_issue("multiple_success_edges", "edges", f"Node {source} has multiple success edges", node_id=source))
+        errors.extend(_validate_agent_input_bindings(nodes, node_by_id, edges, definition))
         errors.extend(_validate_condition_branch_edges(nodes, condition_handles))
 
         return {"valid": len(errors) == 0, "errors": errors, "warnings": []}
@@ -157,8 +158,111 @@ def _validate_agent_node(
                 )
             )
 
+    input_schema = config.get("inputSchema", config.get("input_schema"))
+    if input_schema is not None:
+        schema_result = WorkflowV2JsonSchemaService().validate_schema(input_schema)
+        for error in schema_result["errors"]:
+            errors.append(
+                _issue(
+                    "invalid_input_schema",
+                    _schema_field_path(index, str(error["path"]), field_name="inputSchema"),
+                    str(error["message"]),
+                    node_id=node_id,
+                )
+            )
+        if isinstance(input_schema, dict) and input_schema.get("type") != "object":
+            errors.append(_issue("agent_input_schema_object_required", f"nodes[{index}].config.inputSchema.type", "Agent inputSchema must be an object schema", node_id=node_id))
+
     errors.extend(_validate_tool_policy(config.get("toolPolicy", config.get("tool_policy", {})), index, workflow_tool_ids, tool_registry, node_id))
     return errors
+
+
+def _validate_agent_input_bindings(
+    nodes: list[Any],
+    node_by_id: dict[str, dict[str, Any]],
+    edges: list[Any],
+    definition: dict[str, object],
+) -> list[dict[str, object]]:
+    errors: list[dict[str, object]] = []
+    input_schema = definition.get("inputSchema", definition.get("input_schema"))
+    for node_index, node in enumerate(nodes):
+        if not isinstance(node, dict) or node.get("type") != "agent":
+            continue
+        config = node.get("config", {}) if isinstance(node.get("config", {}), dict) else {}
+        schema = config.get("inputSchema", config.get("input_schema"))
+        if schema is None or not isinstance(schema, dict) or schema.get("type") != "object":
+            continue
+        bindings = config.get("inputBindings", config.get("input_bindings", {}))
+        node_id = str(node.get("id") or "")
+        field = f"nodes[{node_index}].config.inputBindings"
+        if not isinstance(bindings, dict):
+            errors.append(_issue("invalid_agent_input_bindings", field, "Agent inputBindings must be an object", node_id=node_id))
+            continue
+        properties = schema.get("properties", {}) if isinstance(schema.get("properties", {}), dict) else {}
+        required = schema.get("required", []) if isinstance(schema.get("required", []), list) else []
+        for required_name in required:
+            if str(required_name) not in bindings:
+                errors.append(_issue("agent_input_required_binding_missing", f"{field}.{required_name}", f"Agent input binding is required: {required_name}", node_id=node_id))
+        for input_name, value_ref in bindings.items():
+            input_name = str(input_name)
+            if input_name not in properties:
+                errors.append(_issue("agent_input_field_not_defined", f"{field}.{input_name}", f"Agent input field is not defined by inputSchema: {input_name}", node_id=node_id))
+                continue
+            errors.extend(_validate_agent_input_value_ref(value_ref, field + "." + input_name, node_id, node_by_id, edges, node_id, properties[input_name], definition))
+    return errors
+
+
+def _validate_agent_input_value_ref(
+    value_ref: Any,
+    field: str,
+    node_id: str,
+    node_by_id: dict[str, dict[str, Any]],
+    edges: list[Any],
+    target_node_id: str,
+    target_schema: Any,
+    definition: dict[str, object],
+) -> list[dict[str, object]]:
+    errors = _validate_value_ref_shape(value_ref, field, node_id)
+    if errors or not isinstance(value_ref, dict):
+        return errors
+    kind = _value_ref_kind(value_ref)
+    if kind in {"nodeOutput", "node_output"}:
+        source_node_id = str(value_ref.get("nodeId", value_ref.get("node_id", "")))
+        if source_node_id not in node_by_id or not _graph_reaches(edges, source_node_id, target_node_id):
+            errors.append(_issue("agent_input_source_not_upstream", field, f"Agent input source is not an upstream node: {source_node_id}", node_id=node_id))
+    source_definition = definition
+    if kind in {"workflowInput", "workflow_input"} and definition.get("inputSchema", definition.get("input_schema")) is None:
+        source_definition = {**definition, "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}}}
+    source_schema = _value_ref_schema(value_ref, source_definition, node_by_id)
+    if source_schema is None and kind in {"nodeOutput", "node_output", "workflowInput", "workflow_input"}:
+        errors.append(_issue("agent_input_source_field_not_found", field, "Agent input binding source field is not defined", node_id=node_id))
+    elif isinstance(source_schema, dict) and isinstance(target_schema, dict) and not _schema_types_compatible(source_schema, target_schema):
+        errors.append(_issue("agent_input_type_mismatch", field, "Agent input binding type is incompatible", node_id=node_id))
+    return errors
+
+
+def _graph_reaches(edges: list[Any], source: str, target: str) -> bool:
+    if source == target:
+        return False
+    outgoing: dict[str, set[str]] = defaultdict(set)
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        start = _edge_endpoint(edge, "source")
+        end = _edge_endpoint(edge, "target")
+        if start and end:
+            outgoing[start].add(end)
+    pending = [source]
+    visited: set[str] = set()
+    while pending:
+        current = pending.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+        if current == target:
+            return True
+        pending.extend(sorted(outgoing.get(current, set()) - visited))
+    return False
 
 
 def _validate_condition_node(
@@ -467,10 +571,10 @@ def _is_non_negative_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
 
 
-def _schema_field_path(node_index: int, schema_path: str) -> str:
+def _schema_field_path(node_index: int, schema_path: str, *, field_name: str = "outputSchema") -> str:
     suffix = schema_path.removeprefix("$")
     suffix = suffix.removeprefix(".")
-    base = f"nodes[{node_index}].config.outputSchema"
+    base = f"nodes[{node_index}].config.{field_name}"
     return f"{base}.{suffix}" if suffix else base
 
 
