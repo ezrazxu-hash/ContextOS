@@ -245,6 +245,43 @@ test("Workflow V2 run shows the selected node execution trace and real payload s
   }
 });
 
+test("Workflow V2 bottom panel switches between execution trace and edge relations", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.waitForSelector("[data-testid='workflow-v2-bottom-panel']");
+
+    assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-edge-relations']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-execution-trace']").count(), 0);
+    assert.equal(await page.locator("[data-testid='workflow-v2-edge-panel']").count(), 1);
+
+    await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-execution-trace']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-edge-panel']").count(), 0);
+    assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").getAttribute("aria-selected"), "true");
+
+    const traceHeight = await page.locator("[data-testid='workflow-v2-canvas']").evaluate((element) => element.getBoundingClientRect().height);
+
+    await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-execution-trace']").count(), 0);
+    assert.equal(await page.locator("[data-testid='workflow-v2-edge-panel']").count(), 0);
+    const closedHeight = await page.locator("[data-testid='workflow-v2-canvas']").evaluate((element) => element.getBoundingClientRect().height);
+    assert.ok(closedHeight > traceHeight);
+
+    await page.locator("[data-testid='workflow-v2-bottom-tab-edge-relations']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-edge-panel']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-execution-trace']").count(), 0);
+    assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-edge-relations']").getAttribute("aria-selected"), "true");
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
 async function workbenchState(page) {
   return page.evaluate(() => {
     const surface = document.querySelector("[data-testid='workflow-v2-workbench']");

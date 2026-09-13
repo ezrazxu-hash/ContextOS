@@ -129,6 +129,8 @@ const state = {
   workflowTesting: false,
   workflowTestRun: null,
   workflowRuntimeEvents: [],
+  workflowV2BottomPanelOpen: true,
+  workflowV2ActiveBottomTab: "edge-relations",
   workflowV2Versions: [],
   templateTab: "basic",
   sending: false,
@@ -475,6 +477,7 @@ function renderWorkflowV2() {
           </section>
         </div>
       </div>
+      ${renderWorkflowV2BottomPanel(view)}
     </section>
   `;
 }
@@ -494,7 +497,25 @@ function renderWorkflowV2CanvasBody(view) {
         `).join("")}
       </div>
     </div>
-    ${renderWorkflowV2EdgeControls(view)}
+  `;
+}
+
+function renderWorkflowV2BottomPanel(view) {
+  const activeTab = state.workflowV2ActiveBottomTab;
+  const open = state.workflowV2BottomPanelOpen;
+  const run = view.runPanel;
+  return `
+    <section class="workflow-v2-bottom-panel ${open ? "open" : "closed"}" data-testid="workflow-v2-bottom-panel">
+      <div class="workflow-v2-bottom-tabs" role="tablist" aria-label="Workflow bottom panel">
+        <button type="button" role="tab" class="workflow-v2-bottom-tab ${open && activeTab === "execution-trace" ? "active" : ""}" data-action="toggle-workflow-v2-bottom-tab" data-bottom-tab="execution-trace" data-testid="workflow-v2-bottom-tab-execution-trace" aria-selected="${open && activeTab === "execution-trace"}">Execution Trace</button>
+        <button type="button" role="tab" class="workflow-v2-bottom-tab ${open && activeTab === "edge-relations" ? "active" : ""}" data-action="toggle-workflow-v2-bottom-tab" data-bottom-tab="edge-relations" data-testid="workflow-v2-bottom-tab-edge-relations" aria-selected="${open && activeTab === "edge-relations"}">Edge Relations</button>
+      </div>
+      ${open ? `<div class="workflow-v2-bottom-content" data-testid="workflow-v2-bottom-content">
+        ${activeTab === "execution-trace"
+          ? (run?.nodeExecutionDetails?.length ? renderWorkflowV2ExecutionTrace(run) : `<section class="workflow-v2-execution-trace" data-testid="workflow-v2-execution-trace"><h3>Execution Trace</h3><p class="muted">Run the workflow to view node execution details.</p></section>`)
+          : renderWorkflowV2EdgeControls(view)}
+      </div>` : ""}
+    </section>
   `;
 }
 
@@ -507,7 +528,6 @@ function renderWorkflowV2RunPanel(view) {
       ${run ? `<p>Status: ${escapeHtml(run.status)}</p>` : ""}
       ${run?.output ? `<pre>${escapeHtml(JSON.stringify(run.output, null, 2))}</pre>` : ""}
       ${run?.error ? `<p class="message-error">${escapeHtml(run.error.message ?? run.error)}</p>` : ""}
-      ${run?.nodeExecutionDetails?.length ? renderWorkflowV2ExecutionTrace(run) : ""}
     </div>
   `;
 }
@@ -1687,6 +1707,18 @@ function refreshWorkflowV2Canvas() {
   canvas.innerHTML = renderWorkflowV2CanvasBody(workflowV2Workbench().view());
   bindActionEvents(canvas);
   bindWorkflowV2EdgeFieldEvents(canvas);
+  refreshWorkflowV2BottomPanel();
+}
+
+function refreshWorkflowV2BottomPanel() {
+  const panel = document.querySelector("[data-testid='workflow-v2-bottom-panel']");
+  if (!panel) return;
+  panel.outerHTML = renderWorkflowV2BottomPanel(workflowV2Workbench().view());
+  const nextPanel = document.querySelector("[data-testid='workflow-v2-bottom-panel']");
+  if (nextPanel) {
+    bindActionEvents(nextPanel);
+    bindWorkflowV2EdgeFieldEvents(nextPanel);
+  }
 }
 
 function handleDocumentClick(event) {
@@ -2171,6 +2203,16 @@ async function handleAction(event) {
     render();
   } else if (action === "select-workflow-v2-run-node") {
     workflowV2Workbench().selectNode(target.dataset.nodeId);
+    render();
+  } else if (action === "toggle-workflow-v2-bottom-tab") {
+    const tab = target.dataset.bottomTab;
+    if (tab !== "execution-trace" && tab !== "edge-relations") return;
+    if (state.workflowV2BottomPanelOpen && state.workflowV2ActiveBottomTab === tab) {
+      state.workflowV2BottomPanelOpen = false;
+    } else {
+      state.workflowV2BottomPanelOpen = true;
+      state.workflowV2ActiveBottomTab = tab;
+    }
     render();
   } else if (action === "save-workflow-v2-draft") {
     await saveWorkflowV2Draft();
@@ -2895,6 +2937,8 @@ async function runWorkflowV2() {
   render();
   try {
     const run = await workbench.startRun({ version, input: { message: state.workflowTestInput } });
+    state.workflowV2BottomPanelOpen = true;
+    state.workflowV2ActiveBottomTab = "execution-trace";
     state.toast = { tone: run.status === "failed" ? "error" : "success", text: `Run ${run.status}` };
   } catch (error) {
     state.toast = { tone: "error", text: error.message };
@@ -4019,6 +4063,12 @@ function styleTag() {
     .workflow-v2-edge-panel select, .workflow-v2-edge-panel input, .workflow-v2-inline-form input, .workflow-v2-inline-form select { width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
     .workflow-v2-inspector-block { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
     .workflow-v2-inspector-block h3 { margin: 0; font-size: 13px; }
+    .workflow-v2-bottom-panel { flex: 0 0 auto; min-height: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .workflow-v2-bottom-tabs { display: flex; gap: 2px; align-items: stretch; min-height: 38px; padding: 0 8px; border-bottom: 1px solid var(--line); background: #f8fafc; }
+    .workflow-v2-bottom-tab { min-height: 38px; padding: 7px 10px 6px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; }
+    .workflow-v2-bottom-tab.active { border-bottom-color: var(--accent); background: var(--panel); color: var(--accent); font-weight: 700; }
+    .workflow-v2-bottom-content { min-height: 0; max-height: 34vh; overflow: auto; }
+    .workflow-v2-bottom-content .workflow-v2-edge-panel, .workflow-v2-bottom-content .workflow-v2-execution-trace { border-top: 0; }
     .workflow-v2-execution-trace { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
     .workflow-v2-execution-trace h3 { margin: 0; }
     .workflow-v2-execution-list { display: grid; gap: 6px; margin: 0; padding-left: 22px; }
