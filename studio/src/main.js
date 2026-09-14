@@ -470,11 +470,6 @@ function renderWorkflowV2() {
             <h2>Validation</h2>
             ${view.validationPanel.issues.length === 0 ? "<p>No validation issues.</p>" : view.validationPanel.issues.map((issue) => `<p>${escapeHtml(issue.message ?? issue.code ?? "Validation issue")}</p>`).join("")}
           </section>
-          <section class="node-config-section agent-test-section">
-            <h2>Run</h2>
-            <label data-testid="workflow-v2-workflow-run-input-label">Workflow Input<textarea data-testid="workflow-v2-run-input" rows="3">${escapeHtml(state.workflowTestInput)}</textarea></label>
-            ${renderWorkflowV2RunPanel(view)}
-          </section>
         </div>
       </div>
       ${renderWorkflowV2BottomPanel(view)}
@@ -505,13 +500,16 @@ function renderWorkflowV2BottomPanel(view) {
   const open = state.workflowV2BottomPanelOpen;
   const run = view.runPanel;
   return `
-    <section class="workflow-v2-bottom-panel ${open ? "open" : "closed"}" data-testid="workflow-v2-bottom-panel">
+      <section class="workflow-v2-bottom-panel ${open ? "open" : "closed"}" data-testid="workflow-v2-bottom-panel">
       <div class="workflow-v2-bottom-tabs" role="tablist" aria-label="Workflow bottom panel">
+        <button type="button" role="tab" class="workflow-v2-bottom-tab ${open && activeTab === "run" ? "active" : ""}" data-action="toggle-workflow-v2-bottom-tab" data-bottom-tab="run" data-testid="workflow-v2-bottom-tab-run" aria-selected="${open && activeTab === "run"}">Run</button>
         <button type="button" role="tab" class="workflow-v2-bottom-tab ${open && activeTab === "execution-trace" ? "active" : ""}" data-action="toggle-workflow-v2-bottom-tab" data-bottom-tab="execution-trace" data-testid="workflow-v2-bottom-tab-execution-trace" aria-selected="${open && activeTab === "execution-trace"}">Execution Trace</button>
         <button type="button" role="tab" class="workflow-v2-bottom-tab ${open && activeTab === "edge-relations" ? "active" : ""}" data-action="toggle-workflow-v2-bottom-tab" data-bottom-tab="edge-relations" data-testid="workflow-v2-bottom-tab-edge-relations" aria-selected="${open && activeTab === "edge-relations"}">Edge Relations</button>
       </div>
       ${open ? `<div class="workflow-v2-bottom-content" data-testid="workflow-v2-bottom-content">
-        ${activeTab === "execution-trace"
+        ${activeTab === "run"
+          ? renderWorkflowV2RunPanel(view)
+          : activeTab === "execution-trace"
           ? (run?.nodeExecutionDetails?.length ? renderWorkflowV2ExecutionTrace(run) : `<section class="workflow-v2-execution-trace" data-testid="workflow-v2-execution-trace"><h3>Execution Trace</h3><p class="muted">Run the workflow to view node execution details.</p></section>`)
           : renderWorkflowV2EdgeControls(view)}
       </div>` : ""}
@@ -522,13 +520,27 @@ function renderWorkflowV2BottomPanel(view) {
 function renderWorkflowV2RunPanel(view) {
   const versions = view.toolbar.versions ?? [];
   const run = view.runPanel;
+  const running = run?.status === "running";
+  const output = run?.output === null || run?.output === undefined
+    ? null
+    : typeof run.output === "object" ? JSON.stringify(run.output, null, 2) : String(run.output);
   return `
-    <div class="graph-preview" data-testid="workflow-v2-run-panel">
-      <p>Latest version: ${versions.length ? escapeHtml(versions[versions.length - 1].version ?? versions[versions.length - 1].id) : "Not published"}</p>
-      ${run ? `<p>Status: ${escapeHtml(run.status)}</p>` : ""}
-      ${run?.output ? `<pre>${escapeHtml(JSON.stringify(run.output, null, 2))}</pre>` : ""}
-      ${run?.error ? `<p class="message-error">${escapeHtml(run.error.message ?? run.error)}</p>` : ""}
-    </div>
+    <section class="workflow-v2-run-panel" data-testid="workflow-v2-run-panel">
+      <section class="workflow-v2-run-section" data-testid="workflow-v2-workflow-input">
+        <h3>Workflow Input</h3>
+        <label data-testid="workflow-v2-workflow-run-input-label">Workflow Input<textarea data-testid="workflow-v2-run-input" rows="3">${escapeHtml(state.workflowTestInput)}</textarea></label>
+        <div class="workflow-v2-run-actions">
+          <button type="button" data-action="run-workflow-v2" data-testid="workflow-v2-run-submit" ${running ? "disabled" : ""}>${running ? "Running…" : "Run"}</button>
+          <span class="workflow-v2-run-meta">Latest version: ${versions.length ? escapeHtml(versions[versions.length - 1].version ?? versions[versions.length - 1].id) : "Not published"}</span>
+        </div>
+      </section>
+      <section class="workflow-v2-run-section workflow-v2-run-output" data-testid="workflow-v2-workflow-output">
+        <div class="workflow-v2-run-output-header"><h3>Workflow Output</h3>${run ? `<span class="run-status-${escapeAttr(run.status)}" aria-live="polite">${escapeHtml(workflowRunStatusLabel(run.status))}</span>` : ""}</div>
+        ${output !== null ? `<pre data-testid="workflow-v2-run-output">${escapeHtml(output)}</pre>` : `<p class="muted">${running ? "Workflow is running…" : run?.error ? "No output was produced." : "Run the workflow to view output."}</p>`}
+        ${run?.streamStatus ? `<p class="workflow-v2-run-meta" aria-live="polite">Stream: ${escapeHtml(run.streamStatus)}</p>` : ""}
+        ${run?.error ? `<p class="message-error" role="alert">${escapeHtml(run.error.message ?? run.error)}</p>` : ""}
+      </section>
+    </section>
   `;
 }
 
@@ -1625,10 +1637,7 @@ function bindEvents() {
   workflowTestInput?.addEventListener("input", () => {
     state.workflowTestInput = workflowTestInput.value;
   });
-  const workflowV2RunInput = document.querySelector("[data-testid='workflow-v2-run-input']");
-  workflowV2RunInput?.addEventListener("input", () => {
-    state.workflowTestInput = workflowV2RunInput.value;
-  });
+  bindWorkflowV2RunInputEvents(document);
   const workflowV2AgentInstruction = document.querySelector("[data-testid='workflow-v2-agent-instruction']");
   workflowV2AgentInstruction?.addEventListener("input", () => {
     workflowV2Workbench().updateSelectedAgentConfig({ instruction: workflowV2AgentInstruction.value });
@@ -1718,7 +1727,16 @@ function refreshWorkflowV2BottomPanel() {
   if (nextPanel) {
     bindActionEvents(nextPanel);
     bindWorkflowV2EdgeFieldEvents(nextPanel);
+    bindWorkflowV2RunInputEvents(nextPanel);
   }
+}
+
+function bindWorkflowV2RunInputEvents(root) {
+  root.querySelectorAll("[data-testid='workflow-v2-run-input']").forEach((input) => {
+    input.addEventListener("input", () => {
+      state.workflowTestInput = input.value;
+    });
+  });
 }
 
 function handleDocumentClick(event) {
@@ -2206,7 +2224,7 @@ async function handleAction(event) {
     render();
   } else if (action === "toggle-workflow-v2-bottom-tab") {
     const tab = target.dataset.bottomTab;
-    if (tab !== "execution-trace" && tab !== "edge-relations") return;
+    if (tab !== "run" && tab !== "execution-trace" && tab !== "edge-relations") return;
     if (state.workflowV2BottomPanelOpen && state.workflowV2ActiveBottomTab === tab) {
       state.workflowV2BottomPanelOpen = false;
     } else {
@@ -2934,11 +2952,12 @@ async function runWorkflowV2() {
     return;
   }
   state.toast = { tone: "loading", text: "Running Agent Workflow V2" };
+  state.workflowV2BottomPanelOpen = true;
+  state.workflowV2ActiveBottomTab = "run";
+  const runPromise = workbench.startRun({ version, input: { message: state.workflowTestInput } });
   render();
   try {
-    const run = await workbench.startRun({ version, input: { message: state.workflowTestInput } });
-    state.workflowV2BottomPanelOpen = true;
-    state.workflowV2ActiveBottomTab = "execution-trace";
+    const run = await runPromise;
     state.toast = { tone: run.status === "failed" ? "error" : "success", text: `Run ${run.status}` };
   } catch (error) {
     state.toast = { tone: "error", text: error.message };
@@ -4069,6 +4088,16 @@ function styleTag() {
     .workflow-v2-bottom-tab.active { border-bottom-color: var(--accent); background: var(--panel); color: var(--accent); font-weight: 700; }
     .workflow-v2-bottom-content { min-height: 0; max-height: 34vh; overflow: auto; }
     .workflow-v2-bottom-content .workflow-v2-edge-panel, .workflow-v2-bottom-content .workflow-v2-execution-trace { border-top: 0; }
+    .workflow-v2-run-panel { display: grid; gap: 12px; padding: 12px; background: #ffffff; }
+    .workflow-v2-run-section { display: grid; gap: 8px; }
+    .workflow-v2-run-section h3 { margin: 0; font-size: 13px; }
+    .workflow-v2-run-section textarea { width: 100%; min-height: 76px; resize: vertical; }
+    .workflow-v2-run-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .workflow-v2-run-meta { color: var(--muted); font-size: 12px; }
+    .workflow-v2-run-output { border-top: 1px solid var(--line); padding-top: 10px; }
+    .workflow-v2-run-output-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .workflow-v2-run-output pre { max-height: 180px; overflow: auto; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .workflow-v2-run-output .message-error { margin: 0; }
     .workflow-v2-execution-trace { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
     .workflow-v2-execution-trace h3 { margin: 0; }
     .workflow-v2-execution-list { display: grid; gap: 6px; margin: 0; padding-left: 22px; }

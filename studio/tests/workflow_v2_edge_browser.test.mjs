@@ -111,8 +111,10 @@ test("Workflow V2 node inspectors are type-specific and agent fields are editabl
     assert.ok(await page.locator("[data-testid='workflow-v2-tool-policy']").isVisible());
     assert.ok(await page.locator("[data-testid='workflow-v2-agent-branch-summary']").isVisible());
     assert.equal(await page.locator("[data-testid='workflow-v2-agent-branch-next-node-id']").count(), 0);
-    assert.equal(await page.locator("[data-testid='workflow-v2-workflow-run-input-label']").count(), 1);
+    assert.equal(await page.locator("[data-testid='workflow-v2-workflow-run-input-label']").count(), 0);
     assert.equal(await page.locator("[data-testid='workflow-v2-agent-run-input']").count(), 0);
+    await page.locator("[data-testid='workflow-v2-bottom-tab-run']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-workflow-run-input-label']").count(), 1);
     await page.locator("[data-testid='workflow-v2-agent-instruction']").fill("Analyze A");
     await page.locator("[data-testid='workflow-v2-run-input']").fill("workflow-level input");
     await page.locator("[data-node-id='technical-answer']").click();
@@ -123,6 +125,7 @@ test("Workflow V2 node inspectors are type-specific and agent fields are editabl
     await page.locator("[data-node-id='route-category']").click();
     await page.waitForSelector("[data-testid='workflow-v2-condition-inspector']");
     assert.equal(await page.locator("[data-testid='workflow-v2-agent-goal']").count(), 0);
+    await page.locator("[data-testid='workflow-v2-bottom-tab-edge-relations']").click();
     const initialConditionEdges = await edgeRowCount(page);
     await page.locator("[data-testid='workflow-v2-condition-branch-handle']").fill("other");
     await page.locator("[data-testid='workflow-v2-condition-source-field']").selectOption("analyze-request:category");
@@ -229,8 +232,13 @@ test("Workflow V2 run shows the selected node execution trace and real payload s
   try {
     await page.goto(`${studio.url}/workflow`);
     await page.locator("[data-testid='workflow-v2-publish']").click();
+    await page.locator("[data-testid='workflow-v2-bottom-tab-run']").click();
     await page.locator("[data-testid='workflow-v2-run-input']").fill("trace request");
-    await page.locator("[data-testid='workflow-v2-run']").click();
+    await page.locator("[data-testid='workflow-v2-run-submit']").click();
+    await page.waitForSelector("[data-testid='workflow-v2-run-output']");
+    assert.ok((await page.locator("[data-testid='workflow-v2-run-output']").textContent()).includes("trace request"));
+
+    await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").click();
     await page.waitForSelector("[data-testid='workflow-v2-execution-trace']");
 
     assert.ok(await page.locator("[data-testid='workflow-v2-execution-row']").count() > 0);
@@ -239,6 +247,10 @@ test("Workflow V2 run shows the selected node execution trace and real payload s
     assert.equal(await page.locator("[data-testid='workflow-v2-node-input']").count(), 1);
     assert.equal(await page.locator("[data-testid='workflow-v2-node-output']").count(), 1);
     assert.equal(await page.locator("[data-testid='workflow-v2-node-status-analyze-request']").textContent(), "Success");
+
+    await page.locator("[data-testid='workflow-v2-bottom-tab-run']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-run-input']").inputValue(), "trace request");
+    assert.equal(await page.locator("[data-testid='workflow-v2-run-output']").count(), 1);
   } finally {
     await browser.close();
     await studio.close();
@@ -254,6 +266,7 @@ test("Workflow V2 bottom panel switches between execution trace and edge relatio
     await page.goto(`${studio.url}/workflow`);
     await page.waitForSelector("[data-testid='workflow-v2-bottom-panel']");
 
+    assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-run']").count(), 1);
     assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").count(), 1);
     assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-edge-relations']").count(), 1);
     assert.equal(await page.locator("[data-testid='workflow-v2-execution-trace']").count(), 0);
@@ -276,6 +289,11 @@ test("Workflow V2 bottom panel switches between execution trace and edge relatio
     assert.equal(await page.locator("[data-testid='workflow-v2-edge-panel']").count(), 1);
     assert.equal(await page.locator("[data-testid='workflow-v2-execution-trace']").count(), 0);
     assert.equal(await page.locator("[data-testid='workflow-v2-bottom-tab-edge-relations']").getAttribute("aria-selected"), "true");
+
+    await page.locator("[data-testid='workflow-v2-bottom-tab-run']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-run-panel']").count(), 1);
+    await page.locator("[data-testid='workflow-v2-bottom-tab-run']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-run-panel']").count(), 0);
   } finally {
     await browser.close();
     await studio.close();
