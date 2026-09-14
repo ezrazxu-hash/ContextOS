@@ -19,6 +19,11 @@ const WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH = 360;
 const WORKFLOW_CONFIG_PANEL_MIN_WIDTH = 320;
 const WORKFLOW_CONFIG_PANEL_MAX_WIDTH = 720;
 const WORKFLOW_V2_DEFAULT_ID = "agent-workflow-v2-draft";
+const WORKFLOW_V2_NODE_WIDTH = 148;
+const WORKFLOW_V2_NODE_HEIGHT = 68;
+const WORKFLOW_V2_BOTTOM_PANEL_DEFAULT_HEIGHT = 280;
+const WORKFLOW_V2_BOTTOM_PANEL_MIN_HEIGHT = 160;
+const WORKFLOW_V2_BOTTOM_PANEL_MAX_HEIGHT = 420;
 const app = document.querySelector("#app");
 let routeLoadVersion = 0;
 const WORKFLOW_NODE_TYPES = ["prompt", "llm", "tool", "condition", "output"];
@@ -95,6 +100,7 @@ const state = {
   toast: null,
   leftCollapsed: false,
   rightCollapsed: false,
+  workflowContextCollapsed: true,
   rightTab: "context",
   messages: [],
   sessions: [demoFixtures.session],
@@ -131,6 +137,9 @@ const state = {
   workflowRuntimeEvents: [],
   workflowV2BottomPanelOpen: true,
   workflowV2ActiveBottomTab: "edge-relations",
+  workflowV2BasicInfoCollapsed: false,
+  workflowV2BottomPanelHeight: WORKFLOW_V2_BOTTOM_PANEL_DEFAULT_HEIGHT,
+  workflowV2BottomPanelResize: null,
   workflowV2Versions: [],
   templateTab: "basic",
   sending: false,
@@ -239,10 +248,11 @@ async function loadRouteData() {
 }
 
 function render() {
+  const rightCollapsed = state.route === "/workflow" ? state.workflowContextCollapsed : state.rightCollapsed;
   app.innerHTML = `
     <div class="studio-app">
       ${renderTopbar()}
-      <div class="workbench ${state.leftCollapsed ? "left-collapsed" : ""} ${state.rightCollapsed ? "right-collapsed" : ""}">
+      <div class="workbench ${state.leftCollapsed ? "left-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""}">
         ${renderLeftRail()}
         <main class="main-pane" data-testid="main-pane">${renderMainPane()}</main>
         ${renderRightRail()}
@@ -330,12 +340,14 @@ function renderLeftRail() {
 }
 
 function renderRightRail() {
-  if (state.rightCollapsed) {
-    return `<aside class="right-rail collapsed" data-testid="right-panel" data-collapsed="true"><button data-action="toggle-right" data-testid="toggle-right-panel" aria-label="Expand inspector"><</button></aside>`;
+  const collapsed = state.route === "/workflow" ? state.workflowContextCollapsed : state.rightCollapsed;
+  const railLabel = state.route === "/workflow" ? "Context" : "inspector";
+  if (collapsed) {
+    return `<aside class="right-rail collapsed" data-testid="right-panel" data-collapsed="true"><button data-action="toggle-right" data-testid="toggle-right-panel" aria-label="Expand ${railLabel}"><</button></aside>`;
   }
   return `
     <aside class="right-rail" data-testid="right-panel" data-collapsed="false">
-      <div class="rail-head"><h2 data-testid="right-panel-title">${titleCase(state.rightTab)}</h2><button data-action="toggle-right" data-testid="toggle-right-panel" aria-label="Collapse inspector">></button></div>
+      <div class="rail-head"><h2 data-testid="right-panel-title">${titleCase(state.rightTab)}</h2><button data-action="toggle-right" data-testid="toggle-right-panel" aria-label="Collapse ${railLabel}">></button></div>
       <div class="tabs" role="tablist">
         ${["context", "impact", "trace"].map((tab) => `<button data-action="set-right-tab" data-tab="${tab}" role="tab" aria-selected="${state.rightTab === tab}" class="${state.rightTab === tab ? "active" : ""}">${titleCase(tab)}</button>`).join("")}
       </div>
@@ -452,15 +464,15 @@ function renderWorkflowV2() {
             </div>
           </section>
         </div>
-        <div class="graph-canvas workflow-v2-canvas" data-testid="workflow-v2-canvas">
+        <div class="graph-canvas workflow-v2-canvas" data-testid="workflow-v2-canvas" aria-label="Workflow canvas. Hold the right mouse button and drag to pan.">
           ${renderWorkflowV2CanvasBody(view)}
         </div>
         <div class="workflow-config-resize-handle" data-testid="workflow-config-resize-handle" role="separator" tabindex="0" aria-label="Resize Agent Workflow V2 panel" aria-orientation="vertical" aria-valuemin="${WORKFLOW_CONFIG_PANEL_MIN_WIDTH}" aria-valuemax="${WORKFLOW_CONFIG_PANEL_MAX_WIDTH}" aria-valuenow="${workflowConfigPanelWidth()}"></div>
         <div class="node-config" data-testid="workflow-v2-node-config">
           <section class="node-config-section basic-info">
-            <h2>Basic Info</h2>
-            <div class="node-config-meta"><div><span>Schema</span><strong>${view.schemaVersion}</strong></div><div><span>Draft</span><strong>${view.draft.revision}</strong></div></div>
-            ${selectedNode ? `<div class="node-config-meta"><div><span>ID</span><strong>${escapeHtml(selectedNode.id)}</strong></div><div><span>Type</span><strong>${escapeHtml(selectedNode.type)}</strong></div></div>` : "<p class=\"muted\">Select a V2 node.</p>"}
+            <div class="node-config-section-head"><h2>Basic Info</h2><button type="button" class="secondary compact" data-action="toggle-workflow-v2-basic-info" data-testid="workflow-v2-basic-info-toggle" aria-expanded="${!state.workflowV2BasicInfoCollapsed}" aria-controls="workflow-v2-basic-info-content">${state.workflowV2BasicInfoCollapsed ? "Expand" : "Collapse"}</button></div>
+            ${state.workflowV2BasicInfoCollapsed ? "" : `<div data-testid="workflow-v2-basic-info-content"><div class="node-config-meta"><div><span>Schema</span><strong>${view.schemaVersion}</strong></div><div><span>Draft</span><strong>${view.draft.revision}</strong></div></div>
+            ${selectedNode ? `<div class="node-config-meta"><div><span>ID</span><strong>${escapeHtml(selectedNode.id)}</strong></div><div><span>Type</span><strong>${escapeHtml(selectedNode.type)}</strong></div></div>` : "<p class=\"muted\">Select a V2 node.</p>"}</div>`}
           </section>
           <section class="node-config-section node-config-fields">
             <h2>Inspector</h2>
@@ -478,9 +490,10 @@ function renderWorkflowV2() {
 }
 
 function renderWorkflowV2CanvasBody(view) {
+  const size = workflowV2CanvasSize(view);
   return `
-    <div class="graph-canvas-viewport">
-      <div class="graph-canvas-content">
+    <div class="graph-canvas-viewport" style="width:${size.width}px;height:${size.height}px">
+      <div class="graph-canvas-content" style="width:${size.width}px;height:${size.height}px">
         ${renderWorkflowV2Edges(view)}
         ${view.canvas.nodes.length === 0 ? "<p class=\"workflow-v2-empty\">Drop or add an Agent node to start.</p>" : view.canvas.nodes.map((node) => `
           <div class="workflow-v2-node-wrap" style="left:${node.position.x}px;top:${node.position.y}px">
@@ -495,12 +508,23 @@ function renderWorkflowV2CanvasBody(view) {
   `;
 }
 
+function workflowV2CanvasSize(view) {
+  const nodes = view.canvas.nodes ?? [];
+  return {
+    width: Math.max(900, ...nodes.map((node) => Number(node.position?.x ?? 0) + WORKFLOW_V2_NODE_WIDTH + 92)),
+    height: Math.max(560, ...nodes.map((node) => Number(node.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT + 40)),
+  };
+}
+
 function renderWorkflowV2BottomPanel(view) {
   const activeTab = state.workflowV2ActiveBottomTab;
   const open = state.workflowV2BottomPanelOpen;
   const run = view.runPanel;
+  const height = workflowV2BottomPanelHeight();
+  const maxHeight = workflowV2BottomPanelMaxHeight();
   return `
-      <section class="workflow-v2-bottom-panel ${open ? "open" : "closed"}" data-testid="workflow-v2-bottom-panel">
+      <section class="workflow-v2-bottom-panel ${open ? "open" : "closed"}" data-testid="workflow-v2-bottom-panel" style="--workflow-v2-bottom-panel-height:${height}px">
+      ${open ? `<div class="workflow-v2-bottom-resize-handle" data-testid="workflow-v2-bottom-resize-handle" role="separator" tabindex="0" aria-label="Resize Workflow bottom panel" aria-orientation="horizontal" aria-valuemin="${WORKFLOW_V2_BOTTOM_PANEL_MIN_HEIGHT}" aria-valuemax="${maxHeight}" aria-valuenow="${height}"></div>` : ""}
       <div class="workflow-v2-bottom-tabs" role="tablist" aria-label="Workflow bottom panel">
         <button type="button" role="tab" class="workflow-v2-bottom-tab ${open && activeTab === "run" ? "active" : ""}" data-action="toggle-workflow-v2-bottom-tab" data-bottom-tab="run" data-testid="workflow-v2-bottom-tab-run" aria-selected="${open && activeTab === "run"}">Run</button>
         <button type="button" role="tab" class="workflow-v2-bottom-tab ${open && activeTab === "execution-trace" ? "active" : ""}" data-action="toggle-workflow-v2-bottom-tab" data-bottom-tab="execution-trace" data-testid="workflow-v2-bottom-tab-execution-trace" aria-selected="${open && activeTab === "execution-trace"}">Execution Trace</button>
@@ -1568,13 +1592,17 @@ function renderMessageMenuOverlay() {
 function bindEvents() {
   bindActionEvents(document);
   document.querySelectorAll("[data-drag-workflow-node-id]").forEach((element) => element.addEventListener("pointerdown", handleWorkflowNodePointerDown));
-  const workflowCanvas = document.querySelector("[data-testid='workflow-canvas']");
-  workflowCanvas?.addEventListener("wheel", handleWorkflowCanvasWheel, { passive: false });
-  workflowCanvas?.addEventListener("pointerdown", handleWorkflowCanvasPointerDown);
-  workflowCanvas?.addEventListener("contextmenu", handleWorkflowCanvasContextMenu);
+  document.querySelectorAll("[data-testid='workflow-canvas'], [data-testid='workflow-v2-canvas']").forEach((workflowCanvas) => {
+    workflowCanvas.addEventListener("wheel", handleWorkflowCanvasWheel, { passive: false });
+    workflowCanvas.addEventListener("pointerdown", handleWorkflowCanvasPointerDown);
+    workflowCanvas.addEventListener("contextmenu", handleWorkflowCanvasContextMenu);
+  });
   const workflowConfigResizeHandle = document.querySelector("[data-testid='workflow-config-resize-handle']");
   workflowConfigResizeHandle?.addEventListener("pointerdown", handleWorkflowConfigResizePointerDown);
   workflowConfigResizeHandle?.addEventListener("keydown", handleWorkflowConfigResizeKeyDown);
+  const workflowV2BottomResizeHandle = document.querySelector("[data-testid='workflow-v2-bottom-resize-handle']");
+  workflowV2BottomResizeHandle?.addEventListener("pointerdown", handleWorkflowV2BottomResizePointerDown);
+  workflowV2BottomResizeHandle?.addEventListener("keydown", handleWorkflowV2BottomResizeKeyDown);
   const composer = document.querySelector(".composer");
   composer?.addEventListener("submit", handleChatSubmit);
   const input = document.querySelector("[data-testid='composer-input']");
@@ -1777,7 +1805,11 @@ async function handleAction(event) {
     state.leftCollapsed = !state.leftCollapsed;
     render();
   } else if (action === "toggle-right") {
-    state.rightCollapsed = !state.rightCollapsed;
+    if (state.route === "/workflow") {
+      state.workflowContextCollapsed = !state.workflowContextCollapsed;
+    } else {
+      state.rightCollapsed = !state.rightCollapsed;
+    }
     render();
   } else if (action === "set-right-tab") {
     state.rightTab = target.dataset.tab;
@@ -2222,6 +2254,9 @@ async function handleAction(event) {
   } else if (action === "select-workflow-v2-run-node") {
     workflowV2Workbench().selectNode(target.dataset.nodeId);
     render();
+  } else if (action === "toggle-workflow-v2-basic-info") {
+    state.workflowV2BasicInfoCollapsed = !state.workflowV2BasicInfoCollapsed;
+    render();
   } else if (action === "toggle-workflow-v2-bottom-tab") {
     const tab = target.dataset.bottomTab;
     if (tab !== "run" && tab !== "execution-trace" && tab !== "edge-relations") return;
@@ -2441,6 +2476,7 @@ function handleWorkflowCanvasPointerDown(event) {
     scrollLeft: event.currentTarget.scrollLeft,
     scrollTop: event.currentTarget.scrollTop,
   };
+  event.currentTarget.classList.add("is-panning");
   document.addEventListener("pointermove", handleWorkflowCanvasPointerMove);
   document.addEventListener("pointerup", handleWorkflowCanvasPointerUp);
   document.addEventListener("pointercancel", handleWorkflowCanvasPointerUp);
@@ -2455,6 +2491,7 @@ function handleWorkflowCanvasPointerMove(event) {
 }
 
 function handleWorkflowCanvasPointerUp() {
+  state.workflowCanvasPan?.canvas?.classList.remove("is-panning");
   state.workflowCanvasPan = null;
   document.removeEventListener("pointermove", handleWorkflowCanvasPointerMove);
   document.removeEventListener("pointerup", handleWorkflowCanvasPointerUp);
@@ -2502,6 +2539,46 @@ function handleWorkflowConfigResizeKeyDown(event) {
   event.preventDefault();
   const direction = event.key === "ArrowLeft" ? 1 : -1;
   setWorkflowConfigPanelWidth(state.workflowConfigPanelWidth + direction * 24, event.currentTarget.closest(".workflow-surface"));
+}
+
+function handleWorkflowV2BottomResizePointerDown(event) {
+  if (event.button !== 0) return;
+  const panel = event.currentTarget.closest("[data-testid='workflow-v2-bottom-panel']");
+  if (!panel) return;
+  event.preventDefault();
+  state.workflowV2BottomPanelResize = {
+    panel,
+    startY: event.clientY,
+    startHeight: panel.getBoundingClientRect().height,
+    maxHeight: workflowV2BottomPanelMaxHeight(),
+  };
+  document.body.classList.add("workflow-v2-bottom-resizing");
+  document.addEventListener("pointermove", handleWorkflowV2BottomResizePointerMove);
+  document.addEventListener("pointerup", handleWorkflowV2BottomResizePointerUp);
+  document.addEventListener("pointercancel", handleWorkflowV2BottomResizePointerUp);
+}
+
+function handleWorkflowV2BottomResizePointerMove(event) {
+  const resize = state.workflowV2BottomPanelResize;
+  if (!resize) return;
+  event.preventDefault();
+  setWorkflowV2BottomPanelHeight(resize.startHeight + resize.startY - event.clientY, resize.panel, resize.maxHeight);
+}
+
+function handleWorkflowV2BottomResizePointerUp() {
+  state.workflowV2BottomPanelResize = null;
+  document.body.classList.remove("workflow-v2-bottom-resizing");
+  document.removeEventListener("pointermove", handleWorkflowV2BottomResizePointerMove);
+  document.removeEventListener("pointerup", handleWorkflowV2BottomResizePointerUp);
+  document.removeEventListener("pointercancel", handleWorkflowV2BottomResizePointerUp);
+}
+
+function handleWorkflowV2BottomResizeKeyDown(event) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  event.preventDefault();
+  const direction = event.key === "ArrowUp" ? 1 : -1;
+  const panel = event.currentTarget.closest("[data-testid='workflow-v2-bottom-panel']");
+  setWorkflowV2BottomPanelHeight(state.workflowV2BottomPanelHeight + direction * 24, panel);
 }
 
 function handleWorkflowCanvasWheel(event) {
@@ -3345,6 +3422,28 @@ function workflowConfigPanelWidth() {
   return clampWorkflowConfigPanelWidth(state.workflowConfigPanelWidth);
 }
 
+function workflowV2BottomPanelHeight() {
+  return clampWorkflowV2BottomPanelHeight(state.workflowV2BottomPanelHeight, workflowV2BottomPanelMaxHeight());
+}
+
+function workflowV2BottomPanelMaxHeight() {
+  const mainPane = document.querySelector("[data-testid='main-pane']");
+  const availableHeight = mainPane?.clientHeight ?? Math.max(0, window.innerHeight - 56);
+  return Math.max(WORKFLOW_V2_BOTTOM_PANEL_MIN_HEIGHT, Math.min(WORKFLOW_V2_BOTTOM_PANEL_MAX_HEIGHT, Math.floor(availableHeight * 0.62)));
+}
+
+function setWorkflowV2BottomPanelHeight(value, panel, maxHeight = workflowV2BottomPanelMaxHeight()) {
+  state.workflowV2BottomPanelHeight = clampWorkflowV2BottomPanelHeight(value, maxHeight);
+  panel?.style.setProperty("--workflow-v2-bottom-panel-height", `${state.workflowV2BottomPanelHeight}px`);
+  panel?.querySelector("[data-testid='workflow-v2-bottom-resize-handle']")?.setAttribute("aria-valuenow", String(state.workflowV2BottomPanelHeight));
+}
+
+function clampWorkflowV2BottomPanelHeight(value, maxHeight = WORKFLOW_V2_BOTTOM_PANEL_MAX_HEIGHT) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return WORKFLOW_V2_BOTTOM_PANEL_DEFAULT_HEIGHT;
+  return Math.max(WORKFLOW_V2_BOTTOM_PANEL_MIN_HEIGHT, Math.min(maxHeight, Math.round(numeric)));
+}
+
 function setWorkflowConfigPanelWidth(value, surface) {
   state.workflowConfigPanelWidth = clampWorkflowConfigPanelWidth(value);
   surface?.style.setProperty("--workflow-config-panel-width", `${state.workflowConfigPanelWidth}px`);
@@ -4027,6 +4126,9 @@ function styleTag() {
     .workflow-config-resizing, .workflow-config-resizing * { cursor: col-resize !important; user-select: none; }
     .node-config { min-width: 0; width: 100%; max-width: none; display: grid; align-content: start; gap: 10px; overflow: auto; background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
     .node-config-section { display: grid; gap: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .node-config-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .node-config-section-head h2 { margin: 0; }
+    .node-config-section-head .compact { min-height: 28px; padding: 5px 8px; font-size: 11px; }
     .node-config-section h2 { margin-bottom: 0; }
     .node-config-fields { background: #fbfcfe; }
     .basic-info { border-color: #cfd8e3; }
@@ -4062,6 +4164,8 @@ function styleTag() {
     .graph-canvas-viewport { position: relative; min-width: 100%; min-height: 100%; }
     .graph-canvas-content { position: relative; min-width: 100%; min-height: 100%; transform-origin: 0 0; }
     .workflow-v2-canvas .graph-canvas-content { min-height: 560px; position: relative; }
+    .workflow-v2-canvas { cursor: grab; }
+    .workflow-v2-canvas.is-panning { cursor: grabbing; }
     .workflow-v2-empty { margin: 18px; color: var(--muted); }
     .workflow-v2-edge-layer { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 560px; overflow: visible; pointer-events: none; z-index: 1; }
     .workflow-v2-edge-path { fill: none; stroke: #64748b; stroke-width: 2; }
@@ -4083,10 +4187,15 @@ function styleTag() {
     .workflow-v2-inspector-block { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
     .workflow-v2-inspector-block h3 { margin: 0; font-size: 13px; }
     .workflow-v2-bottom-panel { flex: 0 0 auto; min-height: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .workflow-v2-bottom-panel.open { height: var(--workflow-v2-bottom-panel-height); }
+    .workflow-v2-bottom-resize-handle { position: relative; z-index: 1; height: 8px; cursor: row-resize; touch-action: none; outline: 0; }
+    .workflow-v2-bottom-resize-handle::before { content: ""; position: absolute; inset: 3px 35%; border-radius: 999px; background: #cbd5e1; transition: background-color .12s ease, box-shadow .12s ease; }
+    .workflow-v2-bottom-resize-handle:hover::before, .workflow-v2-bottom-resize-handle:focus::before { background: var(--accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, .16); }
+    .workflow-v2-bottom-resizing, .workflow-v2-bottom-resizing * { cursor: row-resize !important; user-select: none; }
     .workflow-v2-bottom-tabs { display: flex; gap: 2px; align-items: stretch; min-height: 38px; padding: 0 8px; border-bottom: 1px solid var(--line); background: #f8fafc; }
     .workflow-v2-bottom-tab { min-height: 38px; padding: 7px 10px 6px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; }
     .workflow-v2-bottom-tab.active { border-bottom-color: var(--accent); background: var(--panel); color: var(--accent); font-weight: 700; }
-    .workflow-v2-bottom-content { min-height: 0; max-height: 34vh; overflow: auto; }
+    .workflow-v2-bottom-content { min-height: 0; height: calc(100% - 46px); overflow: auto; }
     .workflow-v2-bottom-content .workflow-v2-edge-panel, .workflow-v2-bottom-content .workflow-v2-execution-trace { border-top: 0; }
     .workflow-v2-run-panel { display: grid; gap: 12px; padding: 12px; background: #ffffff; }
     .workflow-v2-run-section { display: grid; gap: 8px; }

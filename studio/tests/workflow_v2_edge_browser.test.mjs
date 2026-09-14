@@ -300,6 +300,83 @@ test("Workflow V2 bottom panel switches between execution trace and edge relatio
   }
 });
 
+test("Workflow V2 layout collapses Context by default and preserves Basic Info while collapsed", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.waitForSelector("[data-testid='workflow-v2-node-config']");
+
+    const rightPanel = page.locator("[data-testid='right-panel']");
+    assert.equal(await rightPanel.getAttribute("data-collapsed"), "true");
+    assert.equal(await page.locator("[data-testid='toggle-right-panel']").getAttribute("aria-label"), "Expand Context");
+    const collapsedMainWidth = await page.locator("[data-testid='main-pane']").evaluate((element) => element.getBoundingClientRect().width);
+    await page.locator("[data-testid='toggle-right-panel']").click();
+    assert.equal(await rightPanel.getAttribute("data-collapsed"), "false");
+    assert.equal(await page.locator("[data-testid='toggle-right-panel']").getAttribute("aria-label"), "Collapse Context");
+    const expandedMainWidth = await page.locator("[data-testid='main-pane']").evaluate((element) => element.getBoundingClientRect().width);
+    assert.ok(expandedMainWidth < collapsedMainWidth);
+    await page.locator("[data-testid='toggle-right-panel']").click();
+    assert.equal(await rightPanel.getAttribute("data-collapsed"), "true");
+
+    await page.locator("[data-node-id='analyze-request']").click();
+    const instruction = page.locator("[data-testid='workflow-v2-agent-instruction']");
+    await instruction.fill("Keep this value");
+    await page.locator("[data-testid='workflow-v2-basic-info-toggle']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-basic-info-content']").count(), 0);
+    await page.locator("[data-testid='workflow-v2-basic-info-toggle']").click();
+    assert.equal(await instruction.inputValue(), "Keep this value");
+    assert.equal(await page.locator("[data-node-id='analyze-request'].selected").count(), 1);
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
+test("Workflow V2 bottom panel resizes within bounds and preserves height across tabs and close", async () => {
+  const studio = await startStudio();
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+
+  try {
+    await page.goto(`${studio.url}/workflow`);
+    await page.waitForSelector("[data-testid='workflow-v2-bottom-resize-handle']");
+
+    const initial = await workflowLayoutMetrics(page);
+    await dragBottomPanel(page, -120);
+    const enlarged = await workflowLayoutMetrics(page);
+    assert.ok(enlarged.panelHeight > initial.panelHeight);
+    assert.ok(enlarged.canvasHeight < initial.canvasHeight);
+    assert.ok(enlarged.panelHeight >= enlarged.minHeight);
+    assert.ok(enlarged.panelHeight <= enlarged.maxHeight);
+
+    await dragBottomPanel(page, 80);
+    const reduced = await workflowLayoutMetrics(page);
+    assert.ok(reduced.panelHeight < enlarged.panelHeight);
+    assert.ok(reduced.canvasHeight > enlarged.canvasHeight);
+
+    await dragBottomPanel(page, -2000);
+    const maximum = await workflowLayoutMetrics(page);
+    assert.equal(Math.round(maximum.panelHeight), maximum.maxHeight);
+    await dragBottomPanel(page, 2000);
+    const minimum = await workflowLayoutMetrics(page);
+    assert.equal(Math.round(minimum.panelHeight), minimum.minHeight);
+
+    const rememberedHeight = minimum.panelHeight;
+    await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").click();
+    assert.ok(Math.abs((await workflowLayoutMetrics(page)).panelHeight - rememberedHeight) < 1);
+    await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").click();
+    assert.equal(await page.locator("[data-testid='workflow-v2-bottom-content']").count(), 0);
+    await page.locator("[data-testid='workflow-v2-bottom-tab-execution-trace']").click();
+    assert.ok(Math.abs((await workflowLayoutMetrics(page)).panelHeight - rememberedHeight) < 1);
+  } finally {
+    await browser.close();
+    await studio.close();
+  }
+});
+
 async function workbenchState(page) {
   return page.evaluate(() => {
     const surface = document.querySelector("[data-testid='workflow-v2-workbench']");
@@ -315,6 +392,31 @@ async function workbenchState(page) {
 
 async function edgeRowCount(page) {
   return page.locator(".workflow-v2-edge-row").count();
+}
+
+async function workflowLayoutMetrics(page) {
+  return page.evaluate(() => {
+    const panel = document.querySelector("[data-testid='workflow-v2-bottom-panel']");
+    const canvas = document.querySelector("[data-testid='workflow-v2-canvas']");
+    const handle = document.querySelector("[data-testid='workflow-v2-bottom-resize-handle']");
+    return {
+      panelHeight: panel.getBoundingClientRect().height,
+      canvasHeight: canvas.getBoundingClientRect().height,
+      minHeight: Number(handle?.getAttribute("aria-valuemin")),
+      maxHeight: Number(handle?.getAttribute("aria-valuemax")),
+    };
+  });
+}
+
+async function dragBottomPanel(page, deltaY) {
+  const box = await page.locator("[data-testid='workflow-v2-bottom-resize-handle']").boundingBox();
+  assert.ok(box);
+  const startX = box.x + box.width / 2;
+  const startY = box.y + box.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX, startY + deltaY, { steps: 5 });
+  await page.mouse.up();
 }
 
 async function startStudio() {

@@ -237,7 +237,7 @@ test("Workflow V2 workbench routes edges around nodes that sit between source an
   assert.deepEqual(clear.blockedByNodeIds, []);
 });
 
-test("Workflow V2 workbench exposes directed arrow marker and keeps target endpoint outside the node", async () => {
+test("Workflow V2 workbench exposes directed arrow marker and terminates at the node border", async () => {
   const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
   const workbench = createWorkflowV2Workbench({
     workflowDefinition: {
@@ -256,8 +256,8 @@ test("Workflow V2 workbench exposes directed arrow marker and keeps target endpo
   const edge = workbench.view().canvas.edges[0];
 
   assert.equal(edge.markerEnd, "url(#workflow-v2-arrowhead)");
-  assert.ok(edge.endPoint.x < 300);
-  assert.ok(edge.sourcePoint.x > 20 + 148);
+  assert.equal(edge.endPoint.x, 300);
+  assert.equal(edge.sourcePoint.x, 20 + 148);
 });
 
 test("T02 V2 workbench validates locally and with backend authority", async () => {
@@ -1177,6 +1177,40 @@ test("T14 V2 workbench keeps disconnected SSE runs non-successful", async () => 
   assert.equal(view.runPanel.status, "running");
   assert.equal(view.runPanel.streamStatus, "disconnected");
   assert.equal(view.canvas.nodes.find((node) => node.id === "agent-1").runStatus, "running");
+});
+
+test("V2 canvas routes converging edges to distinct node-border endpoints", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "edge-layout-flow",
+      name: "Edge Layout Flow",
+      schemaVersion: 2,
+      revision: 1,
+      tools: [],
+      nodes: [
+        { id: "source-a", type: "agent", position: { x: 80, y: 100 }, config: { instruction: "A", toolPolicy: { mode: "disabled" } } },
+        { id: "source-b", type: "agent", position: { x: 80, y: 220 }, config: { instruction: "B", toolPolicy: { mode: "disabled" } } },
+        { id: "target", type: "agent", position: { x: 420, y: 160 }, config: { instruction: "Target", toolPolicy: { mode: "disabled" } } },
+        { id: "end-1", type: "end", position: { x: 700, y: 160 } },
+      ],
+      edges: [
+        { source: "source-a", target: "target" },
+        { source: "source-b", target: "target" },
+        { source: "target", target: "end-1" },
+      ],
+    },
+  });
+
+  const edges = workbench.view().canvas.edges;
+  const first = edges.find((edge) => edge.source === "source-a");
+  const second = edges.find((edge) => edge.source === "source-b");
+  const targetNode = workbench.view().canvas.nodes.find((node) => node.id === "target");
+  const sourceNode = workbench.view().canvas.nodes.find((node) => node.id === "source-a");
+
+  assert.equal(first.sourcePoint.x, sourceNode.position.x + 148);
+  assert.equal(first.endPoint.x, targetNode.position.x);
+  assert.notEqual(first.endPoint.y, second.endPoint.y);
 });
 
 test("T15 V2 workbench exposes cancel action for running workflow runs", async () => {

@@ -123,3 +123,15 @@ test("Workflow V2 page exposes graph edge and agent runtime configuration contro
   assert.match(handler, /delete-workflow-v2-edge/);
   assert.doesNotMatch(inspector, /\$state\./);
 });
+
+test("Workflow V2 canvas exposes right-button pan affordance and bindings", () => {
+  const source = mainSource();
+  const renderer = sourceSlice(source, "function renderWorkflowV2()", "function renderWorkflowV2NodeLibrary");
+  const bindings = sourceSlice(source, "function bindEvents()", "function bindActionEvents");
+
+  assert.match(renderer, /data-testid="workflow-v2-canvas"[^>]*aria-label="[^"]*right mouse button[^"]*"/);
+  assert.match(renderer, /workflowV2CanvasSize\(view\)/);
+  assert.match(bindings, /data-testid='workflow-v2-canvas'/);
+  assert.match(bindings, /handleWorkflowCanvasPointerDown/);
+  assert.match(bindings, /handleWorkflowCanvasContextMenu/);
+});

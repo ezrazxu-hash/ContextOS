@@ -146,7 +146,7 @@ export function createWorkflowV2Workbench(options = {}) {
       const connected = builder.connect(source, target, options);
       const view = autoBindAgentInputs(builder, target, connected.nodes, connected.edges, state.definition);
       syncDefinition(state, builder);
-      return { accepted: true, edge: canvasEdge(view.edges[view.edges.length - 1], view.edges.length - 1, view.nodes) };
+      return { accepted: true, edge: canvasEdge(view.edges[view.edges.length - 1], view.edges.length - 1, view.nodes, view.edges) };
     },
     updateCanvasEdge(edgeId, patch) {
       const view = builder.updateEdge(edgeId, patch);
@@ -154,7 +154,7 @@ export function createWorkflowV2Workbench(options = {}) {
       refreshReferenceIssues(state);
       const edgeIndex = edgeIndexFromId(edgeId);
       const edge = edgeIndex >= 0 ? view.edges[edgeIndex] ?? null : null;
-      return { edge: edge ? canvasEdge(edge, edgeIndex, view.nodes) : null };
+      return { edge: edge ? canvasEdge(edge, edgeIndex, view.nodes, view.edges) : null };
     },
     removeCanvasEdge(edgeId) {
       const view = builder.removeEdge(edgeId);
@@ -319,7 +319,7 @@ export function createWorkflowV2Workbench(options = {}) {
             handles: nodeHandles(node, workflowView.edges),
             runStatus: nodeRunStatusById.get(node.id) ?? "pending",
           })),
-          edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, workflowView.nodes)),
+          edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, workflowView.nodes, workflowView.edges)),
         },
         edgeConfig: edgeConfigView(workflowView),
         nodeConfig: {
@@ -633,8 +633,8 @@ function workflowToolIds(definition) {
   return definition.tools.map((tool) => (typeof tool === "string" ? tool : tool.id)).filter(Boolean);
 }
 
-function canvasEdge(edge, index, nodes = []) {
-  const route = routeCanvasEdge(edge, nodes);
+function canvasEdge(edge, index, nodes = [], edges = []) {
+  const route = routeCanvasEdge(edge, nodes, edges);
   return {
     ...edge,
     id: `${index}:${edge.source}->${edge.target}`,
@@ -666,7 +666,7 @@ function edgeConfigView(workflowView) {
       ...nodes.map((node) => ({ id: node.id, label: node.config?.name || node.id, type: node.type })),
       { id: "END", label: "END", type: "end" },
     ],
-    edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, nodes)),
+    edges: workflowView.edges.map((edge, index) => canvasEdge(edge, index, nodes, workflowView.edges)),
   };
 }
 
@@ -674,25 +674,27 @@ const WORKFLOW_V2_NODE_WIDTH = 148;
 const WORKFLOW_V2_NODE_HEIGHT = 68;
 const WORKFLOW_V2_EDGE_PADDING = 28;
 
-function routeCanvasEdge(edge, nodes) {
+function routeCanvasEdge(edge, nodes, edges = []) {
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const source = nodesById.get(edge.source);
   const target = nodesById.get(edge.target);
   const sourceCenterX = Number(source?.position?.x ?? 0) + WORKFLOW_V2_NODE_WIDTH / 2;
   const targetCenterX = Number(target?.position?.x ?? sourceCenterX + 220) + WORKFLOW_V2_NODE_WIDTH / 2;
   const leftToRight = sourceCenterX <= targetCenterX;
+  const sourceLaneOffset = edgeLaneOffset(edge, edges, "source");
+  const targetLaneOffset = edgeLaneOffset(edge, edges, "target");
   const start = source
     ? {
-        x: Number(source.position?.x ?? 0) + (leftToRight ? WORKFLOW_V2_NODE_WIDTH + 8 : -8),
-        y: Number(source.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2,
+        x: Number(source.position?.x ?? 0) + (leftToRight ? WORKFLOW_V2_NODE_WIDTH : 0),
+        y: Number(source.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2 + sourceLaneOffset,
       }
-    : { x: 20, y: Number(target?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 };
+    : { x: 20, y: Number(target?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 + sourceLaneOffset };
   const end = target
     ? {
-        x: Number(target.position?.x ?? 0) + (leftToRight ? -8 : WORKFLOW_V2_NODE_WIDTH + 8),
-        y: Number(target.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2,
+        x: Number(target.position?.x ?? 0) + (leftToRight ? 0 : WORKFLOW_V2_NODE_WIDTH),
+        y: Number(target.position?.y ?? 0) + WORKFLOW_V2_NODE_HEIGHT / 2 + targetLaneOffset,
       }
-    : { x: Number(source?.position?.x ?? 20) + WORKFLOW_V2_NODE_WIDTH + 62, y: Number(source?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 };
+    : { x: Number(source?.position?.x ?? 20) + WORKFLOW_V2_NODE_WIDTH + 62, y: Number(source?.position?.y ?? 20) + WORKFLOW_V2_NODE_HEIGHT / 2 + targetLaneOffset };
   const blockers = edgeBlockers(edge, nodes, start, end);
 
   if (blockers.length === 0) {
@@ -718,6 +720,14 @@ function routeCanvasEdge(edge, nodes) {
     endPoint: { x: Math.round(end.x), y: Math.round(end.y) },
     blockedByNodeIds: blockers.map((node) => node.id),
   };
+}
+
+function edgeLaneOffset(edge, edges, side) {
+  const group = edges.filter((candidate) => candidate[side] === edge[side]);
+  if (group.length < 2) return 0;
+  const index = group.indexOf(edge);
+  const resolvedIndex = index >= 0 ? index : edges.indexOf(edge);
+  return (resolvedIndex - (group.length - 1) / 2) * 12;
 }
 
 function workflowEdgeLabel(edge, nodes) {
