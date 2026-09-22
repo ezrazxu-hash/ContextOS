@@ -120,6 +120,7 @@ const state = {
   workflowSaving: false,
   workflowDrag: null,
   workflowCanvasPan: null,
+  workflowCanvasScroll: { left: 0, top: 0 },
   workflowConfigResize: null,
   workflowConfigPanelWidth: WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH,
   workflowSelectedNodeId: null,
@@ -248,6 +249,7 @@ async function loadRouteData() {
 }
 
 function render() {
+  captureWorkflowCanvasViewport();
   const rightCollapsed = state.route === "/workflow" ? state.workflowContextCollapsed : state.rightCollapsed;
   app.innerHTML = `
     <div class="studio-app">
@@ -266,7 +268,26 @@ function render() {
     ${styleTag()}
   `;
   bindEvents();
+  restoreWorkflowCanvasViewport();
   scrollConversationToBottom();
+}
+
+function captureWorkflowCanvasViewport() {
+  if (state.route !== "/workflow") return;
+  const canvas = document.querySelector("[data-testid='workflow-v2-canvas']");
+  if (!canvas) return;
+  state.workflowCanvasScroll = {
+    left: canvas.scrollLeft,
+    top: canvas.scrollTop,
+  };
+}
+
+function restoreWorkflowCanvasViewport() {
+  if (state.route !== "/workflow") return;
+  const canvas = document.querySelector("[data-testid='workflow-v2-canvas']");
+  if (!canvas) return;
+  canvas.scrollLeft = state.workflowCanvasScroll.left;
+  canvas.scrollTop = state.workflowCanvasScroll.top;
 }
 
 function renderTopbar() {
@@ -468,6 +489,15 @@ function renderWorkflowV2() {
           ${renderWorkflowV2CanvasBody(view)}
         </div>
         <div class="workflow-config-resize-handle" data-testid="workflow-config-resize-handle" role="separator" tabindex="0" aria-label="Resize Agent Workflow V2 panel" aria-orientation="vertical" aria-valuemin="${WORKFLOW_CONFIG_PANEL_MIN_WIDTH}" aria-valuemax="${WORKFLOW_CONFIG_PANEL_MAX_WIDTH}" aria-valuenow="${workflowConfigPanelWidth()}"></div>
+        ${renderWorkflowV2NodeConfig(view, selectedNode)}
+      </div>
+      ${renderWorkflowV2BottomPanel(view)}
+    </section>
+  `;
+}
+
+function renderWorkflowV2NodeConfig(view, selectedNode) {
+  return `
         <div class="node-config" data-testid="workflow-v2-node-config">
           <section class="node-config-section basic-info">
             <div class="node-config-section-head"><h2>Basic Info</h2><button type="button" class="secondary compact" data-action="toggle-workflow-v2-basic-info" data-testid="workflow-v2-basic-info-toggle" aria-expanded="${!state.workflowV2BasicInfoCollapsed}" aria-controls="workflow-v2-basic-info-content">${state.workflowV2BasicInfoCollapsed ? "Expand" : "Collapse"}</button></div>
@@ -483,17 +513,15 @@ function renderWorkflowV2() {
             ${view.validationPanel.issues.length === 0 ? "<p>No validation issues.</p>" : view.validationPanel.issues.map((issue) => `<p>${escapeHtml(issue.message ?? issue.code ?? "Validation issue")}</p>`).join("")}
           </section>
         </div>
-      </div>
-      ${renderWorkflowV2BottomPanel(view)}
-    </section>
   `;
 }
 
 function renderWorkflowV2CanvasBody(view) {
   const size = workflowV2CanvasSize(view);
+  const zoom = state.workflowCanvasZoom;
   return `
-    <div class="graph-canvas-viewport" style="width:${size.width}px;height:${size.height}px">
-      <div class="graph-canvas-content" style="width:${size.width}px;height:${size.height}px">
+    <div class="graph-canvas-viewport" style="width:${Math.ceil(size.width * zoom)}px;height:${Math.ceil(size.height * zoom)}px">
+      <div class="graph-canvas-content" style="width:${size.width}px;height:${size.height}px;transform:scale(${zoom})">
         ${renderWorkflowV2Edges(view)}
         ${view.canvas.nodes.length === 0 ? "<p class=\"workflow-v2-empty\">Drop or add an Agent node to start.</p>" : view.canvas.nodes.map((node) => `
           <div class="workflow-v2-node-wrap" style="left:${node.position.x}px;top:${node.position.y}px">
@@ -598,8 +626,8 @@ function renderWorkflowV2NodeExecution(node) {
     <article class="workflow-v2-node-execution" data-testid="workflow-v2-node-execution-${escapeAttr(node.nodeId)}">
       <header><strong>Node: ${escapeHtml(node.nodeId)}</strong><span class="run-status-${escapeAttr(node.status)}">${escapeHtml(workflowRunStatusLabel(node.status))}</span></header>
       ${node.durationMs === null ? "" : `<p>Duration: ${escapeHtml(`${node.durationMs} ms`)}</p>`}
-      ${renderWorkflowV2RunPayload("Input", node.input, "workflow-v2-node-input")}
-      ${renderWorkflowV2RunPayload("Output", node.output, "workflow-v2-node-output")}
+      ${renderWorkflowV2RunPayload("Input", node.input, "workflow-v2-node-input", { defaultOpen: true })}
+      ${renderWorkflowV2RunPayload("Output", node.output, "workflow-v2-node-output", { defaultOpen: true })}
       ${conditionResult}
       ${renderWorkflowV2ToolSteps(node.steps)}
       ${node.error ? `<section class="workflow-v2-run-error" data-testid="workflow-v2-node-error"><h4>Error</h4><pre>${escapeHtml(JSON.stringify(node.error, null, 2))}</pre></section>` : ""}
@@ -607,7 +635,7 @@ function renderWorkflowV2NodeExecution(node) {
   `;
 }
 
-function renderWorkflowV2RunPayload(title, value, testId) {
+function renderWorkflowV2RunPayload(title, value, testId, options = {}) {
   if (value === null || value === undefined) {
     return `<section class="workflow-v2-run-payload" data-testid="${testId}"><h4>${title}</h4><p class="muted">Not available</p></section>`;
   }
@@ -616,7 +644,7 @@ function renderWorkflowV2RunPayload(title, value, testId) {
   if (!complex && content.length <= 240) {
     return `<section class="workflow-v2-run-payload" data-testid="${testId}"><h4>${title}</h4><code>${escapeHtml(content)}</code></section>`;
   }
-  return `<section class="workflow-v2-run-payload" data-testid="${testId}"><details><summary>${title}</summary><pre>${escapeHtml(content)}</pre></details></section>`;
+  return `<section class="workflow-v2-run-payload" data-testid="${testId}"><details${options.defaultOpen ? " open" : ""}><summary>${title}</summary><pre>${escapeHtml(content)}</pre></details></section>`;
 }
 
 function renderWorkflowV2ToolSteps(steps) {
@@ -722,6 +750,11 @@ function renderWorkflowV2Inspector(view, selectedNode) {
       <label>Name<input data-testid="workflow-v2-agent-name" value="${escapeAttr(config.name ?? "")}"></label>
       <label>Description<textarea data-testid="workflow-v2-agent-description" rows="3">${escapeHtml(config.description ?? "")}</textarea></label>
       <label data-testid="workflow-v2-agent-goal">Goal<textarea data-testid="workflow-v2-agent-instruction" rows="6">${escapeHtml(config.instruction ?? "")}</textarea></label>
+      <label>Context Policy
+        <select data-testid="workflow-v2-agent-context-policy" aria-label="Context Policy">
+          ${(view.nodeConfig.contextPolicyOptions ?? []).map((option) => `<option value="${escapeAttr(option.value)}" ${option.value === view.nodeConfig.contextPolicy ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+        </select>
+      </label>
       ${renderWorkflowV2AgentInputBindings(view)}
       ${renderWorkflowV2OutputSchemaBuilder(view)}
       ${renderWorkflowV2ToolPolicy(view)}
@@ -869,7 +902,7 @@ function renderWorkflowV2ToolPolicy(view) {
         ${(view.workflowTools?.catalog ?? []).map((tool) => `
           <label class="workflow-v2-check">
             <input type="checkbox" data-workflow-v2-workflow-tool="${escapeAttr(tool.id)}" ${workflowSelected.has(tool.id) ? "checked" : ""}>
-            ${escapeHtml(tool.name ?? tool.id)}
+            <span class="workflow-v2-tool-name" title="${escapeAttr(tool.name ?? tool.id)}">${escapeHtml(tool.name ?? tool.id)}</span>
           </label>
           <label class="workflow-v2-check">
             <input type="checkbox" data-workflow-v2-agent-tool="${escapeAttr(tool.id)}" ${allowed.has(tool.id) ? "checked" : ""}>
@@ -951,7 +984,7 @@ function renderWorkflowV2WorkflowInspector(view) {
         </select>
       </label>
       <label>Message Context
-        <select data-testid="workflow-v2-workflow-context-mode" disabled>
+        <select data-testid="workflow-v2-workflow-context-mode" aria-label="Message Context Mode">
           ${(inspector.messageContextOptions ?? []).map((option) => `<option value="${escapeAttr(option.value)}" ${option.value === inspector.messageContextMode ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
         </select>
       </label>
@@ -1666,6 +1699,16 @@ function bindEvents() {
     state.workflowTestInput = workflowTestInput.value;
   });
   bindWorkflowV2RunInputEvents(document);
+  bindWorkflowV2InspectorEvents();
+  bindWorkflowV2EdgeFieldEvents(document);
+  const workflowEdgeSource = document.querySelector("#workflow-edge-source");
+  workflowEdgeSource?.addEventListener("change", () => {
+    state.workflowEdgeSourceId = workflowEdgeSource.value;
+    render();
+  });
+}
+
+function bindWorkflowV2InspectorEvents() {
   const workflowV2AgentInstruction = document.querySelector("[data-testid='workflow-v2-agent-instruction']");
   workflowV2AgentInstruction?.addEventListener("input", () => {
     workflowV2Workbench().updateSelectedAgentConfig({ instruction: workflowV2AgentInstruction.value });
@@ -1677,6 +1720,16 @@ function bindEvents() {
   const workflowV2AgentDescription = document.querySelector("[data-testid='workflow-v2-agent-description']");
   workflowV2AgentDescription?.addEventListener("input", () => {
     workflowV2Workbench().updateSelectedAgentConfig({ description: workflowV2AgentDescription.value });
+  });
+  const workflowV2AgentContextPolicy = document.querySelector("[data-testid='workflow-v2-agent-context-policy']");
+  workflowV2AgentContextPolicy?.addEventListener("change", () => {
+    workflowV2Workbench().updateSelectedAgentConfig({ contextPolicy: workflowV2AgentContextPolicy.value });
+    render();
+  });
+  const workflowV2WorkflowContextMode = document.querySelector("[data-testid='workflow-v2-workflow-context-mode']");
+  workflowV2WorkflowContextMode?.addEventListener("change", () => {
+    workflowV2Workbench().updateSelectedWorkflowRefConfig({ messageContextMode: workflowV2WorkflowContextMode.value });
+    render();
   });
   document.querySelectorAll("[data-workflow-v2-agent-input-source]").forEach((element) => {
     element.addEventListener("change", () => updateWorkflowV2AgentInputBinding(element, true));
@@ -1696,7 +1749,6 @@ function bindEvents() {
         .filter((input) => input.checked)
         .map((input) => input.dataset.workflowV2WorkflowTool);
       workflowV2Workbench().setWorkflowToolRegistry(selected);
-      render();
     });
   });
   document.querySelectorAll("[data-workflow-v2-agent-tool]").forEach((element) => {
@@ -1706,12 +1758,6 @@ function bindEvents() {
         .map((input) => input.dataset.workflowV2AgentTool);
       updateWorkflowV2ToolPolicy({ allowedTools });
     });
-  });
-  bindWorkflowV2EdgeFieldEvents(document);
-  const workflowEdgeSource = document.querySelector("#workflow-edge-source");
-  workflowEdgeSource?.addEventListener("change", () => {
-    state.workflowEdgeSourceId = workflowEdgeSource.value;
-    render();
   });
 }
 
@@ -1745,6 +1791,20 @@ function refreshWorkflowV2Canvas() {
   bindActionEvents(canvas);
   bindWorkflowV2EdgeFieldEvents(canvas);
   refreshWorkflowV2BottomPanel();
+}
+
+function refreshWorkflowV2NodeConfig() {
+  const panel = document.querySelector("[data-testid='workflow-v2-node-config']");
+  if (!panel) {
+    render();
+    return;
+  }
+  const view = workflowV2Workbench().view();
+  const selectedNode = view.canvas.nodes.find((node) => node.id === view.nodeConfig.selectedNodeId) ?? null;
+  panel.outerHTML = renderWorkflowV2NodeConfig(view, selectedNode);
+  const nextPanel = document.querySelector("[data-testid='workflow-v2-node-config']");
+  if (nextPanel) bindActionEvents(nextPanel);
+  bindWorkflowV2InspectorEvents();
 }
 
 function refreshWorkflowV2BottomPanel() {
@@ -2250,10 +2310,12 @@ async function handleAction(event) {
     render();
   } else if (action === "select-workflow-v2-node") {
     workflowV2Workbench().selectNode(target.dataset.nodeId);
-    render();
+    refreshWorkflowV2Canvas();
+    refreshWorkflowV2NodeConfig();
   } else if (action === "select-workflow-v2-run-node") {
     workflowV2Workbench().selectNode(target.dataset.nodeId);
-    render();
+    refreshWorkflowV2Canvas();
+    refreshWorkflowV2NodeConfig();
   } else if (action === "toggle-workflow-v2-basic-info") {
     state.workflowV2BasicInfoCollapsed = !state.workflowV2BasicInfoCollapsed;
     render();
@@ -2413,7 +2475,10 @@ function updateWorkflowV2ToolPolicy(patch) {
     allowedTools: mode === "disabled" ? [] : allowedTools,
     requiredTools: mode === "required" ? allowedTools : [],
   });
-  render();
+  const updatedAllowedTools = workflowV2Workbench().view().nodeConfig.toolSelector?.policy?.allowedTools ?? [];
+  document.querySelectorAll("[data-workflow-v2-agent-tool]").forEach((input) => {
+    input.checked = updatedAllowedTools.includes(input.dataset.workflowV2AgentTool);
+  });
 }
 
 function coerceWorkflowV2ConditionValue(value) {
@@ -2764,6 +2829,7 @@ function createWorkflowDraft() {
   state.workflowSelectedEdgeIndex = null;
   state.workflowEdgeSourceId = null;
   state.workflowCanvasZoom = 1;
+  state.workflowCanvasScroll = { left: 0, top: 0 };
   state.workflowGraphPreview = null;
   state.workflowPublishedVersion = null;
   state.workflowTestRun = null;
@@ -3341,6 +3407,7 @@ function loadWorkflowManifest(manifest, templateId = null, activeVersion = null)
   state.workflowSelectedEdgeIndex = null;
   state.workflowEdgeSourceId = null;
   state.workflowCanvasZoom = clampWorkflowZoom(graph.viewport?.zoom ?? 1);
+  state.workflowCanvasScroll = { left: 0, top: 0 };
   state.workflowGraphPreview = null;
   state.workflowPublishedVersion = activeVersion;
   state.workflowTestRun = null;
@@ -3357,6 +3424,7 @@ function clearWorkflowDraft() {
   state.workflowSelectedEdgeIndex = null;
   state.workflowEdgeSourceId = null;
   state.workflowCanvasZoom = 1;
+  state.workflowCanvasScroll = { left: 0, top: 0 };
   state.workflowGraphPreview = null;
   state.workflowPublishedVersion = null;
   state.workflowTestRun = null;
@@ -4220,8 +4288,12 @@ function styleTag() {
     .workflow-v2-run-payload pre, .workflow-v2-run-tools pre, .workflow-v2-run-error pre { max-height: 180px; overflow: auto; }
     .workflow-v2-run-payload details, .workflow-v2-run-tools details { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: #fff; }
     .workflow-v2-run-payload code { overflow-wrap: anywhere; }
-    .workflow-v2-schema-fields, .workflow-v2-tool-list { display: grid; gap: 6px; }
+    .workflow-v2-schema-fields { display: grid; gap: 6px; }
+    .workflow-v2-tool-list { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 6px 14px; align-items: center; }
     .workflow-v2-check { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+    .workflow-v2-tool-list .workflow-v2-check { min-width: 0; white-space: nowrap; }
+    .workflow-v2-tool-list .workflow-v2-check > input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; min-height: 16px; padding: 0; }
+    .workflow-v2-tool-list .workflow-v2-tool-name { display: block; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .workflow-zoom-indicator { position: sticky; left: 10px; bottom: 10px; z-index: 4; display: inline-flex; margin: 0 0 10px 10px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: rgba(248,250,252,.92); color: var(--muted); font-size: 11px; font-weight: 700; pointer-events: none; }
     .workflow-edges { position: absolute; inset: 0 auto auto 0; overflow: visible; pointer-events: auto; }
     .workflow-edge-line { stroke: #64748b; stroke-width: 2; marker-end: url(#workflow-edge-arrow); pointer-events: none; }
@@ -4250,7 +4322,7 @@ function styleTag() {
     input, select { border: 1px solid var(--line); border-radius: 7px; padding: 9px 10px; color: var(--text); background: #f8fafc; }
     .debug-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, .9fr) 1.2fr; gap: 12px; }
     .trace-row, .debug-message { width: 100%; display: flex; justify-content: space-between; gap: 12px; text-align: left; margin-bottom: 8px; }
-    .toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; padding: 10px 12px; border-radius: 9px; background: #111a27; color: #fff; box-shadow: 0 8px 24px rgba(16, 24, 40, .16); }
+    .toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; padding: 10px 12px; border-radius: 9px; background: #111a27; color: #fff; box-shadow: 0 8px 24px rgba(16, 24, 40, .16); pointer-events: none; }
     .toast.success { background: var(--success); }
     .toast.error { background: var(--error); }
     .toast.warning { background: var(--warning); }

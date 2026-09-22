@@ -342,6 +342,49 @@ test("T03 V2 workbench edits agent inspector fields and keeps node card high-lev
   assert.equal(JSON.stringify(view.nodeConfig).includes("LLM"), false);
 });
 
+test("Agent context policy is exposed as a canonical editable setting and persists to the definition", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "agent-context-policy",
+      schemaVersion: 2,
+      nodes: [{ id: "agent-1", type: "agent", config: { instruction: "Answer", contextPolicy: "currentTurn" } }],
+      edges: [],
+    },
+  });
+
+  workbench.selectNode("agent-1");
+  let view = workbench.view();
+
+  assert.equal(view.nodeConfig.contextPolicy, "currentTurn");
+  assert.deepEqual(view.nodeConfig.contextPolicyOptions.map((option) => option.value), [
+    "fullHistory",
+    "currentTurn",
+    "currentGroup",
+    "explicitInputsOnly",
+  ]);
+
+  workbench.updateSelectedAgentConfig({ contextPolicy: "explicitInputsOnly" });
+  view = workbench.view();
+  assert.equal(view.nodeConfig.contextPolicy, "explicitInputsOnly");
+  assert.equal(view.nodeConfig.value.contextPolicy, "explicitInputsOnly");
+});
+
+test("Legacy object-shaped Agent context policy displays as Full History", async () => {
+  const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
+  const workbench = createWorkflowV2Workbench({
+    workflowDefinition: {
+      id: "legacy-agent-context-policy",
+      schemaVersion: 2,
+      nodes: [{ id: "agent-1", type: "agent", config: { contextPolicy: { conversationHistory: true } } }],
+      edges: [],
+    },
+  });
+
+  workbench.selectNode("agent-1");
+  assert.equal(workbench.view().nodeConfig.contextPolicy, "fullHistory");
+});
+
 test("Workflow V2 agent inspector classifies editable fields by real data source", async () => {
   const { createWorkflowV2Workbench } = await import(moduleUrl("src/pages/Workflow/WorkflowV2Workbench.js"));
   const workbench = createWorkflowV2Workbench({
@@ -364,6 +407,7 @@ test("Workflow V2 agent inspector classifies editable fields by real data source
 
   assert.deepEqual(fields, [
     { id: "goal", label: "Goal", visible: true, editable: true, ui: "textarea", source: "config.instruction" },
+    { id: "contextPolicy", label: "Context Policy", visible: true, editable: true, ui: "select", source: "config.contextPolicy" },
     { id: "output", label: "Output", visible: true, editable: true, ui: "schemaBuilder", source: "config.outputSchema" },
     { id: "tools", label: "Tools", visible: true, editable: true, ui: "multiSelect", source: "config.toolPolicy" },
     { id: "branchNext", label: "Branch / Next", visible: true, editable: false, ui: "edgeSummary", source: "edges[source=agent-1]" },

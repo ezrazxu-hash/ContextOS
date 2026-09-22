@@ -2,6 +2,96 @@ import unittest
 
 
 class WorkflowV2RuntimeTests(unittest.TestCase):
+    def test_agent_context_policy_defaults_to_full_history(self) -> None:
+        from contextos.workflow_v2.runtime.runs import _execute_single_agent_run
+
+        llm = RecordingJsonLlmClient('{"summary":"ok"}')
+        _execute_single_agent_run(
+            run_id="run-full-history",
+            workflow_id="support-flow",
+            workflow_version=1,
+            definition=valid_workflow("Use the conversation"),
+            input_payload={"message": "new question"},
+            llm_client=llm,
+            initial_messages=[
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ],
+        )
+
+        self.assertIn({"role": "user", "content": "old question"}, llm.calls[0])
+        self.assertIn({"role": "assistant", "content": "old answer"}, llm.calls[0])
+
+    def test_agent_context_policy_current_turn_excludes_previous_turns(self) -> None:
+        from contextos.workflow_v2.runtime.runs import _execute_single_agent_run
+
+        definition = valid_workflow("Use only this turn")
+        definition["nodes"][0]["config"]["contextPolicy"] = "currentTurn"
+        llm = RecordingJsonLlmClient('{"summary":"ok"}')
+        _execute_single_agent_run(
+            run_id="run-current-turn",
+            workflow_id="support-flow",
+            workflow_version=1,
+            definition=definition,
+            input_payload={"message": "new question"},
+            llm_client=llm,
+            initial_messages=[
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ],
+        )
+
+        self.assertNotIn({"role": "user", "content": "old question"}, llm.calls[0])
+        self.assertNotIn({"role": "assistant", "content": "old answer"}, llm.calls[0])
+        self.assertIn({"role": "user", "content": "new question"}, llm.calls[0])
+
+    def test_agent_context_policy_current_group_uses_latest_message_group(self) -> None:
+        from contextos.workflow_v2.runtime.runs import _execute_single_agent_run
+
+        definition = valid_workflow("Use only this group")
+        definition["nodes"][0]["config"]["context_policy"] = {"mode": "current_group"}
+        llm = RecordingJsonLlmClient('{"summary":"ok"}')
+        _execute_single_agent_run(
+            run_id="run-current-group",
+            workflow_id="support-flow",
+            workflow_version=1,
+            definition=definition,
+            input_payload={"message": "new question", "groupId": "group-2"},
+            llm_client=llm,
+            initial_messages=[
+                {"role": "user", "content": "old question", "groupId": "group-1"},
+                {"role": "assistant", "content": "old answer", "groupId": "group-1"},
+                {"role": "assistant", "content": "current group context", "groupId": "group-2"},
+            ],
+        )
+
+        self.assertNotIn({"role": "user", "content": "old question", "groupId": "group-1"}, llm.calls[0])
+        self.assertIn({"role": "assistant", "content": "current group context", "groupId": "group-2"}, llm.calls[0])
+
+    def test_agent_context_policy_explicit_inputs_only_excludes_message_history(self) -> None:
+        from contextos.workflow_v2.runtime.runs import _execute_single_agent_run
+
+        definition = valid_workflow("Use only bound inputs")
+        definition["nodes"][0]["config"].update({
+            "contextPolicy": "explicitInputsOnly",
+            "inputSchema": {"type": "object", "required": ["content"], "properties": {"content": {"type": "string"}}},
+            "inputBindings": {"content": {"kind": "workflowInput", "path": ["message"]}},
+        })
+        llm = RecordingJsonLlmClient('{"summary":"ok"}')
+        run = _execute_single_agent_run(
+            run_id="run-explicit-inputs",
+            workflow_id="support-flow",
+            workflow_version=1,
+            definition=definition,
+            input_payload={"message": "new question"},
+            llm_client=llm,
+            initial_messages=[{"role": "user", "content": "old question"}],
+        )
+
+        self.assertNotIn({"role": "user", "content": "old question"}, llm.calls[0])
+        self.assertIn('"content": "new question"', llm.calls[0][-1]["content"])
+        self.assertEqual(run["nodeResults"][0]["input"]["inputs"], {"content": "new question"})
+
     def test_single_agent_run_uses_published_version_and_returns_structured_result(self) -> None:
         from contextos.workflow_v2.application.definitions import WorkflowV2DefinitionService
         from contextos.workflow_v2.application.validation import WorkflowV2DefinitionValidator

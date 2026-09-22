@@ -11,7 +11,8 @@ function mainSource() {
 }
 
 function sourceSlice(source, start, end) {
-  return source.slice(source.indexOf(start), source.indexOf(end));
+  const normalized = source.replace(/\r\n/g, "\n");
+  return normalized.slice(normalized.indexOf(start), normalized.indexOf(end));
 }
 
 test("T20 main Workflow route loads only Agent Workflow V2 runtime data", () => {
@@ -63,8 +64,8 @@ test("T20 main Workflow action handler keeps only V2 Workflow actions", () => {
 
 test("T20 main Workflow V2 page wires draft validate publish and run actions to Workflow V2 APIs", () => {
   const source = mainSource();
-  const v2Renderer = sourceSlice(source, "function renderWorkflowV2()", "function renderWorkflowV2NodeLibrary()");
-  const listener = sourceSlice(source, "const workflowV2RunInput", "const workflowEdgeSource");
+  const v2Renderer = sourceSlice(source, "function renderWorkflowV2()", "function renderWorkflowV2NodeLibrary");
+  const listener = sourceSlice(source, "function bindEvents()", "function bindActionEvents");
   const handler = sourceSlice(source, "async function handleAction", "function handleWorkflowNodePointerDown");
   const workbenchFactory = sourceSlice(source, "function workflowV2Workbench()", "function runtimeClient()");
   const realClient = sourceSlice(source, "function realClient()", "function mockClient()");
@@ -103,7 +104,7 @@ test("Workflow V2 page exposes graph edge and agent runtime configuration contro
   const source = mainSource();
   const v2Renderer = sourceSlice(source, "function renderWorkflowV2()", "function renderWorkflowV2Inspector");
   const inspector = sourceSlice(source, "function renderWorkflowV2Inspector", "function renderWorkflowV2NodeLibrary");
-  const listener = sourceSlice(source, "const workflowV2RunInput", "const workflowEdgeSource");
+  const listener = sourceSlice(source, "function bindEvents()", "function bindActionEvents");
   const handler = sourceSlice(source, "async function handleAction", "function handleWorkflowNodePointerDown");
 
   assert.match(v2Renderer, /data-testid="workflow-v2-edge-layer"/);
@@ -117,11 +118,29 @@ test("Workflow V2 page exposes graph edge and agent runtime configuration contro
   assert.match(inspector, /<option value="enum">enum<\/option>/);
   assert.match(source, /enumOptions: enumValues/);
   assert.match(inspector, /data-testid="workflow-v2-tool-policy"/);
+  assert.match(inspector, /data-testid="workflow-v2-agent-context-policy"/);
+  assert.match(inspector, /contextPolicyOptions/);
+  assert.match(inspector, /view\.nodeConfig\.contextPolicy/);
+  assert.match(inspector, /data-testid="workflow-v2-workflow-context-mode"/);
+  assert.doesNotMatch(inspector, /data-testid="workflow-v2-workflow-context-mode" disabled/);
   assert.match(listener, /workflow-v2-agent-name/);
   assert.match(listener, /workflow-v2-agent-description/);
+  assert.match(listener, /workflow-v2-agent-context-policy/);
+  assert.match(listener, /workflow-v2-workflow-context-mode/);
+  assert.match(listener, /messageContextMode/);
   assert.match(handler, /connect-workflow-v2-edge/);
   assert.match(handler, /delete-workflow-v2-edge/);
   assert.doesNotMatch(inspector, /\$state\./);
+});
+
+test("Workflow V2 Execution Trace opens payload details without forcing empty payloads open", () => {
+  const source = mainSource();
+  const executionTrace = sourceSlice(source, "function renderWorkflowV2ExecutionTrace", "function workflowRunStatusLabel");
+
+  assert.match(executionTrace, /defaultOpen: true/);
+  assert.match(executionTrace, /value === null \|\| value === undefined/);
+  assert.match(executionTrace, /Not available/);
+  assert.match(executionTrace, /<details\$\{options\.defaultOpen \? " open" : ""\}/);
 });
 
 test("Workflow V2 canvas exposes right-button pan affordance and bindings", () => {

@@ -903,13 +903,49 @@ def _provider_messages(
     ]
     if inputs:
         messages.append({"role": "system", "content": f"Resolved Agent Inputs:\n{json.dumps(inputs, ensure_ascii=False, sort_keys=True)}"})
-    messages.extend(deepcopy(message_history))
+    messages.extend(deepcopy(_history_for_agent(agent_node, message_history)))
     return messages
+
+
+def _history_for_agent(agent_node: dict[str, Any], message_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    config = agent_node.get("config", {}) if isinstance(agent_node.get("config", {}), dict) else {}
+    policy = config.get("contextPolicy", config.get("context_policy", "fullHistory"))
+    if isinstance(policy, dict):
+        policy = policy.get("mode", "fullHistory")
+    normalized = str(policy or "fullHistory").replace("-", "").replace("_", "").lower()
+
+    if normalized in {"explicitinputsonly", "explicitinputs", "none"}:
+        return []
+    if normalized in {"currentturn", "turn"}:
+        return _current_turn_history(message_history)
+    if normalized in {"currentgroup", "group"}:
+        return _current_group_history(message_history)
+    return message_history
+
+
+def _current_turn_history(message_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for index in range(len(message_history) - 1, -1, -1):
+        if message_history[index].get("role") == "user":
+            return message_history[index:]
+    return message_history
+
+
+def _current_group_history(message_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest_user = next((message for message in reversed(message_history) if message.get("role") == "user"), None)
+    group_id = latest_user.get("groupId", latest_user.get("group_id")) if isinstance(latest_user, dict) else None
+    if group_id is None:
+        return _current_turn_history(message_history)
+    selected = [message for message in message_history if message.get("groupId", message.get("group_id")) == group_id]
+    return selected or _current_turn_history(message_history)
 
 
 def _user_message(input_payload: dict[str, Any]) -> dict[str, Any]:
     message = input_payload.get("message", input_payload.get("input", ""))
-    return {"role": "user", "content": str(message)}
+    user_message = {"role": "user", "content": str(message)}
+    group_id = input_payload.get("groupId", input_payload.get("group_id"))
+    if group_id is not None:
+        user_message["groupId"] = str(group_id)
+    return user_message
 
 
 def _tool_calls_from(parsed: Any) -> list[dict[str, Any]]:

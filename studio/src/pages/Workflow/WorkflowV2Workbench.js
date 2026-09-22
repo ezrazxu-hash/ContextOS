@@ -2,6 +2,15 @@ import { createWorkflowV2Builder } from "../../features/workflow-v2/WorkflowV2Bu
 import { createWorkflowV2SchemaBuilder } from "../../features/workflow-v2/WorkflowV2SchemaBuilder.js";
 import { createWorkflowV2ToolPolicyEditor } from "../../features/workflow-v2/WorkflowV2ToolPolicyEditor.js";
 
+const AGENT_CONTEXT_POLICY_OPTIONS = [
+  { value: "fullHistory", label: "Full History" },
+  { value: "currentTurn", label: "Current Turn" },
+  { value: "currentGroup", label: "Current Group" },
+  { value: "explicitInputsOnly", label: "Explicit Inputs Only" },
+];
+
+const AGENT_CONTEXT_POLICY_VALUES = new Set(AGENT_CONTEXT_POLICY_OPTIONS.map((option) => option.value));
+
 export function createWorkflowV2Workbench(options = {}) {
   const apiClient = options.apiClient ?? {};
   const initialDefinition = options.workflowDefinition ?? null;
@@ -329,6 +338,8 @@ export function createWorkflowV2Workbench(options = {}) {
           fields: selectedNode ? inspectorFieldsForNode(selectedNode, workflowView.edges) : [],
           branchNext: selectedNode ? branchNextView(selectedNode, workflowView.edges) : [],
           value: selectedNode?.type === "agent" || selectedNode?.type === "workflow" ? cloneDefinition(selectedNode.config ?? {}) : null,
+          contextPolicy: selectedNode?.type === "agent" ? normalizedAgentContextPolicy(selectedNode.config ?? {}) : null,
+          contextPolicyOptions: selectedNode?.type === "agent" ? AGENT_CONTEXT_POLICY_OPTIONS.map(cloneDefinition) : [],
           schemaBuilder: selectedNode?.type === "agent"
             ? createWorkflowV2SchemaBuilder(selectedNode.config?.outputSchema ?? null).view()
             : null,
@@ -981,6 +992,7 @@ function inspectorFieldsForNode(node, edges = []) {
   if (node.type === "agent") {
     return [
       { id: "goal", label: "Goal", visible: true, editable: true, ui: "textarea", source: "config.instruction" },
+      { id: "contextPolicy", label: "Context Policy", visible: true, editable: true, ui: "select", source: "config.contextPolicy" },
       { id: "output", label: "Output", visible: true, editable: true, ui: "schemaBuilder", source: "config.outputSchema" },
       { id: "tools", label: "Tools", visible: true, editable: true, ui: "multiSelect", source: "config.toolPolicy" },
       { id: "branchNext", label: "Branch / Next", visible: true, editable: false, ui: "edgeSummary", source: `edges[source=${node.id}]` },
@@ -996,6 +1008,12 @@ function inspectorFieldsForNode(node, edges = []) {
     return endInspectorGroups().map((group) => ({ ...group, visible: true, editable: true, ui: group.id === "data" ? "bindingSelect" : "select", source: `config.finalResult.${group.id}` }));
   }
   return [];
+}
+
+function normalizedAgentContextPolicy(config) {
+  const raw = config?.contextPolicy ?? config?.context_policy;
+  const candidate = typeof raw === "string" ? raw : raw?.mode;
+  return AGENT_CONTEXT_POLICY_VALUES.has(candidate) ? candidate : "fullHistory";
 }
 
 function branchNextView(node, edges = []) {
