@@ -8,6 +8,7 @@ import {
 } from "./session/agentSelector.js";
 import { createNewWorkflowDefinition, createStarterWorkflowV2Definition } from "./pages/Workflow/index.js";
 import { createWorkflowV2Workbench } from "./pages/Workflow/WorkflowV2Workbench.js";
+import { createDebugPresentation } from "./app/debugPresentation.js";
 
 const ROUTES = ["/chat", "/workflow", "/template", "/debug"];
 const DEFAULT_SESSION_ID = "demo-session";
@@ -15,8 +16,8 @@ const DEFAULT_TIMELINE_ID = "demo-timeline";
 const WORKFLOW_MIN_ZOOM = 0.4;
 const WORKFLOW_MAX_ZOOM = 2;
 const WORKFLOW_ZOOM_STEP = 0.1;
-const WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH = 360;
-const WORKFLOW_CONFIG_PANEL_MIN_WIDTH = 320;
+const WORKFLOW_CONFIG_PANEL_DEFAULT_WIDTH = 320;
+const WORKFLOW_CONFIG_PANEL_MIN_WIDTH = 280;
 const WORKFLOW_CONFIG_PANEL_MAX_WIDTH = 720;
 const WORKFLOW_V2_DEFAULT_ID = "agent-workflow-v2-draft";
 const WORKFLOW_V2_NODE_WIDTH = 148;
@@ -108,6 +109,7 @@ const state = {
   selectedAgentOptionId: "legacy",
   switchingAgent: false,
   debugIndex: null,
+  debugQuery: "",
   contextItems: [],
   workflowV2Workbench: null,
   workflowV2DefinitionReady: false,
@@ -1553,12 +1555,26 @@ function renderTemplate() {
 
 function renderDebug() {
   const traces = state.debugIndex?.traces?.items ?? [];
+  const messages = state.debugIndex?.messages ?? [];
+  const presentation = createDebugPresentation({ traces, messages, query: state.debugQuery });
+  const traceRows = presentation.traces.map((trace) => `
+    <button class="trace-row ${state.selection.traceId === trace.trace_id ? "selected" : ""}" data-action="select-trace" data-trace-id="${escapeAttr(trace.trace_id)}">
+      <span>${escapeHtml(trace.component ?? trace.trace_id)}</span><small>${escapeHtml(trace.status ?? "ok")}</small>
+    </button>
+  `).join("") || `<div class="empty-state"><strong>${presentation.empty.traces}</strong><span>Trace events appear here when the agent runs.</span></div>`;
+  const messageRows = presentation.messages.map((message) => `
+    <button class="debug-message ${state.selection.messageId === message.id ? "selected" : ""}" data-action="select-message" data-message-id="${escapeAttr(message.id)}">
+      <span class="debug-message-meta"><strong>${escapeHtml(titleCase(message.role ?? "message"))}</strong><small>${escapeHtml(message.id)}</small></span>
+      <span>${escapeHtml(message.content)}</span>
+    </button>
+  `).join("") || `<div class="empty-state"><strong>${presentation.empty.messages}</strong><span>Conversation messages appear here when available.</span></div>`;
   return `
     <section class="debug-page" data-testid="debug-workbench">
       <div class="page-head"><div><h1 data-testid="main-title">Debug Inspector</h1><p>Trace, checkpoint, and message projections from Runtime.</p></div><button class="secondary" data-action="refresh-route">Refresh</button></div>
+      <label class="debug-search"><span class="sr-only">Search debug data</span><input type="search" aria-label="Search debug data" data-testid="debug-search" placeholder="Search traces and messages" value="${escapeAttr(state.debugQuery)}"></label>
       <div class="debug-grid">
-        <section><h2>Traces</h2>${traces.map((trace) => `<button class="trace-row ${state.selection.traceId === trace.trace_id ? "selected" : ""}" data-action="select-trace" data-trace-id="${escapeAttr(trace.trace_id)}">${escapeHtml(trace.component)} <small>${escapeHtml(trace.status ?? "ok")}</small></button>`).join("")}</section>
-        <section><h2>Messages</h2>${(state.debugIndex?.messages ?? []).map((message) => `<button class="debug-message ${state.selection.messageId === message.id ? "selected" : ""}" data-action="select-message" data-message-id="${escapeAttr(message.id)}">${escapeHtml(message.content)}</button>`).join("")}</section>
+        <section><div class="section-head"><h2>Traces</h2><span class="count-badge" data-testid="debug-trace-count">${presentation.traceCount}</span></div><div class="debug-list">${traceRows}</div></section>
+        <section><div class="section-head"><h2>Messages</h2><span class="count-badge" data-testid="debug-message-count">${presentation.messageCount}</span></div><div class="debug-list">${messageRows}</div></section>
       </div>
     </section>
   `;
@@ -1651,6 +1667,15 @@ function bindEvents() {
   const agentSelector = document.querySelector("[data-action='select-agent-option']");
   agentSelector?.addEventListener("change", () => {
     state.selectedAgentOptionId = agentSelector.value;
+  });
+  const debugSearch = document.querySelector("[data-testid='debug-search']");
+  debugSearch?.addEventListener("input", () => {
+    state.debugQuery = debugSearch.value;
+    const caret = debugSearch.selectionStart ?? state.debugQuery.length;
+    render();
+    const nextSearch = document.querySelector("[data-testid='debug-search']");
+    nextSearch?.focus();
+    nextSearch?.setSelectionRange(caret, caret);
   });
   document.querySelectorAll("[data-message-edit-input]").forEach((element) => {
     element.addEventListener("click", (event) => {
@@ -4106,48 +4131,52 @@ function escapeAttr(value) {
 
 function styleTag() {
   return `<style>
-    :root { --bg:#f5f7fa; --panel:#fff; --line:#d7dee8; --line-strong:#b8c4d2; --text:#162033; --muted:#637083; --accent:#2563eb; --accent-soft:#e8f0ff; --success:#0f8a5f; --warning:#9a5b00; --error:#c0342b; }
+    :root { --bg:#f7f9fc; --panel:#fff; --surface:#f8fafc; --surface-hover:#f1f5f9; --line:#e3e8ef; --line-strong:#cbd5e1; --text:#0f172a; --muted:#64748b; --accent:#1769e0; --accent-hover:#0f5ecc; --accent-soft:#edf5ff; --success:#0a9b68; --success-soft:#eafaf3; --warning:#a15c00; --error:#c0342b; --shadow-sm:0 1px 2px rgba(15,23,42,.05); --shadow-panel:0 2px 10px rgba(15,23,42,.055); }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, "Segoe UI", Arial, sans-serif; }
-    button, textarea, input { font: inherit; }
-    button { border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); border-radius: 7px; padding: 8px 12px; cursor: pointer; }
-    button:hover:not(:disabled), a:hover { border-color: var(--accent); color: var(--accent); }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 Inter, "Segoe UI", Arial, sans-serif; }
+    button, textarea, input, select { font: inherit; }
+    button { min-height: 32px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); border-radius: 7px; padding: 6px 10px; cursor: pointer; box-shadow: var(--shadow-sm); transition: background-color .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease; }
+    button:hover:not(:disabled), a:hover { border-color: #9dbce8; color: var(--accent); background: var(--accent-soft); }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid rgba(23,105,224,.24); outline-offset: 2px; }
     button:disabled { cursor: not-allowed; opacity: .55; }
-    .secondary { background: #f8fafc; }
+    .secondary { background: #fff; }
     .full { width: 100%; }
-    .topbar { height: 56px; display: grid; grid-template-columns: 280px 1fr 220px; align-items: center; gap: 16px; padding: 0 18px; background: #111a27; color: #fff; border-bottom: 1px solid #263244; }
+    .topbar { height: 50px; display: grid; grid-template-columns: 232px 1fr 200px; align-items: center; gap: 12px; padding: 0 16px; background: #fff; color: var(--text); border-bottom: 1px solid var(--line); box-shadow: 0 1px 5px rgba(15,23,42,.035); }
     .brand { display: flex; gap: 12px; align-items: baseline; }
-    .brand strong { font-size: 17px; letter-spacing: 0; }
-    .brand span, .runtime { color: #aeb9c7; }
+    .brand strong { font-size: 17px; letter-spacing: -.2px; }
+    .brand span, .runtime { color: var(--muted); }
     nav { display: flex; gap: 4px; justify-content: center; }
-    nav a { color: #dce4ee; text-decoration: none; padding: 7px 12px; border: 1px solid transparent; border-radius: 7px; }
-    nav a.active { background: #243246; border-color: #3a4b63; color: #fff; }
+    nav a { color: #334155; text-decoration: none; padding: 6px 13px; border: 1px solid transparent; border-radius: 8px; }
+    nav a.active { background: var(--accent-soft); border-color: #cfe1fb; color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
     .runtime { justify-self: end; display: flex; align-items: center; gap: 8px; }
     .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--success); }
     .dot.error { background: var(--error); }
-    .workbench { height: calc(100vh - 56px); display: grid; grid-template-columns: 250px minmax(520px, 1fr) 330px; overflow: hidden; }
-    .workbench.left-collapsed { grid-template-columns: 48px minmax(520px, 1fr) 330px; }
-    .workbench.right-collapsed { grid-template-columns: 250px minmax(520px, 1fr) 48px; }
-    .workbench.left-collapsed.right-collapsed { grid-template-columns: 48px minmax(520px, 1fr) 48px; }
-    .left-rail, .right-rail { min-width: 0; overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 14px; }
+    .workbench { height: calc(100vh - 50px); display: grid; grid-template-columns: 232px minmax(520px, 1fr) 300px; overflow: hidden; }
+    .workbench.left-collapsed { grid-template-columns: 42px minmax(520px, 1fr) 300px; }
+    .workbench.right-collapsed { grid-template-columns: 232px minmax(520px, 1fr) 42px; }
+    .workbench.left-collapsed.right-collapsed { grid-template-columns: 42px minmax(520px, 1fr) 42px; }
+    .left-rail, .right-rail { min-width: 0; overflow: auto; background: #fbfcfe; border-right: 1px solid var(--line); padding: 12px; }
     .right-rail { border-right: 0; border-left: 1px solid var(--line); }
-    .collapsed { display: flex; align-items: flex-start; justify-content: center; padding: 12px 6px; }
-    .rail-head, .page-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .collapsed { display: flex; align-items: flex-start; justify-content: center; padding: 10px 5px; }
+    .rail-head, .page-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
     h1, h2, h3, p { margin-top: 0; }
-    h1 { font-size: 24px; margin-bottom: 4px; letter-spacing: 0; }
-    h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; margin-bottom: 10px; letter-spacing: 0; }
-    h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; margin: 18px 0 8px; letter-spacing: 0; }
-    .main-pane { min-width: 0; overflow: hidden; padding: 18px; }
+    h1 { font-size: 21px; margin-bottom: 2px; letter-spacing: -.25px; }
+    h2 { font-size: 12px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; letter-spacing: .025em; }
+    h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin: 14px 0 6px; letter-spacing: .035em; }
+    .main-pane { min-width: 0; overflow: hidden; padding: 14px; background: #fff; }
     .chat-workbench, .workflow-page, .template-page, .debug-page { height: 100%; display: flex; flex-direction: column; min-height: 0; }
     .page-head { flex: 0 0 auto; }
-    .page-head p { color: var(--muted); margin: 0; }
-    .messages { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 4px 16px; }
-    .message-card { position: relative; width: min(820px, 92%); border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 13px 44px 13px 14px; cursor: pointer; }
-    .message-card.user { align-self: flex-end; border-color: #c2d7cd; background: #f3fbf7; }
-    .message-card.assistant { align-self: flex-start; border-color: #bfd0ec; background: #f8fbff; }
-    .message-card.selected { outline: 2px solid var(--accent); }
-    .message-card header { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); margin-bottom: 8px; }
-    .message-card p { margin-bottom: 10px; white-space: pre-wrap; }
+    .page-head p { color: var(--muted); margin: 0; font-size: 12px; }
+    .page-actions, .actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .page-head > button:not(.secondary), .page-actions > button:not(.secondary), .actions > button:not(.secondary), .composer > button { border-color: var(--accent); background: var(--accent); color: #fff; box-shadow: 0 2px 7px rgba(23,105,224,.18); }
+    .page-head > button:not(.secondary):hover, .page-actions > button:not(.secondary):hover, .actions > button:not(.secondary):hover, .composer > button:hover { border-color: var(--accent-hover); background: var(--accent-hover); color: #fff; }
+    .messages { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 2px 10px; }
+    .message-card { position: relative; width: min(900px, 96%); border: 0; background: var(--panel); border-radius: 9px; padding: 10px 40px 10px 12px; cursor: pointer; box-shadow: var(--shadow-sm); }
+    .message-card.user { align-self: flex-end; background: #f0fbf6; }
+    .message-card.assistant { align-self: flex-start; background: #f6f9fd; }
+    .message-card.selected { outline: 2px solid rgba(23,105,224,.55); }
+    .message-card header { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); margin-bottom: 5px; }
+    .message-card p { margin-bottom: 7px; white-space: pre-wrap; }
     .message-menu-trigger { position: absolute; top: 8px; right: 8px; width: 30px; min-height: 30px; padding: 4px 0; font-size: 13px; line-height: 1; color: var(--muted); visibility: hidden; }
     .message-card:hover .message-menu-trigger, .message-card:focus-within .message-menu-trigger, .message-card.menu-open .message-menu-trigger { visibility: visible; }
     .message-menu { position: fixed; z-index: 55; min-width: 124px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
@@ -4159,18 +4188,18 @@ function styleTag() {
     .message-edit textarea { width: 100%; min-height: 104px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; }
     .message-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
     .message-error { color: var(--error); font-size: 13px; }
-    .tool-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-    .tool-call, .tool-result, .trace-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: 12px; }
+    .tool-strip { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+    .tool-call, .tool-result, .trace-pill { display: inline-flex; align-items: center; min-height: 24px; border: 0; border-radius: 6px; padding: 3px 7px; font-size: 11px; box-shadow: none; }
     .tool-call { background: #fff4e5; color: #875300; }
     .tool-result { background: #e8f7ef; color: #0f6a49; }
     .trace-pill { background: var(--accent-soft); border-color: #b9cdfa; color: #1d4ed8; }
-    .composer { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; }
-    textarea { resize: none; min-height: 42px; max-height: 140px; border: 0; outline: 0; background: transparent; padding: 8px; }
-    .session-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; align-items: stretch; margin-bottom: 8px; overflow: visible; }
-    .nav-item { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; margin-bottom: 8px; overflow: hidden; }
+    .composer { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 8px; border: 1px solid var(--line); background: var(--panel); border-radius: 9px; box-shadow: var(--shadow-panel); }
+    textarea { resize: none; min-height: 36px; max-height: 140px; border: 0; outline: 0; background: transparent; padding: 7px 8px; }
+    .session-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 30px; gap: 4px; align-items: stretch; margin-bottom: 4px; overflow: visible; }
+    .nav-item { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 34px; padding: 5px 8px; border-color: transparent; background: transparent; box-shadow: none; text-align: left; margin-bottom: 4px; overflow: hidden; }
     .session-row .nav-item { margin-bottom: 0; }
     .session-menu-host { min-width: 0; display: flex; align-items: stretch; }
-    .session-menu-trigger { width: 34px; min-height: 34px; padding: 6px 0; font-size: 13px; line-height: 1; color: var(--muted); visibility: hidden; }
+    .session-menu-trigger { width: 30px; min-height: 32px; padding: 5px 0; font-size: 13px; line-height: 1; color: var(--muted); visibility: hidden; }
     .session-row:hover .session-menu-trigger, .session-row.menu-open .session-menu-trigger { visibility: visible; }
     .actions .workflow-menu-host .session-menu-trigger { visibility: visible; }
     .session-menu { position: fixed; z-index: 50; min-width: 112px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: 0 8px 20px rgba(16, 24, 40, .14); }
@@ -4180,41 +4209,43 @@ function styleTag() {
     .session-menu button.danger:hover { background: #fff1f0; }
     .nav-item span, .nav-item small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item small { color: var(--muted); }
-    .nav-item.current small { color: var(--success); font-weight: 700; }
-    .selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-    .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
-    .tabs.vertical { flex-direction: column; width: 180px; }
-    .tabs .active { background: var(--accent-soft); border-color: #b9cdfa; color: #1d4ed8; }
-    .context-item { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fbfcfe; }
-    .workflow-surface { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px minmax(320px, 1fr) 8px var(--workflow-config-panel-width); gap: 12px; overflow: auto; }
-    .node-palette, .template-fields, .debug-grid section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; }
+    .nav-item.current small { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 6px; border-radius: 999px; color: #087a53; background: var(--success-soft); font-weight: 700; }
+    .selected { border-color: #c6dbf7; background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+    .tabs { display: flex; gap: 3px; margin-bottom: 8px; }
+    .tabs button { min-height: 30px; border-color: transparent; background: transparent; box-shadow: none; }
+    .tabs.vertical { flex-direction: column; width: 156px; gap: 2px; padding: 4px; border-radius: 8px; background: var(--surface); }
+    .tabs.vertical button { text-align: left; }
+    .tabs .active { background: var(--accent-soft); border-color: transparent; color: #125fcf; box-shadow: inset 2px 0 0 var(--accent); }
+    .inspector-body { min-width: 0; }
+    .context-item { border: 0; border-radius: 8px; padding: 9px; margin-bottom: 8px; background: #fff; box-shadow: var(--shadow-panel); }
+    .workflow-surface { flex: 1; min-height: 0; display: grid; grid-template-columns: 168px minmax(320px, 1fr) 7px var(--workflow-config-panel-width); gap: 8px; overflow: auto; }
+    .node-palette, .template-fields, .debug-grid section { background: var(--panel); border: 0; border-radius: 8px; padding: 10px; overflow: auto; box-shadow: var(--shadow-panel); }
     .workflow-config-resize-handle { position: relative; min-width: 8px; cursor: col-resize; border-radius: 999px; outline: 0; touch-action: none; }
     .workflow-config-resize-handle::before { content: ""; position: absolute; inset: 8px 3px; border-radius: 999px; background: #cbd5e1; transition: background-color .12s ease, box-shadow .12s ease; }
     .workflow-config-resize-handle:hover::before, .workflow-config-resize-handle:focus::before { background: var(--accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, .16); }
     .workflow-config-resizing, .workflow-config-resizing * { cursor: col-resize !important; user-select: none; }
-    .node-config { min-width: 0; width: 100%; max-width: none; display: grid; align-content: start; gap: 10px; overflow: auto; background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
-    .node-config-section { display: grid; gap: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .node-config { min-width: 0; width: 100%; max-width: none; display: grid; align-content: start; gap: 6px; overflow: auto; background: var(--surface); border: 0; border-radius: 8px; padding: 8px; box-shadow: var(--shadow-panel); }
+    .node-config-section { display: grid; gap: 7px; padding: 8px; border: 0; border-radius: 6px; background: var(--panel); }
     .node-config-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .node-config-section-head h2 { margin: 0; }
     .node-config-section-head .compact { min-height: 28px; padding: 5px 8px; font-size: 11px; }
     .node-config-section h2 { margin-bottom: 0; }
-    .node-config-fields { background: #fbfcfe; }
-    .basic-info { border-color: #cfd8e3; }
-    .node-config-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-    .node-config-meta div { min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: #f8fafc; }
+    .node-config-fields { background: #fff; }
+    .node-config-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+    .node-config-meta div { min-width: 0; padding: 6px 7px; border: 0; border-radius: 6px; background: var(--surface); }
     .node-config-meta span { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
     .node-config-meta strong { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; font-weight: 700; }
     .config-field { gap: 4px; font-size: 12px; }
     .node-config input, .node-config select, .node-config textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: #fff; transition: border-color .12s ease, box-shadow .12s ease, background-color .12s ease; }
-    .node-config input, .node-config select { padding: 7px 9px; min-height: 34px; }
-    .node-config textarea { min-height: 78px; max-height: 220px; padding: 8px 9px; outline: 0; resize: vertical; }
+    .node-config input, .node-config select { padding: 6px 8px; min-height: 32px; }
+    .node-config textarea { min-height: 70px; max-height: 220px; padding: 7px 8px; outline: 0; resize: vertical; }
     .node-config input:hover, .node-config select:hover, .node-config textarea:hover { border-color: #8ea1bb; background: #fff; }
     .node-config input:focus, .node-config select:focus, .node-config textarea:focus { border-color: var(--accent); outline: 2px solid rgba(37, 99, 235, .18); outline-offset: 1px; box-shadow: 0 0 0 1px rgba(37, 99, 235, .12); }
     .node-config input[readonly], .node-config textarea[readonly], .node-config select:disabled { cursor: not-allowed; opacity: .68; background: #f1f5f9; }
     .workflow-config-label { display: inline-flex; align-items: flex-start; width: max-content; line-height: 1.2; }
     .workflow-config-required { position: relative; top: -.2em; display: inline-flex; align-items: center; margin-left: 2px; color: #b42318; font-size: 11px; font-weight: 800; line-height: 1; vertical-align: super; }
     .workflow-binding-field { gap: 8px; }
-    .workflow-binding-row { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+    .workflow-binding-row { display: grid; gap: 6px; padding: 7px; border: 0; border-radius: 7px; background: var(--surface); }
     .workflow-binding-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
     .workflow-binding-head small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
     .workflow-binding-grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1fr); gap: 8px; }
@@ -4222,50 +4253,51 @@ function styleTag() {
     .danger-zone h2 { color: #9f2f27; }
     .subtle-danger { justify-self: start; padding: 6px 9px; min-height: 32px; background: #fff; border-color: #f3b8b2; color: var(--error); }
     .subtle-danger:hover:not(:disabled) { background: #fff1f0; border-color: var(--error); color: var(--error); }
-    .node-palette button { width: 100%; margin-bottom: 8px; text-align: left; }
+    .node-palette button { width: 100%; margin-bottom: 4px; border-color: transparent; background: transparent; box-shadow: none; text-align: left; }
+    .node-palette button:hover:not(:disabled) { border-color: transparent; background: var(--accent-soft); }
     .node-palette .session-row .nav-item { margin-bottom: 0; }
     .node-palette .session-menu-trigger { width: 34px; margin-bottom: 0; text-align: center; }
     .workflow-v2-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .workflow-v2-mode span { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: #f8fafc; color: var(--muted); font-size: 12px; }
-    .workflow-v2-mode span.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-    .graph-canvas { position: relative; min-height: 0; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(#e8edf3 1px, transparent 1px), linear-gradient(90deg, #e8edf3 1px, transparent 1px), #fff; background-size: 28px 28px; overflow: auto; }
+    .workflow-v2-mode span { display: inline-flex; align-items: center; justify-content: center; min-height: 30px; padding: 5px 7px; border: 0; border-radius: 6px; background: var(--surface-hover); color: var(--muted); font-size: 11px; }
+    .workflow-v2-mode span.selected { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+    .graph-canvas { position: relative; min-height: 0; border: 1px solid #e8edf4; border-radius: 8px; background: radial-gradient(circle, #dbe4ef 1px, transparent 1px), #fff; background-size: 22px 22px; overflow: auto; }
     .graph-canvas-viewport { position: relative; min-width: 100%; min-height: 100%; }
     .graph-canvas-content { position: relative; min-width: 100%; min-height: 100%; transform-origin: 0 0; }
-    .workflow-v2-canvas .graph-canvas-content { min-height: 560px; position: relative; }
+    .workflow-v2-canvas .graph-canvas-content { min-height: 600px; position: relative; }
     .workflow-v2-canvas { cursor: grab; }
     .workflow-v2-canvas.is-panning { cursor: grabbing; }
     .workflow-v2-empty { margin: 18px; color: var(--muted); }
-    .workflow-v2-edge-layer { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 560px; overflow: visible; pointer-events: none; z-index: 1; }
-    .workflow-v2-edge-path { fill: none; stroke: #64748b; stroke-width: 2; }
-    .workflow-v2-arrowhead-shape { fill: #64748b; stroke: none; }
+    .workflow-v2-edge-layer { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 600px; overflow: visible; pointer-events: none; z-index: 1; }
+    .workflow-v2-edge-path { fill: none; stroke: #4385e5; stroke-width: 1.75; }
+    .workflow-v2-arrowhead-shape { fill: #4385e5; stroke: none; }
     .workflow-v2-edge-layer text { fill: #334155; font-size: 11px; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; }
     .workflow-v2-node-wrap { position: absolute; z-index: 2; display: grid; grid-template-columns: minmax(132px, max-content) auto; align-items: center; gap: 8px; }
-    .workflow-v2-node { position: relative; min-width: 132px; }
-    .workflow-v2-node.selected { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+    .workflow-v2-node { position: relative; min-width: 132px; border-color: #dce5f0; box-shadow: 0 3px 10px rgba(15,23,42,.07); }
+    .workflow-v2-node.selected { border-color: #79aaf0; box-shadow: inset 2px 0 0 var(--accent), 0 3px 12px rgba(23,105,224,.11); }
     .workflow-v2-node-status { display: block; color: var(--muted); font-size: 10px; font-weight: 700; }
     .workflow-v2-node.run-status-running { border-color: var(--warning); }
     .workflow-v2-node.run-status-succeeded { border-color: var(--success); }
     .workflow-v2-node.run-status-failed { border-color: var(--error); }
-    .workflow-v2-handle-list { display: grid; gap: 8px; align-items: center; }
-    .workflow-v2-handle { min-width: 44px; min-height: 32px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff; color: var(--accent); font-size: 11px; cursor: pointer; }
-    .workflow-v2-edge-panel { border-top: 1px solid var(--line); padding: 10px; background: #ffffff; display: grid; gap: 8px; }
+    .workflow-v2-handle-list { display: grid; gap: 6px; align-items: center; }
+    .workflow-v2-handle { min-width: 42px; min-height: 28px; border: 0; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; cursor: pointer; box-shadow: none; }
+    .workflow-v2-edge-panel { border-top: 0; padding: 8px; background: #ffffff; display: grid; gap: 6px; }
     .workflow-v2-edge-form, .workflow-v2-edge-row, .workflow-v2-inline-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 8px; align-items: end; }
     .workflow-v2-edge-row { grid-template-columns: minmax(0, 1fr) 100px minmax(0, 1fr) 44px; align-items: center; }
     .workflow-v2-edge-panel select, .workflow-v2-edge-panel input, .workflow-v2-inline-form input, .workflow-v2-inline-form select { width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
-    .workflow-v2-inspector-block { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .workflow-v2-inspector-block { display: grid; gap: 7px; padding-top: 7px; border-top: 1px solid #edf1f5; }
     .workflow-v2-inspector-block h3 { margin: 0; font-size: 13px; }
-    .workflow-v2-bottom-panel { flex: 0 0 auto; min-height: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .workflow-v2-bottom-panel { flex: 0 0 auto; min-height: 0; border: 1px solid #e6ebf1; border-radius: 8px; background: var(--panel); overflow: hidden; box-shadow: var(--shadow-panel); }
     .workflow-v2-bottom-panel.open { height: var(--workflow-v2-bottom-panel-height); }
     .workflow-v2-bottom-resize-handle { position: relative; z-index: 1; height: 8px; cursor: row-resize; touch-action: none; outline: 0; }
     .workflow-v2-bottom-resize-handle::before { content: ""; position: absolute; inset: 3px 35%; border-radius: 999px; background: #cbd5e1; transition: background-color .12s ease, box-shadow .12s ease; }
     .workflow-v2-bottom-resize-handle:hover::before, .workflow-v2-bottom-resize-handle:focus::before { background: var(--accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, .16); }
     .workflow-v2-bottom-resizing, .workflow-v2-bottom-resizing * { cursor: row-resize !important; user-select: none; }
-    .workflow-v2-bottom-tabs { display: flex; gap: 2px; align-items: stretch; min-height: 38px; padding: 0 8px; border-bottom: 1px solid var(--line); background: #f8fafc; }
-    .workflow-v2-bottom-tab { min-height: 38px; padding: 7px 10px 6px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; }
+    .workflow-v2-bottom-tabs { display: flex; gap: 2px; align-items: stretch; min-height: 34px; padding: 0 7px; border-bottom: 1px solid #edf1f5; background: #fff; }
+    .workflow-v2-bottom-tab { min-height: 34px; padding: 5px 9px 4px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 11px; box-shadow: none; }
     .workflow-v2-bottom-tab.active { border-bottom-color: var(--accent); background: var(--panel); color: var(--accent); font-weight: 700; }
-    .workflow-v2-bottom-content { min-height: 0; height: calc(100% - 46px); overflow: auto; }
+    .workflow-v2-bottom-content { min-height: 0; height: calc(100% - 42px); overflow: auto; }
     .workflow-v2-bottom-content .workflow-v2-edge-panel, .workflow-v2-bottom-content .workflow-v2-execution-trace { border-top: 0; }
-    .workflow-v2-run-panel { display: grid; gap: 12px; padding: 12px; background: #ffffff; }
+    .workflow-v2-run-panel { display: grid; gap: 9px; padding: 9px; background: #ffffff; }
     .workflow-v2-run-section { display: grid; gap: 8px; }
     .workflow-v2-run-section h3 { margin: 0; font-size: 13px; }
     .workflow-v2-run-section textarea { width: 100%; min-height: 76px; resize: vertical; }
@@ -4299,29 +4331,47 @@ function styleTag() {
     .workflow-edge-line { stroke: #64748b; stroke-width: 2; marker-end: url(#workflow-edge-arrow); pointer-events: none; }
     .workflow-edge-line.selected { stroke: var(--accent); stroke-width: 3; }
     .workflow-edge-hit { fill: rgba(37, 99, 235, .001); stroke: none; pointer-events: auto; cursor: pointer; }
-    .workflow-boundary { position: absolute; z-index: 1; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--line); background: #f8fafc; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .workflow-boundary { position: absolute; z-index: 1; padding: 3px 7px; border-radius: 999px; border: 0; background: var(--surface-hover); color: var(--muted); font-size: 10px; font-weight: 700; }
     .workflow-boundary-start { left: 12px; top: 14px; }
     .workflow-boundary-end { right: 14px; bottom: 14px; }
     .graph-node-wrap { position: absolute; z-index: 2; width: 128px; height: 64px; }
-    .graph-node { width: 112px; height: 56px; background: #fff; cursor: grab; user-select: none; touch-action: none; display: grid; align-content: center; gap: 2px; text-align: left; }
+    .graph-node { width: 112px; height: 56px; background: #fff; cursor: grab; user-select: none; touch-action: none; display: grid; align-content: center; gap: 2px; text-align: left; border-color: #dce5f0; box-shadow: 0 3px 10px rgba(15,23,42,.07); }
     .graph-node-wrap.selected .graph-node { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
     .graph-node-wrap.edge-source .graph-node { border-color: var(--success); }
     .graph-node small { color: var(--muted); font-size: 11px; }
     .graph-node:active { cursor: grabbing; }
     .node-port { position: absolute; top: 18px; right: 0; width: 24px; height: 24px; min-height: 24px; padding: 0; border-radius: 50%; font-weight: 700; }
     .edge-list { display: grid; gap: 8px; margin-top: 10px; }
-    .workflow-edge { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; }
+    .workflow-edge { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 6px; border: 0; border-radius: 7px; background: var(--surface); }
     .workflow-edge.selected { border-color: var(--accent); background: var(--accent-soft); }
     .workflow-edge span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .graph-preview { display: grid; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; }
+    .graph-preview { display: grid; gap: 7px; padding: 8px; border: 0; border-radius: 7px; background: var(--surface); }
     .graph-preview.error { border-color: #fecaca; background: #fff1f0; color: var(--error); }
     .graph-preview pre { margin: 0; white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text); }
-    .template-layout { display: flex; gap: 14px; min-height: 0; }
-    .template-fields { flex: 1; display: grid; align-content: start; gap: 12px; }
-    label { display: grid; gap: 6px; color: var(--muted); }
-    input, select { border: 1px solid var(--line); border-radius: 7px; padding: 9px 10px; color: var(--text); background: #f8fafc; }
-    .debug-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, .9fr) 1.2fr; gap: 12px; }
-    .trace-row, .debug-message { width: 100%; display: flex; justify-content: space-between; gap: 12px; text-align: left; margin-bottom: 8px; }
+    .template-layout { display: flex; gap: 10px; min-height: 0; align-items: flex-start; }
+    .template-fields { flex: 1; display: grid; align-content: start; gap: 9px; box-shadow: none; background: transparent; padding: 4px 0 0; }
+    label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+    input, select { min-height: 34px; border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; color: var(--text); background: #fff; }
+    input:hover, select:hover { border-color: #b9c6d6; }
+    input:focus, select:focus { border-color: #83ade8; }
+    input[readonly] { background: var(--surface); }
+    .debug-search { width: min(340px, 100%); margin: 0 0 8px auto; }
+    .debug-search input { width: 100%; padding-left: 10px; background: var(--surface); }
+    .debug-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, .85fr) 1.15fr; gap: 8px; }
+    .debug-grid section { display: flex; flex-direction: column; min-height: 0; }
+    .section-head { display: flex; align-items: center; gap: 6px; min-height: 30px; margin-bottom: 5px; }
+    .section-head h2 { margin: 0; color: var(--text); text-transform: none; font-size: 13px; letter-spacing: 0; }
+    .count-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; min-height: 20px; padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+    .debug-list { min-height: 0; overflow: auto; }
+    .trace-row, .debug-message { width: 100%; border: 0; box-shadow: none; background: transparent; display: flex; justify-content: space-between; gap: 10px; text-align: left; margin-bottom: 2px; padding: 7px 8px; }
+    .trace-row:hover:not(:disabled), .debug-message:hover:not(:disabled) { border-color: transparent; background: var(--surface-hover); }
+    .debug-message { display: grid; justify-content: stretch; gap: 3px; }
+    .debug-message-meta { display: flex; justify-content: space-between; gap: 8px; }
+    .debug-message small, .trace-row small { color: var(--muted); }
+    .empty-state { min-height: 104px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 18px; color: var(--muted); text-align: center; }
+    .empty-state strong { color: var(--text); font-size: 13px; }
+    .empty-state span { font-size: 12px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
     .toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; padding: 10px 12px; border-radius: 9px; background: #111a27; color: #fff; box-shadow: 0 8px 24px rgba(16, 24, 40, .16); pointer-events: none; }
     .toast.success { background: var(--success); }
     .toast.error { background: var(--error); }
